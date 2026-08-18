@@ -97,6 +97,7 @@ A **wearable** is an asset that attaches to a body part and **dynamically fits i
 A wearable asset declares:
 
 - `slot` — which body-part slot it occupies (§6)
+- `layer` — which layer within that slot it occupies (§5.4)
 - `covers` — which skin regions it masks
 - mesh + materials, authored on the template body
 - optional variant-response data (how strongly it follows specific morphs — rigid items like a helmet follow bone scale but ignore soft morphs)
@@ -107,6 +108,19 @@ Wearables are normal assets: importable natively, streamable, and **virtual-mode
 ### 5.3 Hair as a wearable
 
 Hairstyles are wearables. A hairstyle occupies the `head_hair` slot and rides the wearable mechanism — authored against the template head, attached via the same fitting path, deforming with head/face variants seamlessly. This is deliberate: one mechanism, exhaustively good, instead of a parallel hair system. (Beards/eyebrows can follow the same route via face-region slots as the face sub-schema grows.)
+
+### 5.4 Layering
+
+Each wearable slot holds a **stack of layers**, not a single item. A character can wear underclothes, clothing, and armor on the same body part simultaneously.
+
+- Standard layers (per slot, extensible in the body definition):
+  - `base` (0) — underwear, undershirts
+  - `mid` (1) — everyday clothing
+  - `outer` (2) — armor, coats, overwear
+- One wearable per (slot, layer); equipping into an occupied layer swaps the item there, leaving other layers untouched.
+- **Fitting across layers**: every layer fits against the variant-transformed body, and each layer additionally receives the accumulated **thickness offsets** of the layers beneath it — the coat sits over the shirt, which sits over the skin, on any body variant. A wearable declares its thickness profile per covered region (thin cloth adds almost nothing; plate adds bulk).
+- **Masking cascades outward**: the outermost wearable covering a region masks that region on every layer below it and on the skin — inner geometry that can't be seen is not skinned, not drawn, and costs nothing (P1). A save stores the full stack; rendering only pays for what's visible.
+- Hairstyles interact with the cascade like anything else: a helmet in `head_top` that declares coverage of the scalp region masks (or switches to a "hat-compressed" variant of) the hairstyle beneath it.
 
 ## 6. Body parts & the humanoid slot set
 
@@ -121,19 +135,48 @@ The template body is segmented into named **body parts**; each body part exposes
 | Hands | `hands` | gloves, gauntlets |
 | Legs | `legs` | pants, greaves |
 | Feet | `feet` | shoes, boots |
-| **Tool/weapon** | `held` | tools & weapons — the held-item slot; attaches to the hand grip point, not the fitting mechanism (rigid attach) |
+| **Tool/weapon (main hand)** | `held_main` | tools & weapons — rigid attach to grip points, not the fitting mechanism (§6.1) |
+| **Off hand** | `held_off` | second weapon, shield, torch, tool (§6.1) |
 
-- The slot set is data (part of the body definition), so it can be extended (rings, back/cloak, shoulders…) without engine changes.
-- Layering (underwear + armor on one part) is a known follow-up question — held open for dictation; the mechanism reserves per-slot layer indices so adding it later is non-breaking.
+- The slot set is data (part of the body definition), so it can be extended (rings, back/cloak, shoulders…) without engine changes. Every wearable slot carries the layer stack of §5.4.
 - Non-humanoid characters reuse the same *slot machinery* with their own body definitions (a mount's saddle slot); the humanoid *fitting* mechanism (variant-following deformation) ships for the humanoid template, and its generalization to custom bodies is a later, opt-in extension.
 
-## 7. Open points awaiting dictation
+### 6.1 Held items
 
-- Wearable layering per slot (see §6)
-- Held-item mechanics depth (two-handed grips, sheathing, dual wield)
-- AI system's internal design (behavior model, scheduling) — currently only its universal attachment point is fixed
+Held items (tools and weapons) attach rigidly to skeleton attachment points rather than deforming through the fitting mechanism.
+
+- **Grip types** — a held item declares its grip: `one_handed`, `two_handed`, or `versatile` (usable either way). Two-handed items occupy both `held_main` and `held_off`; the animation set selects matching pose/locomotion overlays per grip type.
+- **Dual wield** — `held_main` and `held_off` can each hold a one-handed item; the off hand can alternatively hold non-weapons (shield, torch, lantern, tool).
+- **Grip points** — the item defines its own grip transform(s) (primary grip, second-hand grip for two-handers); the template skeleton provides hand attachment points. Item grip meets hand point — no per-item animation authoring.
+- **Sheathing** — items have a `drawn`/`sheathed` state. The body definition provides sheath attachment points (`hip_l`, `hip_r`, `back`, extensible); the item declares which it uses. Draw/sheath transitions come with default animations; a sheathed item remains visible on the body and streams/persists with the character.
+- Held items are ordinary assets: natively importable, streamable, virtual-model compatible (a placeholder sword of declared proportions works in hand and on the hip).
+
+## 7. Basic AI (v1)
+
+The engine ships a **basic AI now, designed to be expanded later**. The `AIController` attachment point (§2) is the stable contract; the machinery behind it will grow without touching characters or games.
+
+v1 is a data-defined **state machine** over the universal mechanisms:
+
+- **States**: `idle`, `wander` (roam within a home radius), `patrol` (follow a point path), `chase`, `attack`, `flee`, `return` (go back to home/path).
+- **Transitions** driven by the universal systems: perception hooks detect characters in range → the faction system classifies them (§3) → enemy sighted triggers `chase`/`attack` per profile, low health triggers `flee`, target lost triggers `return`.
+- **AI profiles are data files** (asset type: `ai_profile`): which states are enabled, radii/ranges, speeds, aggression and flee thresholds, patrol path reference. One profile format serves humanoids, animals, and monsters — a deer is `wander` + `flee`-on-sight; a guard is `patrol` + `chase`/`attack` hostiles.
+- **Budgeted** (P1/P2): AI ticks are scheduled with LOD — near characters think every simulation step, distant ones at reduced rates, characters in cold chunks don't tick at all (their AI state persists and resumes on residency).
+- **Expansion path** (later, dictated): richer behavior models (behavior trees/utility AI), schedules & daily routines, group behavior, combat depth. These replace the *internals* of `AIController`; profiles migrate, the attachment contract does not change.
+
+## 8. Basic facial expressions
+
+Facial features include **basic runtime expressions** — a small fixed set, not a full performance system.
+
+- The face sub-schema (§4.1) doubles as the expression rig: expressions are **morph presets on the template face**, blendable over any face variant (the same delta machinery as variants, applied dynamically).
+- Built-in set: `neutral`, `happy`, `sad`, `angry`, `surprised`, `afraid`, `pain`. Games can add presets as data.
+- API: set or blend an expression with a transition time (`setExpression(happy, 0.3s)`); AI profiles and gameplay can trigger them (hit → `pain`, enemy sighted → `angry`).
+- Deliberately excluded for now: lip-sync, full emote animation, procedural gaze — held for later dictation.
+
+## 9. Open points awaiting dictation
+
+- AI expansion (behavior model beyond the v1 state machine, schedules, group behavior)
 - Non-humanoid animation authoring workflow
-- Whether facial features include runtime expression/emote animation or only static shape
+- Advanced facial animation (lip-sync, emotes, gaze) beyond the basic expression set
 
 ---
 
