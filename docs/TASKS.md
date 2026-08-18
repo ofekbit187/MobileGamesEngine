@@ -117,13 +117,50 @@ Status legend: `[ ]` not started · `[~]` in progress · `[x]` done
 
 **Exit criteria:** the round-trip demo works end-to-end with no scene changes between placeholder and fulfilled states.
 
-## Phase 8 and beyond — held for further dictation
+## Phase 8 — Character system
+
+*Goal: P9 realized — one character entity for players and NPCs, the humanoid template body with data-driven variants, and the wearable fitting mechanism. Design: [`CHARACTERS.md`](CHARACTERS.md).*
+
+**Universal character base:**
+
+- [ ] **8.1** `Character` entity on the Phase 3 entity model: identity, body definition reference, compact state (P1)
+- [ ] **8.2** Controller abstraction: `PlayerController` (input intents) and `AIController` (AI intents) driving one intent interface; runtime controller swap (P9)
+- [ ] **8.3** Universal locomotion: movement intents → world-resolved motion with per-character parameters
+- [ ] **8.4** Mortality: health, damage intake, death consequences (loot drop, corpse, despawn)
+- [ ] **8.5** Faction system: enemy/ally/neutral stances between factions, per-character overrides; queried by AI, targeting, UI
+- [ ] **8.6** Inventory on every character: item stacks, capacity rules, pickup/drop
+- [ ] **8.7** Equipment slot machinery: data-defined slot sets per body definition; wearable slots + `held` tool/weapon slot
+- [ ] **8.8** AI attachment point v0: behavior definitions as data, assignable to any character (full AI system held for dictation)
+- [ ] **8.9** Character persistence: inventory/equipment/health/faction state in the Phase 6 save deltas; character streaming with chunks
+
+**Skeletal animation (prerequisite, graphics engine):**
+
+- [ ] **8.10** Skinned mesh rendering + skeleton runtime (pose evaluation, GPU skinning) within Phase 2 budgets
+- [ ] **8.11** Animation playback: clips, speed-blended locomotion blending, import via glTF path
+
+**Humanoid:**
+
+- [ ] **8.12** Template base body: import the canonical humanoid (mesh, UV layout, body-part segmentation, skeleton binding)
+- [ ] **8.13** Variant data format (`humanoid_variant`) + applier: skin texture, size, width, height, shoulders, chest, legs, feet, face + facial-feature sub-schema — via bone-proportion scaling + morph deltas
+- [ ] **8.14** Default animation set on the canonical rig: idle + several walk/run variations, speed-blended; valid across all variants by construction
+- [ ] **8.15** Wearable asset type: slot, covered regions, template-authored mesh, variant-response data, opaque gameplay data
+- [ ] **8.16** Wearable fitting mechanism: apply body's variant transformations to worn meshes; covered-skin masking (no clipping); single skinning path for body + wearables
+- [ ] **8.17** Hairstyles as wearables through the `head_hair` slot
+- [ ] **8.18** Held-item attachment (rigid, grip point) for the tool/weapon slot
+- [ ] **8.19** Virtual-model wearables: placeholder on the body from proportions + description (P5)
+- [ ] **8.20** Template-game update: player and NPCs as the same humanoid character with different controllers; NPC with inventory + wearables + weapon; variant showcase
+
+**Exit criteria:** the template game shows player and NPCs as identical humanoid characters (controller being the only difference); a dozen visibly distinct humanoids from one template body via variant files; one wearable set + one hairstyle fitting all of them seamlessly while animating.
+
+## Phase 9 and beyond — held for further dictation
 
 Deliberately not planned yet; known candidates awaiting direction:
 
+- AI system internals (behavior model, scheduling) — attachment point lands in 8.8
+- Wearable layering per slot; held-item mechanics depth (two-handed, sheathing)
 - Audio system
 - Physics & collision beyond basic queries
-- Animation system
+- Facial expression / emote animation
 - World-authoring/editor tooling
 - Scripting / game-logic authoring model
 - Networking / multiplayer

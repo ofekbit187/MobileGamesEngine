@@ -6,7 +6,8 @@ This repository is in the **design phase**. The engine's direction is dictated t
 
 1. [`docs/PRINCIPLES.md`](docs/PRINCIPLES.md) — the non-negotiable rules every subsystem must obey.
 2. [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) — the structure: layers, subsystems, and how they relate.
-3. [`docs/TASKS.md`](docs/TASKS.md) — the phased task breakdown derived from the architecture.
+3. [`docs/CHARACTERS.md`](docs/CHARACTERS.md) — the character system: universal characters, player/NPC parity, the humanoid template body, variants, and wearables.
+4. [`docs/TASKS.md`](docs/TASKS.md) — the phased task breakdown derived from the architecture.
 
 ## What this engine is
 

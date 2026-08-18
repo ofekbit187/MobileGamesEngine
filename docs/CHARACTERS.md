@@ -1,0 +1,140 @@
+# Character System
+
+The engine's character model: a universal `Character` entity that every acting being in the game is built from, with `HumanoidCharacter` as the engine-provided specialization carrying the template body, body variants, skeleton/animations, and the wearables mechanism.
+
+Governed by the [principles](PRINCIPLES.md) — especially **P9 (the player is just a character)** — and slotted into the [architecture](ARCHITECTURE.md) inside the Game Framework, with rendering/animation support in the Graphics Engine and asset support in the Asset System.
+
+---
+
+## 1. The character hierarchy
+
+```
+Entity
+└── Character                      ← universal mechanisms live here
+    ├── HumanoidCharacter          ← engine-provided: template body, variants,
+    │                                 skeleton, wearables, humanoid animations
+    └── (game-defined characters)  ← animals, monsters, anything the game
+                                      creator wants — built directly on Character
+```
+
+- `Character` is a **basic engine entity**. Every acting being — the player, human NPCs, animals, monsters — is a `Character`.
+- `HumanoidCharacter` inherits from `Character` and adds everything specific to human-shaped bodies.
+- Non-humanoid characters (animals, monsters, whatever the game creator invents) extend `Character` directly. They get all universal mechanisms for free and supply their own body/model/skeleton.
+
+## 2. Player/NPC parity (P9)
+
+**There is no difference between the player and NPCs except how they are controlled.**
+
+- One character class serves both. There is no `PlayerCharacter` type with special powers; there is a `Character` with a controller attached.
+- **Controllers** are the only distinction:
+  - `PlayerController` — feeds gameplay intents from the input pipeline / gameplay controls (architecture §2.2, task 3.5).
+  - `AIController` — feeds gameplay intents from the AI system.
+  - Both drive the exact same character interface (the intent stream: move, look, act, use, equip…). Swapping controllers at runtime is legal and cheap — possession of any NPC, cutscene control, or AI-driving the player are all the same operation.
+- **Same features on every character**: every NPC has everything the player has — including **inventory**, **wearable slots**, and a **tool/weapon slot**. An NPC can pick things up, wear armor, wield tools, and lose them on death, exactly like the player.
+- Consequence for systems design: any feature written for "the player" must be written for `Character`. Code that asks "is this the player?" is a design smell; ask "which controller?" or "which faction?" instead.
+
+## 3. Universal mechanisms (on `Character`)
+
+These work identically for every character, humanoid or not:
+
+| Mechanism | Notes |
+|---|---|
+| **Locomotion** | Walking/running as movement intents resolved against the world; per-character movement parameters (speeds, turn rates). The *animation* of locomotion is body-specific; the *mechanism* is universal. |
+| **AI** | The AI system drives any character through `AIController`. Behavior definitions are data, assignable to humanoids and non-humanoids alike. |
+| **Mortality** | Health, damage intake, death and its consequences (loot drop from inventory/equipment, corpse handling, despawn rules). |
+| **Enemy/ally classification** | A faction/relationship system: characters belong to factions; factions have stances toward each other (ally, neutral, enemy) that AI, targeting, and UI read. Per-character overrides allowed. |
+| **Inventory** | Container of item stacks with capacity rules. On every character (P9). |
+| **Equipment slots** | Named slots on the body: wearable slots plus the tool/weapon slot. The *slot set* is defined by the character's body definition — a humanoid has the humanoid slot set (§6), a game-defined creature declares its own (a horse can declare a saddle slot). |
+| **Perception hooks** | What AI senses (sight/hearing ranges) — universal so any creature can perceive. |
+| **Streaming & persistence behavior** | Characters live in world chunks, stream in/out (P2), and persist their state via the save delta system (P7) — inventory, equipment, health, faction overrides included. |
+
+**Humanoid-exclusive mechanisms** live on `HumanoidCharacter` only: the template body and its variant system, the humanoid skeleton and animation set, and the body-part wearable fitting mechanism (§4–§6). The split rule: *if a mechanism makes sense for a wolf, it belongs on `Character`; if it assumes a human-shaped body, it belongs on `HumanoidCharacter`.*
+
+## 4. The humanoid template body
+
+- The engine ships **one template base body**: a neutral humanoid model, **imported** through the engine's native model import path (P5) like any other asset — it is content, not code, and can be re-imported/upgraded.
+- The template body defines the canonical humanoid: its mesh, its UV layout (all skin textures follow it), its **body-part segmentation** (§6), and its skeleton binding.
+- Every humanoid in every game — player and NPCs — is an instance of the template body with a **variant** applied. No humanoid ever ships as a unique baked mesh unless a game explicitly opts out.
+
+### 4.1 Body variants (data-driven)
+
+Humanoid variety comes from **variant data files**, not from new models.
+
+- A variant file is plain data (asset type: `humanoid_variant`) that the engine applies to the template body at load/spawn time. Variants are cheap, stackable with equipment, and streamable.
+- Parameters a variant can modify (initial set, extensible):
+  - **Skin texture** — swap/select the skin texture (template UV layout makes any conforming texture valid)
+  - **Size** — overall uniform scale
+  - **Width / Height** — global proportions
+  - **Shoulders** — breadth
+  - **Chest** — build/depth
+  - **Legs** — length/thickness
+  - **Feet** — size
+  - **Face** — head shape plus **further facial features** (a nested parameter group: eyes, nose, mouth, jaw, ears, brow… — the face is its own sub-schema designed to grow)
+- Implementation stance: variants are realized as a combination of **skeleton-proportion scaling** (bone lengths/offsets for height, legs, shoulders…) and **morph deltas** on the template mesh (chest, face, fine features). Both representations are compact data (P1) and both must be visible to the wearable fitting mechanism (§5) so clothes follow the body.
+- Variants compose: a game can define a base variant ("villager build") and layer instance tweaks on top (this villager is taller).
+
+### 4.2 Skeleton & default animations
+
+- The template body carries a **skeleton** (the engine's canonical humanoid rig). All humanoid animation targets this rig; all wearables bind to it.
+- The engine ships **default locomotion animations**: several walking and running animations (variations for gait/speed), plus idle, with speed-blended playback driven by the universal locomotion mechanism. Games extend the set; they never start from zero.
+- Because variants change proportions via the same skeleton, **all animations work on all variants** — retargeting inside the humanoid family is free by construction.
+
+## 5. Wearables — the fitting mechanism
+
+*(Flagged as one of the most important systems; designed for attention.)*
+
+A **wearable** is an asset that attaches to a body part and **dynamically fits itself to that body seamlessly** — on any body variant, without per-variant authoring.
+
+### 5.1 How fitting works
+
+- Wearables are **authored once against the template body**: modeled around the template's neutral shape and skinned to the canonical skeleton.
+- At runtime, the engine applies to the wearable **the same variant transformations the body received** — the skeleton-proportion scaling and the morph deltas of the covered region — so the wearable deforms in lockstep with the body underneath. A jacket authored on the template fits the broad-shouldered variant and the narrow one, seamlessly, from the same asset.
+- **No clipping by construction**: a wearable declares which body-part surface regions it *covers*; the engine suppresses the covered skin geometry underneath (per-region mesh masking). The body is never fighting its clothes.
+- Wearables animate with the body automatically — same skeleton, same skinning path, no extra cost model beyond the mesh itself (P1: one skinning pass over body + worn meshes).
+
+### 5.2 Wearable assets
+
+A wearable asset declares:
+
+- `slot` — which body-part slot it occupies (§6)
+- `covers` — which skin regions it masks
+- mesh + materials, authored on the template body
+- optional variant-response data (how strongly it follows specific morphs — rigid items like a helmet follow bone scale but ignore soft morphs)
+- gameplay data (game-defined: protection, warmth, value…the engine carries it opaquely)
+
+Wearables are normal assets: importable natively, streamable, and **virtual-model compatible** (P5) — a wearable can exist as proportions + description with a placeholder on the body before the real asset is made.
+
+### 5.3 Hair as a wearable
+
+Hairstyles are wearables. A hairstyle occupies the `head_hair` slot and rides the wearable mechanism — authored against the template head, attached via the same fitting path, deforming with head/face variants seamlessly. This is deliberate: one mechanism, exhaustively good, instead of a parallel hair system. (Beards/eyebrows can follow the same route via face-region slots as the face sub-schema grows.)
+
+## 6. Body parts & the humanoid slot set
+
+The template body is segmented into named **body parts**; each body part exposes a **wearable slot** (a body part can be assigned a wearable — every body part is dressable):
+
+| Body part | Slot | Examples |
+|---|---|---|
+| Head (scalp) | `head_hair` | hairstyles (§5.3) |
+| Head (crown) | `head_top` | hats, helmets, hoods |
+| Face | `face` | masks, glasses |
+| Torso | `torso` | shirts, jackets, armor |
+| Hands | `hands` | gloves, gauntlets |
+| Legs | `legs` | pants, greaves |
+| Feet | `feet` | shoes, boots |
+| **Tool/weapon** | `held` | tools & weapons — the held-item slot; attaches to the hand grip point, not the fitting mechanism (rigid attach) |
+
+- The slot set is data (part of the body definition), so it can be extended (rings, back/cloak, shoulders…) without engine changes.
+- Layering (underwear + armor on one part) is a known follow-up question — held open for dictation; the mechanism reserves per-slot layer indices so adding it later is non-breaking.
+- Non-humanoid characters reuse the same *slot machinery* with their own body definitions (a mount's saddle slot); the humanoid *fitting* mechanism (variant-following deformation) ships for the humanoid template, and its generalization to custom bodies is a later, opt-in extension.
+
+## 7. Open points awaiting dictation
+
+- Wearable layering per slot (see §6)
+- Held-item mechanics depth (two-handed grips, sheathing, dual wield)
+- AI system's internal design (behavior model, scheduling) — currently only its universal attachment point is fixed
+- Non-humanoid animation authoring workflow
+- Whether facial features include runtime expression/emote animation or only static shape
+
+---
+
+*This document extends the foundations; it will grow as more character-related requirements are dictated.*

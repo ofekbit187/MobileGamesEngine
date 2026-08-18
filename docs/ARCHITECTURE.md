@@ -65,6 +65,7 @@ Responsibilities:
 - **Game loop** — fixed-step simulation with interpolated rendering; owns frame orchestration: input → simulation → streaming tick → UI → render submission.
 - **World & scene model** — the world is a single continuous 3D space, partitioned into streamable regions (see §3). Scenes (title screen, world, interiors) are worlds too — small ones.
 - **Entities & components** — data-oriented entity model (compact, poolable, cache-friendly — P1). Entities reference assets by stable ID, never by pointer, so residency can change beneath them (P2).
+- **Character system** — the `Character` base entity (universal mechanisms: locomotion, AI attachment, mortality, factions, inventory, equipment) and `HumanoidCharacter` (template body, data-driven variants, canonical skeleton, wearable fitting). Player vs NPC is a controller choice, nothing more (P9). Full design: [`CHARACTERS.md`](CHARACTERS.md).
 - **Gameplay controls** — maps the input pipeline to gameplay intents (move, look, act) through control schemes; ships with touch-native defaults (virtual stick + camera drag + action buttons) rendered by the UI system.
 - **Save/Load service** — engine-level persistence per P7: versioned save slots, world-delta recording, atomic crash-safe writes.
 - **Game template** — the "new game" starting point: working world, streaming enabled, default controls, default UI, saves wired (P8).
@@ -127,7 +128,16 @@ The realization of P7 (service lives in the Game Framework; format lives here).
 - **Slots & versioning** — multiple save slots; every save carries schema versions and the engine migrates old saves forward.
 - **Atomicity** — write-new-then-swap with checksums; process death mid-save leaves the previous save intact (P3, P7).
 
-### 3.5 Core / Foundation
+### 3.5 Character System
+
+The realization of P9. Design detailed in [`CHARACTERS.md`](CHARACTERS.md); summarized here for the layer view.
+
+- **`Character` base** (Game Framework) — universal mechanisms for every acting being: locomotion, AI/player controller attachment, mortality, enemy/ally (faction) classification, inventory, equipment slots, perception hooks, streaming/persistence behavior. Controllers (`PlayerController` / `AIController`) are the only player-vs-NPC distinction and are swappable at runtime.
+- **`HumanoidCharacter`** — the engine-provided specialization: one imported **template base body** (canonical mesh, UVs, body-part segmentation, skeleton), **data-driven body variants** (skin texture, size, width, height, shoulders, chest, legs, feet, face and facial features — via bone-proportion scaling + morph deltas), default walk/run/idle animations, and the **wearable fitting mechanism**.
+- **Wearables** (Asset System + Graphics Engine) — assets authored once against the template body that dynamically fit any body variant (they receive the body's variant transformations), mask the skin they cover to prevent clipping, and animate through the same skinning path. Hairstyles are wearables. Wearables are virtual-model compatible (P5).
+- Non-humanoid characters (animals, monsters, game-defined creatures) extend `Character` directly with their own body definitions and slot sets.
+
+### 3.6 Core / Foundation
 
 The substrate enforcing P1 mechanically, not by convention.
 

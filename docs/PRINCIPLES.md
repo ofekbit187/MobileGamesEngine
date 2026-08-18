@@ -73,6 +73,17 @@ The engine's user is a game programmer; their comfort is a feature.
 - Sensible defaults everywhere: a new game starts from a working template (world + streaming + controls + UI + saves) and the developer changes what they need.
 - Engine internals may be complex; the API surface must not be. Complexity is allowed only below deck.
 
+## P9 — The player is just a character
+
+There is no difference between the player and NPCs except how they are controlled.
+
+- One `Character` entity serves every acting being. The player is a `Character` with a `PlayerController` attached; an NPC is the same `Character` with an `AIController`. Controllers are swappable at runtime.
+- Every character carries the full feature set — including inventory, wearable slots, and a tool/weapon slot. Nothing is player-only.
+- Universal mechanisms (locomotion, AI attachment, mortality, enemy/ally classification, inventory/equipment, persistence) live on the character base; only genuinely body-specific mechanisms (the humanoid template body, variants, wearable fitting) live on specializations like `HumanoidCharacter`.
+- Code that special-cases "the player" is a design smell; systems ask "which controller?" or "which faction?" instead.
+
+See [`CHARACTERS.md`](CHARACTERS.md) for the full character system design.
+
 ---
 
 *These principles are the foundation. Further principles will be added as more of the engine's direction is dictated; existing ones are refined, not silently changed.*
