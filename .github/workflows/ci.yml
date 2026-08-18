@@ -1,0 +1,27 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  host-build-test:
+    name: Host build & unit tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Configure
+        run: cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=Release
+
+      - name: Build
+        run: cmake --build build
+
+      - name: Unit tests
+        run: ctest --test-dir build --output-on-failure
+
+      - name: Host prototype runner
+        run: ./build/tools/host_runner/mge_host_runner
+
+  # The Android job (assembleDebug with NDK) is added once it can be validated
+  # against a real SDK — task 0.6 remains open until then.

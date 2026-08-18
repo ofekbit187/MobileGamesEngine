@@ -14,21 +14,21 @@ Status legend: `[ ]` not started · `[~]` in progress · `[x]` done
 - [x] **0.2** Establish architecture document (`docs/ARCHITECTURE.md`)
 - [x] **0.3** Establish task breakdown (this document)
 - [ ] **0.4** Capture remaining dictated requirements (ongoing — update principles/architecture as they arrive)
-- [ ] **0.5** Harden technology decisions (C++/NDK core, Kotlin shell, Vulkan-first, glTF import) into an ADR (architecture decision record) folder
-- [ ] **0.6** Repository scaffolding: module layout matching the layer diagram, build system (Gradle + CMake), CI that builds an APK and runs native tests
+- [x] **0.5** Harden technology decisions (C++/NDK core, Kotlin shell, Vulkan-first, glTF import) into an ADR (architecture decision record) folder — `docs/adr/0001`
+- [~] **0.6** Repository scaffolding: module layout matching the layer diagram, build system (Gradle + CMake), CI that builds an APK and runs native tests — *host build + tests + runner in CI; Android CI job pending SDK validation*
 
 ## Phase 1 — Application layer + Core foundation
 
 *Goal: an Android app that opens a rendering surface, survives the full lifecycle, and has the engine's memory/job/I-O substrate underneath.*
 
-- [ ] **1.1** Android application shell (Kotlin): activity, surface hosting, engine bootstrap over JNI
-- [ ] **1.2** Lifecycle translation: pause/resume, surface loss/recreate, config change, process-death-safe shutdown hooks
-- [ ] **1.3** Core memory system: global + per-system budgets, arena/pool/ring allocators, live usage reporting (P1 enforcement point)
-- [ ] **1.4** Job system with lanes (simulation / streaming I/O / decode / render) and main-thread frame orchestration
+- [~] **1.1** Android application shell (Kotlin): activity, surface hosting, engine bootstrap over JNI — *source complete (`app/`), unverified on device/SDK*
+- [~] **1.2** Lifecycle translation: pause/resume, surface loss/recreate, config change, process-death-safe shutdown hooks — *engine-side handling implemented + host-tested; device verification pending*
+- [~] **1.3** Core memory system: global + per-system budgets, arena/pool/ring allocators, live usage reporting (P1 enforcement point) — *budgets, arena, pool done + tested; ring buffer pending*
+- [~] **1.4** Job system with lanes (simulation / streaming I/O / decode / render) and main-thread frame orchestration — *v0 done + tested; allocation-free job structs pending (replaces std::function)*
 - [ ] **1.5** Async priority I/O API over Android storage (app-private files + packaged assets)
-- [ ] **1.6** Math library (vectors, quaternions, transforms, AABBs) shaped for later data layouts
-- [ ] **1.7** Diagnostics v0: logging, frame timer, memory-budget dashboard overlayed as debug text
-- [ ] **1.8** Raw input capture: touch events timestamped and queued into the engine
+- [x] **1.6** Math library (vectors, quaternions, transforms, AABBs) shaped for later data layouts
+- [~] **1.7** Diagnostics v0: logging, frame timer, memory-budget dashboard overlayed as debug text — *logging + budget report done; on-screen overlay needs Phase 2*
+- [~] **1.8** Raw input capture: touch events timestamped and queued into the engine — *captured at the JNI boundary; engine-side queue pending*
 
 **Exit criteria:** app runs a colored-clear frame loop at stable 60fps through every lifecycle event, with live memory-budget readout and zero steady-state allocations in the loop.
 

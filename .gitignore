@@ -1,0 +1,16 @@
+# Native build output
+build/
+cmake-build-*/
+
+# Gradle / Android
+.gradle/
+local.properties
+app/build/
+app/.cxx/
+*.apk
+*.aab
+
+# IDE
+.idea/
+*.iml
+.vscode/
