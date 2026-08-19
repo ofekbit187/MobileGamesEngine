@@ -63,6 +63,7 @@ if(NOT ANDROID)
         add_library(mge_graphics STATIC
             src/graphics/vulkan_device.cpp
             src/graphics/renderer.cpp
+            src/graphics/swapchain.cpp
         )
         target_link_libraries(mge_graphics PUBLIC mge_core Vulkan::Vulkan)
         target_include_directories(mge_graphics PRIVATE generated)
@@ -74,6 +75,7 @@ elseif(NOT MGE_EMULATED_TESTS)
     add_library(mge_graphics STATIC
         src/graphics/vulkan_device.cpp
         src/graphics/renderer.cpp
+        src/graphics/swapchain.cpp
     )
     target_link_libraries(mge_graphics PUBLIC mge_core vulkan)
     target_include_directories(mge_graphics PRIVATE generated)

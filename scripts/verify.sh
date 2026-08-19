@@ -29,6 +29,7 @@ if [ -x build/tools/vk_smoke/mge_vk_smoke ]; then
     ./build/tools/vk_scene/mge_vk_scene build/vk_scene.ppm build/cube.mgemesh | grep -E "submitted|share|OK"
     ./build/tools/template_game/mge_template_game build/walk build/cube.mgemesh | grep -E "fulfilled|capture|traveled|OK"
     ./build/tools/humanoid_demo/mge_humanoid_demo build | grep -E "drawn|hamlet|OK"
+    ./build/tools/skin_test/mge_skin_test build | grep -E "template LOD0|difference|dressed|crowd|OK"
     ./build/tools/people_demo/mge_people_demo build | grep -E "family tree|rendered|voices|OK"
 else
     echo "vk_smoke/vk_scene: SKIPPED (no Vulkan SDK — apt-get install libvulkan-dev mesa-vulkan-drivers)"

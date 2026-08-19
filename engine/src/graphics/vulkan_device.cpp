@@ -29,6 +29,10 @@ bool VulkanDevice::init(const VulkanDeviceConfig& config) {
     VkInstanceCreateInfo instanceInfo{};
     instanceInfo.sType = VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO;
     instanceInfo.pApplicationInfo = &appInfo;
+    // Surface extensions come from the platform layer (P3): the engine never
+    // names an Android/X11/Win32 extension itself.
+    instanceInfo.enabledExtensionCount = config.instanceExtensionCount;
+    instanceInfo.ppEnabledExtensionNames = config.instanceExtensions;
 
     if (vkCreateInstance(&instanceInfo, nullptr, &instance_) != VK_SUCCESS) {
         MGE_LOGE(kTag, "vkCreateInstance failed");
@@ -89,10 +93,16 @@ bool VulkanDevice::init(const VulkanDeviceConfig& config) {
     queueInfo.queueCount = 1;
     queueInfo.pQueuePriorities = &priority;
 
+    const char* const kSwapchainExtension = VK_KHR_SWAPCHAIN_EXTENSION_NAME;
     VkDeviceCreateInfo deviceInfo{};
     deviceInfo.sType = VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO;
     deviceInfo.queueCreateInfoCount = 1;
     deviceInfo.pQueueCreateInfos = &queueInfo;
+    if (config.enableSwapchain) {
+        deviceInfo.enabledExtensionCount = 1;
+        deviceInfo.ppEnabledExtensionNames = &kSwapchainExtension;
+        swapchainEnabled_ = true;
+    }
 
     if (vkCreateDevice(physicalDevice_, &deviceInfo, nullptr, &device_) != VK_SUCCESS) {
         MGE_LOGE(kTag, "vkCreateDevice failed");

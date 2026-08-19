@@ -14,6 +14,7 @@
 #include <cstdint>
 #include <vector>
 
+#include "mge/character/body_mesh.h"
 #include "mge/graphics/camera.h"
 #include "mge/graphics/mesh_data.h"
 #include "mge/graphics/vulkan_device.h"
@@ -41,6 +42,21 @@ struct GpuLodMesh {
     Aabb bounds{};
 };
 
+// A skinned mesh on the GPU (task 8.10): the template body / a garment,
+// shared by every character that wears it. Deformation is per-draw palette
+// data, never a per-character copy of the geometry (P1).
+struct GpuSkinnedMesh {
+    VkBuffer vertexBuffer = VK_NULL_HANDLE;
+    VkBuffer indexBuffer = VK_NULL_HANDLE;
+    VkDeviceMemory vertexMemory = VK_NULL_HANDLE;
+    VkDeviceMemory indexMemory = VK_NULL_HANDLE;
+    VkDeviceSize vertexMemorySize = 0;
+    VkDeviceSize indexMemorySize = 0;
+    uint32_t indexCount = 0;
+    Aabb bounds{};
+    bool valid() const { return vertexBuffer != VK_NULL_HANDLE; }
+};
+
 enum class MaterialKind : uint8_t {
     Lit = 0,      // basic lit opaque
     Placeholder,  // virtual-model treatment (P5)
@@ -54,6 +70,20 @@ struct DrawItem {
     float baseColor[4] = {1, 1, 1, 1};
     float params[4] = {0, 0, 0, 0};  // placeholder: x = hatch scale
     MaterialKind material = MaterialKind::Lit;
+};
+
+// One skinned draw: a shared mesh + this character's joint palette.
+// `indexCount == 0` draws the whole mesh; a sub-range draws one region
+// (masking a covered body part is a draw-range decision).
+struct SkinnedDrawItem {
+    const GpuSkinnedMesh* mesh = nullptr;
+    const Mat4* palette = nullptr;  // kJointCount matrices
+    Mat4 model;
+    Aabb worldBounds{};
+    Vec3 lodReference{};
+    float baseColor[4] = {1, 1, 1, 1};
+    uint32_t firstIndex = 0;
+    uint32_t indexCount = 0;
 };
 
 struct RenderStats {
@@ -100,6 +130,11 @@ public:
     void destroyMesh(GpuMesh& mesh);
     void destroyLodMesh(GpuLodMesh& mesh);
 
+    // Skinned geometry (task 8.10): upload once, draw for every character.
+    bool uploadSkinnedMesh(const SkinnedMeshData& data, GpuSkinnedMesh& out);
+    void destroySkinnedMesh(GpuSkinnedMesh& mesh);
+    static constexpr uint32_t kMaxSkinnedDraws = 48;  // palettes per frame
+
     // Uploads the UI font atlas and enables the overlay pipeline (task 5.2).
     bool setUiFont(const FontAtlas& font);
 
@@ -108,13 +143,18 @@ public:
     // a UI draw list composited on top (the overlay pass, P6).
     bool renderFrame(const Camera& camera, const DrawItem* items, size_t count,
                      RenderStats* stats = nullptr, const UiDrawList* ui = nullptr,
-                     const ObjectViewDraw* objectViews = nullptr, size_t objectViewCount = 0);
+                     const ObjectViewDraw* objectViews = nullptr, size_t objectViewCount = 0,
+                     const SkinnedDrawItem* skinned = nullptr, size_t skinnedCount = 0);
 
     // Copies the last rendered frame (RGBA8, width*height*4 bytes) to dest.
     bool readback(uint8_t* dest, size_t destSize);
 
     uint32_t width() const { return config_.width; }
     uint32_t height() const { return config_.height; }
+
+    // The finished frame's color image, left in TRANSFER_SRC_OPTIMAL by the
+    // pass — what Swapchain blits to the display (and readback copies).
+    VkImage colorImage() const { return colorImage_; }
 
 private:
     bool createTarget();
@@ -151,6 +191,18 @@ private:
     VkPipelineLayout pipelineLayout_ = VK_NULL_HANDLE;
     VkPipeline litPipeline_ = VK_NULL_HANDLE;
     VkPipeline placeholderPipeline_ = VK_NULL_HANDLE;
+    VkPipeline skinnedPipeline_ = VK_NULL_HANDLE;
+
+    // Skinning palettes: one dynamic-offset slot per skinned draw.
+    VkBuffer paletteBuffer_ = VK_NULL_HANDLE;
+    VkDeviceMemory paletteMemory_ = VK_NULL_HANDLE;
+    VkDeviceSize paletteMemorySize_ = 0;
+    VkDeviceSize paletteSlotStride_ = 0;
+    // Palette slot each skinned draw reads: consecutive draws sharing a
+    // palette (one character's body regions + garments) share one slot.
+    uint32_t skinnedSlots_[kMaxSkinnedDraws] = {};
+    void recordSkinnedItems(const Camera& camera, const SkinnedDrawItem* items, size_t count,
+                            bool cull, RenderStats* stats);
 
     // UI overlay (task 5.2)
     bool createUiPipeline();

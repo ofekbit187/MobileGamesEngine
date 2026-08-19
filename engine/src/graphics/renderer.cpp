@@ -7,6 +7,7 @@
 #include "shaders/lit_frag.h"
 #include "shaders/mesh_vert.h"
 #include "shaders/placeholder_frag.h"
+#include "shaders/skinned_vert.h"
 #include "shaders/ui_frag.h"
 #include "shaders/ui_vert.h"
 
@@ -48,6 +49,8 @@ bool Renderer::init(const RendererConfig& config) {
     const VkDeviceSize align = properties.limits.minUniformBufferOffsetAlignment;
     uniformSlotStride_ = ((sizeof(FrameData) + align - 1) / align) * align;
     if (uniformSlotStride_ < align) uniformSlotStride_ = align;
+    const VkDeviceSize paletteBytes = sizeof(Mat4) * kJointCount;
+    paletteSlotStride_ = ((paletteBytes + align - 1) / align) * align;
 
     if (!createTarget() || !createDescriptors() || !createPipelines()) {
         shutdown();
@@ -120,6 +123,7 @@ void Renderer::shutdown() {
     uiAtlasMemorySize_ = 0;
 
     destroyBuffer(readbackBuffer_, readbackMemory_, readbackMemorySize_);
+    destroyBuffer(paletteBuffer_, paletteMemory_, paletteMemorySize_);
     if (fence_ != VK_NULL_HANDLE) vkDestroyFence(vk, fence_, nullptr);
     if (commandPool_ != VK_NULL_HANDLE) vkDestroyCommandPool(vk, commandPool_, nullptr);
     fence_ = VK_NULL_HANDLE;
@@ -128,6 +132,7 @@ void Renderer::shutdown() {
 
     if (litPipeline_ != VK_NULL_HANDLE) vkDestroyPipeline(vk, litPipeline_, nullptr);
     if (placeholderPipeline_ != VK_NULL_HANDLE) vkDestroyPipeline(vk, placeholderPipeline_, nullptr);
+    if (skinnedPipeline_ != VK_NULL_HANDLE) vkDestroyPipeline(vk, skinnedPipeline_, nullptr);
     if (pipelineLayout_ != VK_NULL_HANDLE) vkDestroyPipelineLayout(vk, pipelineLayout_, nullptr);
     litPipeline_ = placeholderPipeline_ = VK_NULL_HANDLE;
     pipelineLayout_ = VK_NULL_HANDLE;
@@ -256,20 +261,30 @@ bool Renderer::createDescriptors() {
         return false;
     }
 
-    VkDescriptorSetLayoutBinding binding{};
-    binding.binding = 0;
-    binding.descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC;
-    binding.descriptorCount = 1;
-    binding.stageFlags = VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT;
+    // Skinning palettes (task 8.10): one dynamic-offset slot per skinned draw.
+    if (!createBuffer(paletteSlotStride_ * kMaxSkinnedDraws, VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT,
+                      paletteBuffer_, paletteMemory_, paletteMemorySize_)) {
+        return false;
+    }
+
+    VkDescriptorSetLayoutBinding bindings[2]{};
+    bindings[0].binding = 0;
+    bindings[0].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC;
+    bindings[0].descriptorCount = 1;
+    bindings[0].stageFlags = VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT;
+    bindings[1].binding = 1;
+    bindings[1].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC;
+    bindings[1].descriptorCount = 1;
+    bindings[1].stageFlags = VK_SHADER_STAGE_VERTEX_BIT;
     VkDescriptorSetLayoutCreateInfo layoutInfo{};
     layoutInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
-    layoutInfo.bindingCount = 1;
-    layoutInfo.pBindings = &binding;
+    layoutInfo.bindingCount = 2;
+    layoutInfo.pBindings = bindings;
     if (vkCreateDescriptorSetLayout(vk, &layoutInfo, nullptr, &setLayout_) != VK_SUCCESS)
         return false;
 
     VkDescriptorPoolSize poolSizes[2] = {
-        {VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC, 1},
+        {VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC, 2},  // frame + skin palette
         {VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1},  // UI atlas
     };
     VkDescriptorPoolCreateInfo poolInfo{};
@@ -288,14 +303,18 @@ bool Renderer::createDescriptors() {
     if (vkAllocateDescriptorSets(vk, &allocInfo, &descriptorSet_) != VK_SUCCESS) return false;
 
     VkDescriptorBufferInfo bufferInfo{uniformBuffer_, 0, sizeof(FrameData)};
-    VkWriteDescriptorSet write{};
-    write.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-    write.dstSet = descriptorSet_;
-    write.dstBinding = 0;
-    write.descriptorCount = 1;
-    write.descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC;
-    write.pBufferInfo = &bufferInfo;
-    vkUpdateDescriptorSets(vk, 1, &write, 0, nullptr);
+    VkDescriptorBufferInfo paletteInfo{paletteBuffer_, 0, sizeof(Mat4) * kJointCount};
+    VkWriteDescriptorSet writes[2]{};
+    writes[0].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+    writes[0].dstSet = descriptorSet_;
+    writes[0].dstBinding = 0;
+    writes[0].descriptorCount = 1;
+    writes[0].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC;
+    writes[0].pBufferInfo = &bufferInfo;
+    writes[1] = writes[0];
+    writes[1].dstBinding = 1;
+    writes[1].pBufferInfo = &paletteInfo;
+    vkUpdateDescriptorSets(vk, 2, writes, 0, nullptr);
     return true;
 }
 
@@ -387,11 +406,32 @@ bool Renderer::createPipelines() {
     blend.attachmentCount = 1;
     blend.pAttachments = &blendAttachment;
 
-    auto makePipeline = [&](VkShaderModule fragModule, VkPipeline& out) {
+    // Skinned vertex layout (task 8.10): the same lit fragment stage, fed by
+    // the template body's 36-byte SkinVertex.
+    VkShaderModule skinnedVert = createShaderModule(k_spv_skinned_vert, k_spv_skinned_vert_size);
+    if (skinnedVert == VK_NULL_HANDLE) return false;
+    VkVertexInputBindingDescription skinnedBinding{0, sizeof(SkinVertex),
+                                                   VK_VERTEX_INPUT_RATE_VERTEX};
+    VkVertexInputAttributeDescription skinnedAttributes[5]{};
+    skinnedAttributes[0] = {0, 0, VK_FORMAT_R32G32B32_SFLOAT, offsetof(SkinVertex, position)};
+    skinnedAttributes[1] = {1, 0, VK_FORMAT_R32G32B32_SFLOAT, offsetof(SkinVertex, normal)};
+    skinnedAttributes[2] = {2, 0, VK_FORMAT_R16G16_UNORM, offsetof(SkinVertex, uv)};
+    skinnedAttributes[3] = {3, 0, VK_FORMAT_R8G8B8A8_UINT, offsetof(SkinVertex, joints)};
+    skinnedAttributes[4] = {4, 0, VK_FORMAT_R8G8B8A8_UNORM, offsetof(SkinVertex, weights)};
+    VkPipelineVertexInputStateCreateInfo skinnedInput{};
+    skinnedInput.sType = VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO;
+    skinnedInput.vertexBindingDescriptionCount = 1;
+    skinnedInput.pVertexBindingDescriptions = &skinnedBinding;
+    skinnedInput.vertexAttributeDescriptionCount = 5;
+    skinnedInput.pVertexAttributeDescriptions = skinnedAttributes;
+
+    auto makePipeline = [&](VkShaderModule vertModule,
+                            const VkPipelineVertexInputStateCreateInfo& inputState,
+                            VkShaderModule fragModule, VkPipeline& out) {
         VkPipelineShaderStageCreateInfo stages[2]{};
         stages[0].sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
         stages[0].stage = VK_SHADER_STAGE_VERTEX_BIT;
-        stages[0].module = vert;
+        stages[0].module = vertModule;
         stages[0].pName = "main";
         stages[1].sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
         stages[1].stage = VK_SHADER_STAGE_FRAGMENT_BIT;
@@ -402,7 +442,7 @@ bool Renderer::createPipelines() {
         info.sType = VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO;
         info.stageCount = 2;
         info.pStages = stages;
-        info.pVertexInputState = &vertexInput;
+        info.pVertexInputState = &inputState;
         info.pInputAssemblyState = &inputAssembly;
         info.pViewportState = &viewportState;
         info.pRasterizationState = &raster;
@@ -416,10 +456,12 @@ bool Renderer::createPipelines() {
                VK_SUCCESS;
     };
 
-    const bool ok = makePipeline(litFrag, litPipeline_) &&
-                    makePipeline(placeholderFrag, placeholderPipeline_);
+    const bool ok = makePipeline(vert, vertexInput, litFrag, litPipeline_) &&
+                    makePipeline(vert, vertexInput, placeholderFrag, placeholderPipeline_) &&
+                    makePipeline(skinnedVert, skinnedInput, litFrag, skinnedPipeline_);
 
     vkDestroyShaderModule(vk, vert, nullptr);
+    vkDestroyShaderModule(vk, skinnedVert, nullptr);
     vkDestroyShaderModule(vk, litFrag, nullptr);
     vkDestroyShaderModule(vk, placeholderFrag, nullptr);
     return ok;
@@ -741,6 +783,47 @@ bool Renderer::uploadMesh(const MeshData& data, GpuMesh& out) {
     return true;
 }
 
+bool Renderer::uploadSkinnedMesh(const SkinnedMeshData& data, GpuSkinnedMesh& out) {
+    if (data.vertices.empty() || data.indices.empty()) return false;
+    VkDevice vk = device_.device();
+
+    const VkDeviceSize vertexBytes = data.vertices.size() * sizeof(SkinVertex);
+    const VkDeviceSize indexBytes = data.indices.size() * sizeof(uint32_t);
+    if (!createBuffer(vertexBytes, VK_BUFFER_USAGE_VERTEX_BUFFER_BIT, out.vertexBuffer,
+                      out.vertexMemory, out.vertexMemorySize)) {
+        return false;  // GPU budget refused — caller degrades
+    }
+    if (!createBuffer(indexBytes, VK_BUFFER_USAGE_INDEX_BUFFER_BIT, out.indexBuffer,
+                      out.indexMemory, out.indexMemorySize)) {
+        destroySkinnedMesh(out);
+        return false;
+    }
+    void* mapped = nullptr;
+    vkMapMemory(vk, out.vertexMemory, 0, vertexBytes, 0, &mapped);
+    memcpy(mapped, data.vertices.data(), vertexBytes);
+    vkUnmapMemory(vk, out.vertexMemory);
+    vkMapMemory(vk, out.indexMemory, 0, indexBytes, 0, &mapped);
+    memcpy(mapped, data.indices.data(), indexBytes);
+    vkUnmapMemory(vk, out.indexMemory);
+
+    out.indexCount = static_cast<uint32_t>(data.indices.size());
+    out.bounds = data.bounds;
+    return true;
+}
+
+void Renderer::destroySkinnedMesh(GpuSkinnedMesh& mesh) {
+    VkDevice vk = device_.device();
+    if (mesh.vertexBuffer != VK_NULL_HANDLE) {
+        vkDestroyBuffer(vk, mesh.vertexBuffer, nullptr);
+        device_.free(mesh.vertexMemory, mesh.vertexMemorySize);
+    }
+    if (mesh.indexBuffer != VK_NULL_HANDLE) {
+        vkDestroyBuffer(vk, mesh.indexBuffer, nullptr);
+        device_.free(mesh.indexMemory, mesh.indexMemorySize);
+    }
+    mesh = GpuSkinnedMesh{};
+}
+
 bool Renderer::uploadLodMesh(const LodMesh& data, GpuLodMesh& out) {
     out.lods.resize(data.lods.size());
     for (size_t i = 0; i < data.lods.size(); ++i) {
@@ -826,6 +909,43 @@ void Renderer::recordDrawItems(const Camera& camera, const DrawItem* items, size
     }
 }
 
+void Renderer::recordSkinnedItems(const Camera& camera, const SkinnedDrawItem* items,
+                                  size_t count, bool cull, RenderStats* stats) {
+    if (items == nullptr || count == 0 || skinnedPipeline_ == VK_NULL_HANDLE) return;
+    const Frustum frustum = Frustum::fromViewProj(camera.viewProj());
+    vkCmdBindPipeline(commandBuffer_, VK_PIPELINE_BIND_POINT_GRAPHICS, skinnedPipeline_);
+
+    for (size_t i = 0; i < count; ++i) {
+        const SkinnedDrawItem& item = items[i];
+        if (item.mesh == nullptr || !item.mesh->valid()) continue;
+        if (stats != nullptr) ++stats->submitted;
+        if (cull && !frustum.intersects(item.worldBounds)) {
+            if (stats != nullptr) ++stats->culled;
+            continue;
+        }
+        // This character's palette slot: the ONLY per-character GPU data.
+        const uint32_t offsets[2] = {
+            0, static_cast<uint32_t>(paletteSlotStride_ * skinnedSlots_[i])};
+        vkCmdBindDescriptorSets(commandBuffer_, VK_PIPELINE_BIND_POINT_GRAPHICS,
+                                pipelineLayout_, 0, 1, &descriptorSet_, 2, offsets);
+
+        DrawPush push{};
+        memcpy(push.model, item.model.m, sizeof(push.model));
+        memcpy(push.baseColor, item.baseColor, sizeof(push.baseColor));
+        vkCmdPushConstants(commandBuffer_, pipelineLayout_,
+                           VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 0,
+                           sizeof(push), &push);
+
+        const VkDeviceSize zero = 0;
+        vkCmdBindVertexBuffers(commandBuffer_, 0, 1, &item.mesh->vertexBuffer, &zero);
+        vkCmdBindIndexBuffer(commandBuffer_, item.mesh->indexBuffer, 0, VK_INDEX_TYPE_UINT32);
+        const uint32_t indexCount =
+            item.indexCount > 0 ? item.indexCount : item.mesh->indexCount;
+        vkCmdDrawIndexed(commandBuffer_, indexCount, 1, item.firstIndex, 0, 0);
+        if (stats != nullptr) ++stats->drawn;
+    }
+}
+
 void Renderer::recordObjectView(const ObjectViewDraw& view, uint32_t slotIndex) {
     // Clear the rect (color + depth), retarget the viewport, draw with the
     // view's own camera slot.
@@ -846,18 +966,43 @@ void Renderer::recordObjectView(const ObjectViewDraw& view, uint32_t slotIndex) 
     vkCmdSetViewport(commandBuffer_, 0, 1, &viewport);
     vkCmdSetScissor(commandBuffer_, 0, 1, &clearRect.rect);
 
-    const uint32_t offset = slotIndex * static_cast<uint32_t>(uniformSlotStride_);
+    const uint32_t offsets[2] = {slotIndex * static_cast<uint32_t>(uniformSlotStride_), 0};
     vkCmdBindDescriptorSets(commandBuffer_, VK_PIPELINE_BIND_POINT_GRAPHICS, pipelineLayout_, 0,
-                            1, &descriptorSet_, 1, &offset);
+                            1, &descriptorSet_, 2, offsets);
     recordDrawItems(view.camera, view.items, view.count, false, nullptr);
 }
 
 bool Renderer::renderFrame(const Camera& camera, const DrawItem* items, size_t count,
                            RenderStats* stats, const UiDrawList* ui,
-                           const ObjectViewDraw* objectViews, size_t objectViewCount) {
+                           const ObjectViewDraw* objectViews, size_t objectViewCount,
+                           const SkinnedDrawItem* skinned, size_t skinnedCount) {
     if (!initialized()) return false;
     VkDevice vk = device_.device();
     if (objectViewCount > kMaxUniformSlots - 1) objectViewCount = kMaxUniformSlots - 1;
+    if (skinnedCount > kMaxSkinnedDraws) skinnedCount = kMaxSkinnedDraws;
+
+    // Upload this frame's joint palettes (one dynamic-offset slot each).
+    if (skinnedCount > 0 && paletteMemory_ != VK_NULL_HANDLE) {
+        void* palettes = nullptr;
+        if (vkMapMemory(vk, paletteMemory_, 0, paletteSlotStride_ * kMaxSkinnedDraws, 0,
+                        &palettes) == VK_SUCCESS) {
+            auto* bytes = static_cast<uint8_t*>(palettes);
+            uint32_t slot = 0;
+            for (size_t i = 0; i < skinnedCount; ++i) {
+                const bool sharesPrevious =
+                    i > 0 && skinned[i].palette == skinned[i - 1].palette;
+                if (!sharesPrevious) {
+                    slot = static_cast<uint32_t>(i == 0 ? 0 : slot + 1);
+                    if (skinned[i].palette != nullptr) {
+                        memcpy(bytes + paletteSlotStride_ * slot, skinned[i].palette,
+                               sizeof(Mat4) * kJointCount);
+                    }
+                }
+                skinnedSlots_[i] = slot;
+            }
+            vkUnmapMemory(vk, paletteMemory_);
+        }
+    }
 
     // Camera slots: 0 = main, 1.. = object views.
     {
@@ -906,10 +1051,11 @@ bool Renderer::renderFrame(const Camera& camera, const DrawItem* items, size_t c
     vkCmdSetViewport(commandBuffer_, 0, 1, &fullViewport);
     vkCmdSetScissor(commandBuffer_, 0, 1, &fullScissor);
 
-    const uint32_t zeroOffset = 0;
+    const uint32_t zeroOffsets[2] = {0, 0};
     vkCmdBindDescriptorSets(commandBuffer_, VK_PIPELINE_BIND_POINT_GRAPHICS, pipelineLayout_, 0,
-                            1, &descriptorSet_, 1, &zeroOffset);
+                            1, &descriptorSet_, 2, zeroOffsets);
     recordDrawItems(camera, items, count, true, &localStats);
+    recordSkinnedItems(camera, skinned, skinnedCount, true, &localStats);
 
     // UI overlay pass (P6).
     if (ui != nullptr && uiPipeline_ != VK_NULL_HANDLE && ui->quadCount() > 0) {

@@ -49,6 +49,9 @@ jobs:
       - name: People demo (family tree, DNA heredity, voice pipeline)
         run: ./build/tools/people_demo/mge_people_demo build
 
+      - name: GPU skinning vs CPU reference (task 8.10)
+        run: ./build/tools/skin_test/mge_skin_test build
+
       - uses: actions/upload-artifact@v4
         with:
           name: vk-scene-capture
@@ -58,6 +61,7 @@ jobs:
             build/hamlet_*.ppm
             build/people_*.ppm
             build/audio_walk.wav
+            build/skin_*.ppm
 
   android-apk:
     name: Android APK (arm64, NDK)

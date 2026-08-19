@@ -57,7 +57,7 @@ Java_com_mobilegamesengine_app_EngineBridge_nativeSurfaceCreated(
     if (gWindow != nullptr) ANativeWindow_release(gWindow);
     gWindow = ANativeWindow_fromSurface(env, surface);
     gEngine.onSurfaceCreated(width, height);
-    gGame.start(gEngine, gMixer, static_cast<uint32_t>(width),
+    gGame.start(gEngine, gMixer, gWindow, static_cast<uint32_t>(width),
                 static_cast<uint32_t>(height));
 }
 
@@ -65,10 +65,12 @@ JNIEXPORT void JNICALL
 Java_com_mobilegamesengine_app_EngineBridge_nativeSurfaceChanged(
     JNIEnv*, jobject, jint width, jint height) {
     gEngine.onSurfaceChanged(width, height);
+    gGame.onSurfaceResized(static_cast<uint32_t>(width), static_cast<uint32_t>(height));
 }
 
 JNIEXPORT void JNICALL
 Java_com_mobilegamesengine_app_EngineBridge_nativeSurfaceDestroyed(JNIEnv*, jobject) {
+    gGame.stop();  // its Vulkan surface belongs to the window going away
     gEngine.onSurfaceLost();
     if (gWindow != nullptr) {
         ANativeWindow_release(gWindow);

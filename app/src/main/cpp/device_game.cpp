@@ -1,11 +1,15 @@
 #include "device_game.h"
 
+#define VK_USE_PLATFORM_ANDROID_KHR
+#include <vulkan/vulkan.h>
+
 #include <cmath>
 #include <cstring>
 #include <string>
 #include <unordered_map>
 #include <vector>
 
+#include "mge/character/body_mesh.h"
 #include "mge/character/humanoid.h"
 #include "mge/core/log.h"
 #include "mge/framework/ai.h"
@@ -14,6 +18,7 @@
 #include "mge/framework/character.h"
 #include "mge/graphics/primitives.h"
 #include "mge/graphics/renderer.h"
+#include "mge/graphics/swapchain.h"
 #include "mge/graphics/vulkan_device.h"
 #include "mge/ui/font.h"
 #include "mge/ui/localization.h"
@@ -25,49 +30,22 @@ namespace {
 
 constexpr const char* kTag = "device";
 
-// ---- humanoid rig on the GPU (same pattern the demo tools use) -------------
+// ---- characters: the v2 skinned template body on the GPU (task 8.10) ------
+// ONE template mesh + one garment mesh per (kind, layer) serve every
+// character; a character is 17 matrices. Masking a covered body region is a
+// draw-range decision on the shared mesh, so a dressed body draws FEWER
+// triangles than a bare one and can never clip through its clothes.
 
-struct RigInstance {
-    Skeleton skeleton;
-    std::vector<RigPart> parts;
-    std::vector<GpuLodMesh> gpu;
+struct SkinnedCharacter {
+    HumanoidVariant variant;
+    uint32_t visibleRegions = kAllRegions;
+    struct Garment {
+        const GpuSkinnedMesh* mesh = nullptr;
+        float color[4] = {1, 1, 1, 1};
+    };
+    std::vector<Garment> garments;
+    Mat4 palette[kJointCount];
 };
-
-bool uploadRig(Renderer& renderer, const HumanoidVariant& variant,
-               const WearableInstance* wearables, size_t wearableCount, RigInstance& out) {
-    out.skeleton = buildSkeleton(variant);
-    buildHumanoidVisual(variant, wearables, wearableCount, out.parts);
-    out.gpu.resize(out.parts.size());
-    for (size_t i = 0; i < out.parts.size(); ++i) {
-        LodMesh lod;
-        lod.lods.push_back(out.parts[i].mesh);
-        lod.computeBounds();
-        if (!renderer.uploadLodMesh(lod, out.gpu[i])) return false;
-    }
-    return true;
-}
-
-void destroyRig(Renderer& renderer, RigInstance& rig) {
-    for (GpuLodMesh& mesh : rig.gpu) renderer.destroyLodMesh(mesh);
-    rig.gpu.clear();
-}
-
-void emitRig(std::vector<DrawItem>& items, const RigInstance& rig, const Pose& pose,
-             const Vec3& position, float yaw) {
-    Mat4 world[kJointCount];
-    evaluatePose(rig.skeleton, pose, world);
-    const Mat4 root =
-        Mat4::translation(position) * Mat4::rotation(Quat::fromAxisAngle({0, 1, 0}, -yaw));
-    for (size_t i = 0; i < rig.parts.size(); ++i) {
-        DrawItem item;
-        item.mesh = &rig.gpu[i];
-        item.model = root * world[static_cast<size_t>(rig.parts[i].joint)];
-        item.worldBounds = Aabb::fromCenterExtents(position + Vec3{0, 1.2f, 0}, {3, 3, 3});
-        item.lodReference = position;
-        memcpy(item.baseColor, rig.parts[i].color, sizeof item.baseColor);
-        items.push_back(item);
-    }
-}
 
 WearableInstance colored(WearableKind kind, float r, float g, float b, uint8_t layer = 1,
                          bool sheathed = false) {
@@ -171,9 +149,12 @@ struct DeviceGame::Impl {
     BudgetRegistry gpuBudgets;
     VulkanDevice device{gpuBudgets};
     Renderer renderer{device};
+    Swapchain swapchain;
+    VkSurfaceKHR surface = VK_NULL_HANDLE;
     bool vulkanOk = false;
-    uint32_t renderWidth = 960, renderHeight = 540;
-    std::vector<uint8_t> pixels;
+    bool presenting = false;   // swapchain path (never mix with window locks)
+    uint32_t renderWidth = 1280, renderHeight = 720;
+    std::vector<uint8_t> pixels;  // readback fallback only
     double heartbeat = 0;
 
     // Scene
@@ -181,9 +162,15 @@ struct DeviceGame::Impl {
     std::unordered_map<AssetId, GpuLodMesh> resident;
     struct Actor {
         EntityId entity = kInvalidEntity;
-        RigInstance rig;
+        SkinnedCharacter character;
         LocomotionAnimator anim;
     };
+    // Shared across every character in the world (the P1 claim of the
+    // template-body design): one body mesh, one mesh per garment kind+layer.
+    GpuSkinnedMesh bodyMesh;
+    std::vector<MeshPart> bodyParts;
+    std::unordered_map<uint32_t, GpuSkinnedMesh> garmentMeshes;
+    std::vector<SkinnedDrawItem> skinnedItems;
     Actor player, guard, villager;
     CharacterSystem* characters = nullptr;
     AiSystem* ai = nullptr;
@@ -212,25 +199,41 @@ struct DeviceGame::Impl {
 
 DeviceGame::~DeviceGame() { stop(); }
 
-bool DeviceGame::start(Engine& engine, AudioMixer& mixer, uint32_t surfaceWidth,
-                       uint32_t surfaceHeight) {
+bool DeviceGame::start(Engine& engine, AudioMixer& mixer, ANativeWindow* window,
+                       uint32_t surfaceWidth, uint32_t surfaceHeight) {
     if (impl_ != nullptr) return true;
     impl_ = new Impl();
     Impl& s = *impl_;
     s.engine = &engine;
     s.mixer = &mixer;
 
-    // Render size: ~540p at the surface's aspect (blit scales to the screen).
+    // Render size: 720p at the surface's aspect; the presentation blit scales
+    // it to the panel in the driver, so render cost stays independent of a
+    // 1440p display.
     if (surfaceWidth > 0 && surfaceHeight > 0) {
-        s.renderHeight = 540;
+        s.renderHeight = 720;
         s.renderWidth =
             ((surfaceWidth * s.renderHeight / surfaceHeight) + 3u) & ~3u;
-        if (s.renderWidth > 1280) s.renderWidth = 1280;
+        if (s.renderWidth > 1600) s.renderWidth = 1600;
         if (s.renderWidth < 320) s.renderWidth = 320;
     }
 
-    // --- Graphics: the engine's own offscreen pass, on the device GPU ---
-    s.vulkanOk = s.device.init(VulkanDeviceConfig{});
+    // --- Graphics: the engine's pass on the device GPU, presented through a
+    //     real swapchain (task 2.1). The surface extensions are named here,
+    //     in platform code — the engine core never mentions Android.
+    const char* const kSurfaceExtensions[] = {VK_KHR_SURFACE_EXTENSION_NAME,
+                                              VK_KHR_ANDROID_SURFACE_EXTENSION_NAME};
+    VulkanDeviceConfig deviceConfig;
+    deviceConfig.instanceExtensions = kSurfaceExtensions;
+    deviceConfig.instanceExtensionCount = 2;
+    deviceConfig.enableSwapchain = true;
+    s.vulkanOk = s.device.init(deviceConfig);
+    if (!s.vulkanOk) {
+        // Presentation-capable init failed: try plain headless-style init so
+        // the readback path can still show the world.
+        MGE_LOGW(kTag, "surface-capable Vulkan init failed — trying windowless");
+        s.vulkanOk = s.device.init(VulkanDeviceConfig{});
+    }
     if (s.vulkanOk) {
         RendererConfig config;
         config.width = s.renderWidth;
@@ -240,13 +243,31 @@ bool DeviceGame::start(Engine& engine, AudioMixer& mixer, uint32_t surfaceWidth,
         config.lightDir[2] = 0.55f;
         s.vulkanOk = s.renderer.init(config);
     }
+    if (s.vulkanOk && s.device.swapchainEnabled() && window != nullptr) {
+        VkAndroidSurfaceCreateInfoKHR surfaceInfo{};
+        surfaceInfo.sType = VK_STRUCTURE_TYPE_ANDROID_SURFACE_CREATE_INFO_KHR;
+        surfaceInfo.window = window;
+        if (vkCreateAndroidSurfaceKHR(s.device.instance(), &surfaceInfo, nullptr, &s.surface) ==
+                VK_SUCCESS &&
+            s.swapchain.init(s.device, s.surface)) {
+            s.presenting = true;
+        } else {
+            MGE_LOGW(kTag, "no swapchain — falling back to readback + window blit");
+            if (s.surface != VK_NULL_HANDLE) {
+                vkDestroySurfaceKHR(s.device.instance(), s.surface, nullptr);
+                s.surface = VK_NULL_HANDLE;
+            }
+        }
+    }
     if (s.vulkanOk) {
-        MGE_LOGI(kTag, "vulkan up: %s, offscreen %ux%u", s.device.deviceName(),
-                 s.renderWidth, s.renderHeight);
+        MGE_LOGI(kTag, "vulkan up: %s, render %ux%u, present=%d", s.device.deviceName(),
+                 s.renderWidth, s.renderHeight, s.presenting ? 1 : 0);
     } else {
         MGE_LOGE(kTag, "vulkan unavailable — parchment fallback active");
     }
-    s.pixels.resize(static_cast<size_t>(s.renderWidth) * s.renderHeight * 4);
+    if (!s.presenting) {
+        s.pixels.resize(static_cast<size_t>(s.renderWidth) * s.renderHeight * 4);
+    }
 
     // --- World: the template hamlet ---
     World& world = engine.world();
@@ -368,9 +389,57 @@ bool DeviceGame::start(Engine& engine, AudioMixer& mixer, uint32_t surfaceWidth,
             colored(WearableKind::Pants, 0.30f, 0.24f, 0.18f),
             colored(WearableKind::Boots, 0.24f, 0.17f, 0.11f),
             colored(WearableKind::HairLong, 0.55f, 0.40f, 0.20f)};
-        s.vulkanOk = uploadRig(s.renderer, playerVariant, playerOutfit, 4, s.player.rig) &&
-                     uploadRig(s.renderer, guardVariant, guardOutfit, 5, s.guard.rig) &&
-                     uploadRig(s.renderer, villagerVariant, villagerOutfit, 4, s.villager.rig);
+        // The shared template body (LOD0) — uploaded ONCE for everyone.
+        const std::vector<SkinnedMeshData>& lods = sharedTemplateLods();
+        if (lods.empty() || !s.renderer.uploadSkinnedMesh(lods[0], s.bodyMesh)) {
+            MGE_LOGE(kTag, "template body upload failed");
+            s.vulkanOk = false;
+        } else {
+            s.bodyParts = lods[0].parts;
+            MGE_LOGI(kTag, "template body: %zu vertices, %zu triangles, %zu regions",
+                     lods[0].vertices.size(), lods[0].triangleCount(), s.bodyParts.size());
+        }
+
+        // One garment mesh per (kind, layer), shared by every wearer.
+        const auto garmentKey = [](WearableKind kind, uint8_t layer) {
+            return (static_cast<uint32_t>(kind) << 8) | layer;
+        };
+        const auto dress = [&](Impl::Actor& actor, const HumanoidVariant& variant,
+                               const WearableInstance* outfit, size_t count) {
+            actor.character.variant = variant;
+            actor.character.visibleRegions = kAllRegions;
+            actor.character.garments.clear();
+            for (size_t i = 0; i < count && s.vulkanOk; ++i) {
+                actor.character.visibleRegions &= ~garmentCoverage(outfit[i].kind);
+                const uint32_t key = garmentKey(outfit[i].kind, outfit[i].layer);
+                auto it = s.garmentMeshes.find(key);
+                if (it == s.garmentMeshes.end()) {
+                    GarmentBuildDesc desc;
+                    desc.kind = outfit[i].kind;
+                    desc.layer = outfit[i].layer;
+                    desc.lod = BodyLod::Lod0;
+                    SkinnedMeshData mesh;
+                    buildGarmentMesh(desc, mesh);
+                    if (mesh.vertices.empty()) continue;  // held items aren't garments
+                    GpuSkinnedMesh gpu;
+                    if (!s.renderer.uploadSkinnedMesh(mesh, gpu)) {
+                        s.vulkanOk = false;
+                        break;
+                    }
+                    it = s.garmentMeshes.emplace(key, gpu).first;
+                }
+                SkinnedCharacter::Garment garment;
+                garment.mesh = &it->second;
+                memcpy(garment.color, outfit[i].color, sizeof(garment.color));
+                actor.character.garments.push_back(garment);
+            }
+        };
+        if (s.vulkanOk) {
+            dress(s.player, playerVariant, playerOutfit, 4);
+            dress(s.guard, guardVariant, guardOutfit, 5);
+            dress(s.villager, villagerVariant, villagerOutfit, 4);
+            s.skinnedItems.reserve(Renderer::kMaxSkinnedDraws);
+        }
     }
 
     // --- Audio: live soundscape through the AAudio-pulled mixer ---
@@ -420,16 +489,31 @@ void DeviceGame::stop() {
     if (impl_ == nullptr) return;
     Impl& s = *impl_;
     if (s.vulkanOk || s.renderer.initialized()) {
-        destroyRig(s.renderer, s.player.rig);
-        destroyRig(s.renderer, s.guard.rig);
-        destroyRig(s.renderer, s.villager.rig);
+        s.renderer.destroySkinnedMesh(s.bodyMesh);
+        for (auto& [key, mesh] : s.garmentMeshes) s.renderer.destroySkinnedMesh(mesh);
+        s.garmentMeshes.clear();
         for (auto& [id, mesh] : s.resident) s.renderer.destroyLodMesh(mesh);
         s.resident.clear();
         s.renderer.shutdown();
     }
+    s.swapchain.shutdown();
+    if (s.surface != VK_NULL_HANDLE) {
+        vkDestroySurfaceKHR(s.device.instance(), s.surface, nullptr);
+        s.surface = VK_NULL_HANDLE;
+    }
     s.device.shutdown();
     delete impl_;
     impl_ = nullptr;
+}
+
+void DeviceGame::onSurfaceResized(uint32_t width, uint32_t height) {
+    if (impl_ == nullptr) return;
+    Impl& s = *impl_;
+    if (width > 0 && height > 0) {
+        s.touchScaleX = static_cast<float>(s.renderWidth) / width;
+        s.touchScaleY = static_cast<float>(s.renderHeight) / height;
+    }
+    if (s.presenting) s.swapchain.recreate();
 }
 
 void DeviceGame::frame(double dtSeconds, ANativeWindow* window) {
@@ -480,10 +564,14 @@ void DeviceGame::frame(double dtSeconds, ANativeWindow* window) {
         s.mixer->play(s.speech, speechParams);
     }
 
-    if (window == nullptr) return;
-    ANativeWindow_setBuffersGeometry(window, static_cast<int32_t>(s.renderWidth),
-                                     static_cast<int32_t>(s.renderHeight),
-                                     WINDOW_FORMAT_RGBA_8888);
+    if (window == nullptr && !s.presenting) return;
+    if (!s.presenting) {
+        // Fallback path only: the swapchain owns the window when presenting,
+        // and locking it behind Vulkan's back is undefined.
+        ANativeWindow_setBuffersGeometry(window, static_cast<int32_t>(s.renderWidth),
+                                         static_cast<int32_t>(s.renderHeight),
+                                         WINDOW_FORMAT_RGBA_8888);
+    }
 
     // --- Render: the engine's offscreen pass, or the parchment heartbeat ---
     bool haveFrame = false;
@@ -518,14 +606,46 @@ void DeviceGame::frame(double dtSeconds, ANativeWindow* window) {
             if (item.material == MaterialKind::Placeholder) item.params[0] = 6.0f;
             items.push_back(item);
         });
+        // Characters: the shared skinned body + garments, deformed on the
+        // GPU by each character's palette (task 8.10). Per character per
+        // frame the CPU produces 17 matrices — no geometry work at all.
+        s.skinnedItems.clear();
         for (Impl::Actor* actor : {&s.player, &s.guard, &s.villager}) {
             const TransformComponent* t = world.transform(actor->entity);
-            if (t == nullptr) continue;
+            if (t == nullptr || !s.bodyMesh.valid()) continue;
             const Vec3 pos = lerp(t->prevPosition, t->position, alpha);
             const float yaw = t->prevYaw + (t->yaw - t->prevYaw) * alpha;
             Pose pose;
             actor->anim.samplePose(pose);
-            emitRig(items, actor->rig, pose, pos, yaw);
+            SkinnedCharacter& character = actor->character;
+            buildSkinPalette(character.variant, pose, character.palette);
+
+            const Mat4 model = Mat4::translation(pos) *
+                               Mat4::rotation(Quat::fromAxisAngle({0, 1, 0}, -yaw));
+            const Aabb bounds = Aabb::fromCenterExtents(pos + Vec3{0, 1.0f, 0}, {1.4f, 1.4f, 1.4f});
+
+            SkinnedDrawItem item;
+            item.mesh = &s.bodyMesh;
+            item.palette = character.palette;
+            item.model = model;
+            item.worldBounds = bounds;
+            item.lodReference = pos;
+            memcpy(item.baseColor, character.variant.skin, sizeof(item.baseColor));
+            // Uncovered body regions only — masking is a draw range here.
+            for (const MeshPart& part : s.bodyParts) {
+                if ((character.visibleRegions & regionBit(part.region)) == 0) continue;
+                item.firstIndex = part.firstIndex;
+                item.indexCount = part.indexCount;
+                s.skinnedItems.push_back(item);
+            }
+            for (const SkinnedCharacter::Garment& garment : character.garments) {
+                SkinnedDrawItem worn = item;
+                worn.mesh = garment.mesh;
+                worn.firstIndex = 0;
+                worn.indexCount = 0;  // whole garment
+                memcpy(worn.baseColor, garment.color, sizeof(worn.baseColor));
+                s.skinnedItems.push_back(worn);
+            }
         }
         // --- HUD: health, compass, held slot, virtual controls, subtitle ---
         const UiDrawList* uiList = nullptr;
@@ -561,15 +681,31 @@ void DeviceGame::frame(double dtSeconds, ANativeWindow* window) {
             uiList = &s.ui.drawList();
         }
         haveFrame = s.renderer.renderFrame(s.camera, items.data(), items.size(), nullptr,
-                                           uiList) &&
-                    s.renderer.readback(s.pixels.data(), s.pixels.size());
+                                           uiList, nullptr, 0, s.skinnedItems.data(),
+                                           s.skinnedItems.size());
+        if (haveFrame && s.presenting) {
+            // The frame never leaves the GPU: blit + present (task 2.1).
+            if (!s.swapchain.present(s.renderer)) {
+                // Stale swapchain (rotation, resize, surface change) is a
+                // normal answer — rebuild and show the next frame.
+                if (!s.swapchain.recreate()) {
+                    MGE_LOGW(kTag, "swapchain lost — readback fallback");
+                    s.presenting = false;
+                    s.pixels.resize(static_cast<size_t>(s.renderWidth) * s.renderHeight * 4);
+                }
+            }
+            return;  // presented (or recovering); nothing to blit by hand
+        }
+        if (haveFrame) haveFrame = s.renderer.readback(s.pixels.data(), s.pixels.size());
         if (!haveFrame) {
             MGE_LOGE(kTag, "render/readback failed — falling back");
             s.vulkanOk = false;
         }
     }
     if (!haveFrame) {
+        if (s.presenting || window == nullptr) return;  // never lock behind Vulkan
         // Parchment heartbeat: visible proof of life when Vulkan is absent.
+        s.pixels.resize(static_cast<size_t>(s.renderWidth) * s.renderHeight * 4);
         s.heartbeat += dt;
         const uint32_t bar =
             static_cast<uint32_t>((0.5 + 0.5 * std::sin(s.heartbeat * 2.0)) *
