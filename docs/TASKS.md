@@ -81,7 +81,7 @@ Status legend: `[ ]` not started · `[~]` in progress · `[x]` done
 *Goal: P6 realized — the engine's own original UI, rendered by the engine.*
 
 - [~] **5.1** Widget tree: layout, styling/theming, navigation, direction-aware (RTL mirroring free per-widget, P11) — *immediate-build widgets over retained interaction state, fixed-capacity/allocation-free per frame; full retained tree + navigation stack pending*
-- [~] **5.2** UI renderer: batched geometry through the overlay pass; font atlas + text with bidi (Hebrew first-class) — *quad batch + alpha-blended overlay pipeline + atlas texture running; v1 bidi run reordering (full UAX#9 later); per-script font fallback pending*
+- [~] **5.2** UI renderer: batched geometry through the overlay pass; font atlas + text with bidi (Hebrew first-class) — *quad batch + alpha-blended overlay pipeline + atlas texture running; the default face (Liberation Serif, OFL — Latin + Hebrew) is now ENGINE-EMBEDDED (`FontAtlas::bakeEmbedded`), no host font path on device or off; v1 bidi run reordering (full UAX#9 later); per-script font fallback pending*
 - [~] **5.3** Codex design language (medieval book-and-paper, owner verdict) — *v1 tokens + styled widget set rendering (parchment/double-rule/wax seals); full spec doc + owner approval of the rendered look pending*
 - [~] **5.4** Built-in widget library: buttons, sliders, toggles, grids running; lists and dialogs pending
 - [~] **5.5** Built-in screen kit — *main menu, HUD (health/compass/item slot), inventory running; boot, pause, settings, save-slot picker pending*

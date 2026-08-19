@@ -9,6 +9,8 @@
 #define STBTT_STATIC
 #include "stb_truetype.h"
 
+#include "fonts/liberation_serif_regular.h"
+
 namespace mge {
 
 namespace {
@@ -37,6 +39,10 @@ bool FontAtlas::bakeFromFile(const char* ttfPath, float pixelHeight) {
     const bool ok = fread(data.data(), 1, data.size(), f) == data.size();
     fclose(f);
     return ok && bakeFromMemory(data.data(), data.size(), pixelHeight);
+}
+
+bool FontAtlas::bakeEmbedded(float pixelHeight) {
+    return bakeFromMemory(k_font_liberation_serif, k_font_liberation_serif_size, pixelHeight);
 }
 
 bool FontAtlas::bakeFromMemory(const uint8_t* ttf, size_t size, float pixelHeight) {

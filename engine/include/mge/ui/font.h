@@ -27,6 +27,9 @@ public:
     // block (0x5D0..0x5EA) plus punctuation used by both.
     bool bakeFromFile(const char* ttfPath, float pixelHeight);
     bool bakeFromMemory(const uint8_t* ttf, size_t size, float pixelHeight);
+    // The engine-embedded default face (Liberation Serif, OFL — covers Latin
+    // and Hebrew): no host font path needed, on device or off (P11).
+    bool bakeEmbedded(float pixelHeight);
 
     const Glyph* glyph(uint32_t codepoint) const;
     float lineHeight() const { return lineHeight_; }

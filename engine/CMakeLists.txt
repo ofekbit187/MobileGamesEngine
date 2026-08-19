@@ -34,8 +34,10 @@ add_library(mge_core STATIC
 )
 
 target_include_directories(mge_core PUBLIC include)
-# Vendored single-header libs (stb_truetype for font baking).
+# Vendored single-header libs (stb_truetype for font baking) + generated
+# embedded assets (the default UI font travels with the engine, P11).
 target_include_directories(mge_core PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/../third_party/stb)
+target_include_directories(mge_core PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/generated)
 
 target_compile_options(mge_core PRIVATE -Wall -Wextra)
 

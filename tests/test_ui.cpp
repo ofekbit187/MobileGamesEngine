@@ -56,7 +56,7 @@ MGE_TEST(localization_lookup_and_fallback) {
 
 MGE_TEST(font_atlas_bakes_latin_and_hebrew) {
     FontAtlas font;
-    MGE_CHECK(font.bakeFromFile("/usr/share/fonts/truetype/liberation/LiberationSerif-Regular.ttf", 32.0f));
+    MGE_CHECK(font.bakeEmbedded(32.0f));
     MGE_CHECK(font.glyph('A') != nullptr);
     MGE_CHECK(font.glyph(0x05D0) != nullptr);  // aleph
     MGE_CHECK(font.glyph('A')->advance > 0);
@@ -79,7 +79,7 @@ TouchEvent touch(int32_t id, TouchAction action, float x, float y, int64_t t = 0
 
 MGE_TEST(ui_button_click_and_routing) {
     FontAtlas font;
-    MGE_CHECK(font.bakeFromFile("/usr/share/fonts/truetype/liberation/LiberationSerif-Regular.ttf", 32.0f));
+    MGE_CHECK(font.bakeEmbedded(32.0f));
     Localization strings;
     Ui ui;
     MGE_CHECK(ui.init(&font, codexTheme(), &strings));
@@ -114,7 +114,7 @@ MGE_TEST(ui_button_click_and_routing) {
 
 MGE_TEST(ui_rtl_mirroring) {
     FontAtlas font;
-    MGE_CHECK(font.bakeFromFile("/usr/share/fonts/truetype/liberation/LiberationSerif-Regular.ttf", 32.0f));
+    MGE_CHECK(font.bakeEmbedded(32.0f));
     Localization strings;
     Ui ui;
     MGE_CHECK(ui.init(&font, codexTheme(), &strings));
@@ -146,7 +146,7 @@ MGE_TEST(collection_binding) {
 
     // Bound view renders slots and reacts to slot taps.
     FontAtlas font;
-    MGE_CHECK(font.bakeFromFile("/usr/share/fonts/truetype/liberation/LiberationSerif-Regular.ttf", 32.0f));
+    MGE_CHECK(font.bakeEmbedded(32.0f));
     Localization strings;
     Ui ui;
     MGE_CHECK(ui.init(&font, codexTheme(), &strings));

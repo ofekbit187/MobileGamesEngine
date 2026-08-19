@@ -15,6 +15,9 @@
 #include "mge/graphics/primitives.h"
 #include "mge/graphics/renderer.h"
 #include "mge/graphics/vulkan_device.h"
+#include "mge/ui/font.h"
+#include "mge/ui/localization.h"
+#include "mge/ui/ui.h"
 
 namespace mge {
 
@@ -191,6 +194,15 @@ struct DeviceGame::Impl {
     AudioClip wind, music, bell, speech;
     double bellTimer = 2.0;
     double speechCooldown = 4.0;
+
+    // UI overlay (the Codex HUD, task 5.5): drawn at render resolution;
+    // touch state arrives in surface pixels and is scaled down.
+    FontAtlas font;
+    Ui ui;
+    Localization strings;
+    bool uiOk = false;
+    float touchScaleX = 1.0f, touchScaleY = 1.0f;
+    double subtitleTimer = 0;
 
     ~Impl() {
         delete ai;
@@ -380,8 +392,27 @@ bool DeviceGame::start(Engine& engine, AudioMixer& mixer, uint32_t surfaceWidth,
     s.bell.adopt(makeBell(3.0), *s.mixer);
     s.speech.adopt(makeSpokenTake(2.6), *s.mixer);
 
+    // --- The Codex HUD (task 5.5) over the scene, engine-embedded font ---
+    if (s.vulkanOk) {
+        s.uiOk = s.font.bakeEmbedded(30.0f) && s.renderer.setUiFont(s.font);
+        if (s.uiOk) {
+            s.strings.set(Language::English, "hud.subtitle",
+                          "Fine morning, friend. Mind the bell tower.");
+            s.strings.set(Language::Hebrew, "hud.subtitle",
+                          "\xd7\x91\xd7\x95\xd7\xa7\xd7\xa8 \xd7\x98\xd7\x95\xd7\x91, "
+                          "\xd7\x99\xd7\x93\xd7\x99\xd7\x93\xd7\x99");
+            s.uiOk = s.ui.init(&s.font, codexTheme(), &s.strings);
+        }
+        if (!s.uiOk) MGE_LOGW(kTag, "UI overlay unavailable — HUD off");
+    }
+    if (surfaceWidth > 0 && surfaceHeight > 0) {
+        s.touchScaleX = static_cast<float>(s.renderWidth) / surfaceWidth;
+        s.touchScaleY = static_cast<float>(s.renderHeight) / surfaceHeight;
+    }
+
     s.camera.aspect = static_cast<float>(s.renderWidth) / s.renderHeight;
-    MGE_LOGI(kTag, "device game started (vulkan=%d)", s.vulkanOk ? 1 : 0);
+    MGE_LOGI(kTag, "device game started (vulkan=%d ui=%d)", s.vulkanOk ? 1 : 0,
+             s.uiOk ? 1 : 0);
     return true;
 }
 
@@ -439,6 +470,7 @@ void DeviceGame::frame(double dtSeconds, ANativeWindow* window) {
     if (s.speechCooldown <= 0.0 && pt != nullptr && vt != nullptr &&
         (vt->position - pt->position).length() < 3.5f && s.speech.loaded()) {
         s.speechCooldown = 14.0;
+        s.subtitleTimer = 3.2;  // the line's text, on screen while it plays
         AudioPlayParams speechParams;
         speechParams.bus = AudioBus::Voice;
         speechParams.positional = true;
@@ -495,7 +527,41 @@ void DeviceGame::frame(double dtSeconds, ANativeWindow* window) {
             actor->anim.samplePose(pose);
             emitRig(items, actor->rig, pose, pos, yaw);
         }
-        haveFrame = s.renderer.renderFrame(s.camera, items.data(), items.size()) &&
+        // --- HUD: health, compass, held slot, virtual controls, subtitle ---
+        const UiDrawList* uiList = nullptr;
+        if (s.uiOk) {
+            const float w = static_cast<float>(s.renderWidth);
+            const float h = static_cast<float>(s.renderHeight);
+            s.subtitleTimer -= dt;
+            s.ui.beginFrame(w, h);
+            const CharacterComponent* pc = s.characters->get(s.player.entity);
+            s.ui.healthBar({18, 14, w * 0.24f, 16}, pc != nullptr ? pc->health : 1.0f);
+            s.ui.compassStrip({w * 0.5f - w * 0.13f, 10, w * 0.26f, 24}, pt->yaw);
+            const Item* held = nullptr;
+            if (pc != nullptr) {
+                const EquippedItem& slot =
+                    pc->equipment[static_cast<size_t>(EquipSlot::HeldMain)];
+                if (slot.item.count > 0) held = &slot.item;
+            }
+            s.ui.itemSlot({w - 18 - 52, 12, 52, 52}, held, false);
+            float ax, ay, sx, sy;
+            const bool stickOn =
+                s.engine->controls().stickState(ax, ay, sx, sy);
+            if (stickOn) {
+                s.ui.virtualControls(true, ax * s.touchScaleX, ay * s.touchScaleY,
+                                     sx * s.touchScaleX, sy * s.touchScaleY);
+            } else {
+                // Resting stick hint in the left control zone.
+                s.ui.virtualControls(false, w * 0.14f, h * 0.78f, w * 0.14f, h * 0.78f);
+            }
+            if (s.subtitleTimer > 0) {
+                s.ui.label({w * 0.5f - w * 0.35f, h - 54, w * 0.7f, 30}, "hud.subtitle",
+                           0.7f, TextAlign::Center);
+            }
+            uiList = &s.ui.drawList();
+        }
+        haveFrame = s.renderer.renderFrame(s.camera, items.data(), items.size(), nullptr,
+                                           uiList) &&
                     s.renderer.readback(s.pixels.data(), s.pixels.size());
         if (!haveFrame) {
             MGE_LOGE(kTag, "render/readback failed — falling back");

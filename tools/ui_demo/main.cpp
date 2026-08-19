@@ -145,8 +145,7 @@ int main(int argc, char** argv) {
     if (!renderer.init(config)) return 1;
 
     FontAtlas font;
-    if (!font.bakeFromFile("/usr/share/fonts/truetype/liberation/LiberationSerif-Regular.ttf",
-                           34.0f)) {
+    if (!font.bakeEmbedded(34.0f)) {
         return 1;
     }
     if (!renderer.setUiFont(font)) return 1;

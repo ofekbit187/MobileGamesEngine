@@ -35,6 +35,17 @@ public:
 
     bool stickActive() const { return stickPointer_ != kNoPointer; }
 
+    // Current stick geometry in screen pixels, for the UI overlay to draw
+    // the virtual controls over the scheme's real state (task 5.6).
+    bool stickState(float& anchorX, float& anchorY, float& x, float& y) const {
+        if (stickPointer_ == kNoPointer) return false;
+        anchorX = stickAnchorX;
+        anchorY = stickAnchorY;
+        x = stickX;
+        y = stickY;
+        return true;
+    }
+
 private:
     static constexpr int32_t kNoPointer = INT32_MIN;
     static constexpr float kStickZoneFraction = 0.45f;  // left 45% of the screen
