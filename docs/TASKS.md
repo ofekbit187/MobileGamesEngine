@@ -158,13 +158,32 @@ Status legend: `[ ]` not started · `[~]` in progress · `[x]` done
 
 **Exit criteria:** the template game shows player and NPCs as identical humanoid characters (controller being the only difference); a dozen visibly distinct humanoids from one template body via variant files; a layered outfit (base + clothing + armor) + one hairstyle fitting all of them seamlessly while animating; an NPC that patrols, spots an enemy by faction, draws its sheathed weapon, and reacts with a facial expression — all from data files. — *Met except the facial-expression reaction (8.20): deliberately deferred with the imported artist face — the parametric v1 head has no facial geometry to morph. Everything else is running and tested, including AI draw-on-contact/sheathe-after.*
 
-## Phase 9 and beyond — held for further dictation
+## Phase 9 — People (dictated)
+
+*Goal: the person NPC kind — family trees as the generation unit, hereditary looks via DNA, names with provenance, status effects (skills/education included), occupation/residence/schedule stubs, and voiced text lines on the P5 fulfillment pattern. Design: [`PEOPLE.md`](PEOPLE.md). Open questions §7 await the owner's rulings before the affected tasks start.*
+
+- [ ] **9.1** Person identity layer on the humanoid character: `PersonId`, name refs, tree ref, relation links (mother/father/siblings/children/spouse)
+- [ ] **9.2** Family-tree data format (`.mgetree`) + ADR: compact person records (names, genomes, relations, identity), deterministic by seed, streamed like world data (P1/P2)
+- [ ] **9.3** Names: culture name pools, first-name assignment, family-name derivation through the tree *(awaits ruling: uniqueness scope, marriage/children naming rules)*
+- [ ] **9.4** DNA: genome over the `HumanoidVariant` trait set (two haplotypes, dominance/blend per trait, bounded mutation), phenotype resolver → variant; children resemble parents by construction
+- [ ] **9.5** Tree generator: multi-generation trees (couples, children, record-only ancestors) from a seed; sibling variety via recombination
+- [ ] **9.6** Status effects: storage, tags, magnitude, duration, stat-modifier hooks + queries; skills/education as permanent ranked effects *(awaits ruling: engine/game authority split)*
+- [ ] **9.7** Occupation, residence (interior-cell ref), schedule (time-of-day → place) data stubs — mechanisms deepen in a later dictation
+- [ ] **9.8** Text lines: folder-per-line layout, `line.txt` text + delivery marks, per-person voice description, at-least-one-line validation
+- [ ] **9.9** Voice fulfillment pipeline (P5 for audio): manifest export of unrecorded lines (text + directions + voice brief), delivered-take pickup under the same line id, random take selection, subtitle placeholder through the localization/RTL stack *(awaits ruling: per-language line sets)*
+- [ ] **9.10** Minimal wav playback sink for voice lines (or lands with the audio pillar — dependency noted)
+- [ ] **9.11** People showcase: a generated three-generation family rendered as a lineup (heredity visible), a person speaking a line (subtitle placeholder → delivered take), board update
+
+**Exit criteria:** a seed generates a family tree whose members have derived names, visibly hereditary bodies, relations you can query, skills as status effects, and at least one text line each; the whole tree costs bytes while cold; one person's line plays as a subtitle before fulfillment and as a delivered wav take after, chosen at random among takes.
+
+## Phase 10 and beyond — held for further dictation
 
 Deliberately not planned yet; known candidates awaiting direction:
 
-- AI expansion (behavior model beyond the v1 state machine, schedules, group behavior) — v1 lands in 8.8
-- Advanced facial animation (lip-sync, emotes, gaze) — basic set lands in 8.20
-- Audio system
+- On-device bring-up: Android surface/swapchain, textures/materials, template game on real glass
+- AI expansion (behavior model beyond the v1 state machine, schedules, group behavior) — v1 landed in 8.8
+- Advanced facial animation (lip-sync, emotes, gaze) — basic set specified in 8.20
+- Audio system (voice-line playback joins from 9.10)
 - Physics & collision beyond basic queries
 - World-authoring/editor tooling
 - Scripting / game-logic authoring model

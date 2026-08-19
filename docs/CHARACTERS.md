@@ -13,6 +13,8 @@ Entity
 └── Character                      ← universal mechanisms live here
     ├── HumanoidCharacter          ← engine-provided: template body, variants,
     │                                 skeleton, wearables, humanoid animations
+    │   └── Person                 ← Dictation 5: identity layer — family tree,
+    │                                 name, DNA, status effects, voice (PEOPLE.md)
     └── (game-defined characters)  ← animals, monsters, anything the game
                                       creator wants — built directly on Character
 ```
@@ -177,6 +179,8 @@ Facial features include **basic runtime expressions** — a small fixed set, not
 - AI expansion (behavior model beyond the v1 state machine, schedules, group behavior)
 - Non-humanoid animation authoring workflow
 - Advanced facial animation (lip-sync, emotes, gaze) beyond the basic expression set
+
+*Person NPCs — family trees, DNA heredity, status effects, occupations/schedules, and voiced text lines — were dictated as Dictation 5 and are specified in [`PEOPLE.md`](PEOPLE.md).*
 
 ---
 
