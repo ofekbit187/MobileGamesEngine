@@ -2,7 +2,10 @@
 
 #include <cstdio>
 
-#if defined(__ANDROID__)
+// MGE_FORCE_STDIO_LOG: set by emulated-test builds (Android ABI run under
+// qemu-user, where there is no logd) to use the stdio path.
+#if defined(__ANDROID__) && !defined(MGE_FORCE_STDIO_LOG)
+#define MGE_USE_ANDROID_LOG 1
 #include <android/log.h>
 #endif
 
@@ -15,7 +18,7 @@ void logMessage(LogLevel level, const char* tag, const char* fmt, ...) {
     vsnprintf(buffer, sizeof(buffer), fmt, args);
     va_end(args);
 
-#if defined(__ANDROID__)
+#if defined(MGE_USE_ANDROID_LOG)
     int prio = ANDROID_LOG_INFO;
     switch (level) {
         case LogLevel::Debug: prio = ANDROID_LOG_DEBUG; break;

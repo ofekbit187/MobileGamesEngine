@@ -55,8 +55,15 @@ pause/resume and surface-loss lifecycle events, and verifies the P1 claim:
 memory-budget dashboard.
 
 **Android app**: `./gradlew :app:assembleDebug` with an Android SDK + NDK
-installed. The app module hosts the engine behind a `SurfaceView` and drives
-one engine tick per display frame; rendering arrives with Phase 2 (Vulkan).
+installed (`scripts/setup-android-sdk.sh` provisions one into `~/android-sdk`).
+The app module hosts the engine behind a `SurfaceView` and drives one engine
+tick per display frame; rendering arrives with Phase 2 (Vulkan).
+
+**Everything at once**: `scripts/verify.sh` runs every check the current
+environment supports — host tests, the same tests compiled for arm64 with the
+NDK and executed under `qemu-aarch64` (instruction-level verification of the
+shipped ABI without a device), and APK assembly. CI runs all three on every
+push.
 
 ## Status
 

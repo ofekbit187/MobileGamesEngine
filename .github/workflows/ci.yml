@@ -20,8 +20,56 @@ jobs:
       - name: Unit tests
         run: ctest --test-dir build --output-on-failure
 
-      - name: Host prototype runner
+      - name: Host prototype runner (P1 gate — zero steady-state allocations)
         run: ./build/tools/host_runner/mge_host_runner
 
-  # The Android job (assembleDebug with NDK) is added once it can be validated
-  # against a real SDK — task 0.6 remains open until then.
+  android-apk:
+    name: Android APK (arm64, NDK)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Assemble debug APK
+        run: ./gradlew :app:assembleDebug
+
+      - name: Verify native lib in APK
+        run: unzip -l app/build/outputs/apk/debug/app-debug.apk | grep lib/arm64-v8a/libmge_app.so
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: app-debug-apk
+          path: app/build/outputs/apk/debug/app-debug.apk
+
+  arm64-emulated-tests:
+    name: arm64 tests under QEMU (shipped ABI)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install QEMU user-mode
+        run: sudo apt-get update && sudo apt-get install -y qemu-user-static
+
+      - name: Install NDK
+        run: yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" "ndk;27.0.12077973" > /dev/null
+
+      - name: Configure (NDK toolchain, static arm64)
+        run: |
+          cmake -B build-arm64 -G Ninja \
+            -DCMAKE_TOOLCHAIN_FILE="$ANDROID_HOME/ndk/27.0.12077973/build/cmake/android.toolchain.cmake" \
+            -DANDROID_ABI=arm64-v8a -DANDROID_PLATFORM=android-26 \
+            -DCMAKE_BUILD_TYPE=Release -DANDROID_STL=c++_static \
+            -DCMAKE_EXE_LINKER_FLAGS="-static" -DMGE_EMULATED_TESTS=ON
+
+      - name: Build
+        run: cmake --build build-arm64
+
+      - name: Unit tests (aarch64 via QEMU)
+        run: qemu-aarch64-static build-arm64/tests/mge_tests
+
+      - name: Prototype runner (aarch64 via QEMU)
+        run: qemu-aarch64-static build-arm64/tools/host_runner/mge_host_runner

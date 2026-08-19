@@ -13,7 +13,11 @@ add_subdirectory(engine)
 
 # Host-only targets: the headless runner and unit tests. On Android the app
 # module builds mge_core through its own CMake entry point.
-if(NOT ANDROID)
+# MGE_EMULATED_TESTS additionally builds them with the NDK toolchain as static
+# arm64 executables, runnable under qemu-aarch64 — instruction-level
+# verification of the shipped ABI without a device.
+option(MGE_EMULATED_TESTS "Build tests/runner for Android ABI (run via qemu-user)" OFF)
+if(NOT ANDROID OR MGE_EMULATED_TESTS)
     add_subdirectory(tools/host_runner)
     enable_testing()
     add_subdirectory(tests)

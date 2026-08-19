@@ -16,5 +16,11 @@ find_package(Threads REQUIRED)
 target_link_libraries(mge_core PUBLIC Threads::Threads)
 
 if(ANDROID)
-    target_link_libraries(mge_core PUBLIC log)
+    if(MGE_EMULATED_TESTS)
+        # Static arm64 test builds run under qemu-user: no logd, no shared
+        # liblog — logging falls back to stdio.
+        target_compile_definitions(mge_core PRIVATE MGE_FORCE_STDIO_LOG)
+    else()
+        target_link_libraries(mge_core PUBLIC log)
+    endif()
 endif()
