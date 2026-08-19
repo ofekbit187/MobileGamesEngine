@@ -28,6 +28,7 @@ bool Engine::init(const EngineConfig& config) {
         return false;
     }
     jobs_ = std::make_unique<JobSystem>();
+    io_ = std::make_unique<AsyncIO>();
 
     initialized_ = true;
     MGE_LOGI(kTag, "engine initialized (fixed step %.4fs, frame arena %zu KiB)",
@@ -37,6 +38,9 @@ bool Engine::init(const EngineConfig& config) {
 
 void Engine::shutdown() {
     if (!initialized_) return;
+    io_->resume();  // a paused AsyncIO can't finish its queue
+    io_->drain();
+    io_.reset();
     jobs_->drainAll();
     jobs_.reset();
     frameArena_.reset();
@@ -65,18 +69,33 @@ void Engine::onSurfaceLost() {
 
 void Engine::onPause() {
     paused_ = true;
+    if (io_) io_->pause();  // don't burn battery/IO while backgrounded
     MGE_LOGI(kTag, "paused");
 }
 
 void Engine::onResume() {
     paused_ = false;
+    if (io_) io_->resume();
     MGE_LOGI(kTag, "resumed");
+}
+
+void Engine::pushTouchEvent(const TouchEvent& event) { inputQueue_.push(event); }
+
+void Engine::drainInput() {
+    TouchEvent event;
+    while (inputQueue_.pop(event)) {
+        lastTouch_ = event;
+        ++stats_.inputEventCount;
+        // Control schemes (task 3.5) consume these; until then the drain keeps
+        // the queue bounded and the stats honest.
+    }
 }
 
 void Engine::tick(double dtSeconds) {
     if (!initialized_ || paused_) return;
 
     stats_.lastFrameDtSeconds = dtSeconds;
+    drainInput();
 
     const int steps = clock_.advance(dtSeconds);
     for (int i = 0; i < steps; ++i) {

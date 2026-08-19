@@ -20,19 +20,23 @@ JobSystem::~JobSystem() {
     }
 }
 
-void JobSystem::submit(Lane laneId, std::function<void()> job) {
+bool JobSystem::enqueue(Lane laneId, const Job& job) {
     LaneState& lane = lanes_[static_cast<size_t>(laneId)];
     {
         std::lock_guard<std::mutex> lock(lane.mutex);
-        lane.queue.push_back(std::move(job));
+        if (lane.count == kLaneCapacity) return false;  // refuse, never grow
+        lane.jobs[lane.head] = job;
+        lane.head = (lane.head + 1) % kLaneCapacity;
+        ++lane.count;
     }
     lane.wake.notify_one();
+    return true;
 }
 
 void JobSystem::drain(Lane laneId) {
     LaneState& lane = lanes_[static_cast<size_t>(laneId)];
     std::unique_lock<std::mutex> lock(lane.mutex);
-    lane.idle.wait(lock, [&lane] { return lane.queue.empty() && !lane.busy; });
+    lane.idle.wait(lock, [&lane] { return lane.count == 0 && !lane.busy; });
 }
 
 void JobSystem::drainAll() {
@@ -44,21 +48,22 @@ void JobSystem::drainAll() {
 size_t JobSystem::pendingCount(Lane laneId) const {
     const LaneState& lane = lanes_[static_cast<size_t>(laneId)];
     std::lock_guard<std::mutex> lock(lane.mutex);
-    return lane.queue.size();
+    return lane.count;
 }
 
 void JobSystem::workerLoop(LaneState& lane) {
     while (true) {
-        std::function<void()> job;
+        Job job;
         {
             std::unique_lock<std::mutex> lock(lane.mutex);
-            lane.wake.wait(lock, [this, &lane] { return shuttingDown_ || !lane.queue.empty(); });
-            if (shuttingDown_ && lane.queue.empty()) return;
-            job = std::move(lane.queue.front());
-            lane.queue.pop_front();
+            lane.wake.wait(lock, [this, &lane] { return shuttingDown_.load() || lane.count > 0; });
+            if (shuttingDown_.load() && lane.count == 0) return;
+            job = lane.jobs[lane.tail];
+            lane.tail = (lane.tail + 1) % kLaneCapacity;
+            --lane.count;
             lane.busy = true;
         }
-        job();
+        job.fn(job.payload);
         {
             std::lock_guard<std::mutex> lock(lane.mutex);
             lane.busy = false;

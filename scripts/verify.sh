@@ -20,6 +20,11 @@ cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=Release >/dev/null
 cmake --build build >/dev/null
 ctest --test-dir build --output-on-failure >/dev/null
 ./build/tools/host_runner/mge_host_runner | grep -E "steady-state|OK"
+if [ -x build/tools/vk_smoke/mge_vk_smoke ]; then
+    ./build/tools/vk_smoke/mge_vk_smoke build/vk_smoke.ppm | grep -E "device|pixels|OK"
+else
+    echo "vk_smoke: SKIPPED (no Vulkan SDK — apt-get install libvulkan-dev mesa-vulkan-drivers)"
+fi
 
 if [ -n "$NDK_DIR" ] && [ -n "$QEMU" ]; then
     echo "=== 2/3 arm64 (NDK $(basename "$NDK_DIR")): tests + runner under QEMU"

@@ -114,4 +114,50 @@ void* Arena::alloc(size_t sizeBytes, size_t alignment) {
 
 void Arena::reset() { offset_ = 0; }
 
+RingAllocator::RingAllocator(BudgetRegistry& registry, BudgetId budget, size_t capacityBytes)
+    : registry_(registry), budget_(budget) {
+    if (registry_.charge(budget_, capacityBytes)) {
+        block_ = static_cast<uint8_t*>(::operator new(capacityBytes));
+        capacity_ = capacityBytes;
+    } else {
+        MGE_LOGE("memory", "ring allocator creation refused: %zu bytes over budget",
+                 capacityBytes);
+    }
+}
+
+RingAllocator::~RingAllocator() {
+    if (block_ != nullptr) {
+        ::operator delete(block_);
+        registry_.release(budget_, capacity_);
+    }
+}
+
+void* RingAllocator::alloc(size_t sizeBytes, size_t alignment) {
+    if (block_ == nullptr || sizeBytes == 0 || sizeBytes > capacity_) return nullptr;
+    const uintptr_t base = reinterpret_cast<uintptr_t>(block_);
+
+    const auto alignFrom = [&](uint64_t stream) {
+        const size_t phys = static_cast<size_t>(stream % capacity_);
+        const uintptr_t addr = base + phys;
+        const uintptr_t alignedAddr = (addr + (alignment - 1)) & ~(uintptr_t(alignment) - 1);
+        return stream + (alignedAddr - addr);
+    };
+
+    uint64_t start = alignFrom(head_);
+    if (static_cast<size_t>(start % capacity_) + sizeBytes > capacity_) {
+        // Doesn't fit contiguously before the wrap point: pad to the start of
+        // the buffer and re-align there.
+        start = alignFrom(head_ + (capacity_ - static_cast<size_t>(head_ % capacity_)));
+        if (static_cast<size_t>(start % capacity_) + sizeBytes > capacity_) return nullptr;
+    }
+    const uint64_t newHead = start + sizeBytes;
+    if (newHead - tail_ > capacity_) return nullptr;  // would overwrite live data
+    head_ = newHead;
+    return block_ + static_cast<size_t>(start % capacity_);
+}
+
+void RingAllocator::retire(Marker upTo) {
+    if (upTo > tail_) tail_ = (upTo < head_) ? upTo : head_;
+}
+
 }  // namespace mge

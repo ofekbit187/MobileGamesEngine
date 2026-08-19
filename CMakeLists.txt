@@ -22,3 +22,7 @@ if(NOT ANDROID OR MGE_EMULATED_TESTS)
     enable_testing()
     add_subdirectory(tests)
 endif()
+
+if(TARGET mge_graphics)
+    add_subdirectory(tools/vk_smoke)
+endif()

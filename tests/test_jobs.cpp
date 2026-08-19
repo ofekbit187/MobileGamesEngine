@@ -9,11 +9,38 @@ MGE_TEST(jobs_run_and_drain) {
     JobSystem jobs;
     std::atomic<int> counter{0};
     for (int i = 0; i < 100; ++i) {
-        jobs.submit(Lane::StreamingIO, [&counter] { counter.fetch_add(1); });
+        MGE_CHECK(jobs.submit(Lane::StreamingIO, [&counter] { counter.fetch_add(1); }));
     }
     jobs.drain(Lane::StreamingIO);
     MGE_CHECK(counter.load() == 100);
     MGE_CHECK(jobs.pendingCount(Lane::StreamingIO) == 0);
+}
+
+MGE_TEST(jobs_full_lane_refuses) {
+    JobSystem jobs;
+    std::atomic<bool> started{false};
+    std::atomic<bool> release{false};
+    std::atomic<int> ran{0};
+
+    // Block the lane so submissions pile up; wait until the blocker is
+    // actually running so the queue drains nothing while we fill it.
+    jobs.submit(Lane::Decode, [&started, &release] {
+        started.store(true);
+        while (!release.load()) {
+        }
+    });
+    while (!started.load()) {
+    }
+    // Fill the queue to capacity; every submission must be accepted...
+    size_t accepted = 0;
+    while (jobs.submit(Lane::Decode, [&ran] { ran.fetch_add(1); })) ++accepted;
+    // ...and once full, submission refuses without growing (P1).
+    MGE_CHECK(accepted == JobSystem::kLaneCapacity);
+    MGE_CHECK(!jobs.submit(Lane::Decode, [&ran] { ran.fetch_add(1); }));
+
+    release.store(true);
+    jobs.drain(Lane::Decode);
+    MGE_CHECK(ran.load() == static_cast<int>(accepted));
 }
 
 MGE_TEST(lanes_are_independent) {

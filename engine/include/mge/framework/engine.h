@@ -10,6 +10,8 @@
 #include <string>
 
 #include "mge/core/frame_clock.h"
+#include "mge/core/input.h"
+#include "mge/core/io.h"
 #include "mge/core/jobs.h"
 #include "mge/core/memory.h"
 
@@ -24,6 +26,7 @@ struct EngineConfig {
 struct EngineStats {
     uint64_t frameCount = 0;
     uint64_t simStepCount = 0;
+    uint64_t inputEventCount = 0;  // touch events consumed by the simulation
     double lastFrameDtSeconds = 0.0;
     size_t frameArenaHighWaterBytes = 0;  // worst per-frame scratch usage seen
 };
@@ -47,6 +50,10 @@ public:
     void onPause();
     void onResume();
 
+    // Called from the platform input thread (task 1.8). Thread-safe with
+    // respect to tick(); events are drained at the top of the next tick.
+    void pushTouchEvent(const TouchEvent& event);
+
     // One platform frame: advances zero or more fixed simulation steps, then
     // prepares a render with interpolation alpha. While paused this is a no-op.
     void tick(double dtSeconds);
@@ -54,11 +61,16 @@ public:
     const EngineStats& stats() const { return stats_; }
     BudgetRegistry& budgets() { return budgets_; }
     JobSystem& jobs() { return *jobs_; }
+    AsyncIO& io() { return *io_; }
     Arena& frameArena() { return *frameArena_; }
+    const InputQueue& inputQueue() const { return inputQueue_; }
+    // Most recent touch position/action seen by the simulation (debug/HUD).
+    const TouchEvent& lastTouch() const { return lastTouch_; }
 
     std::string memoryReport() const;
 
 private:
+    void drainInput();
     void simulateStep(double stepSeconds);
     void render(float alpha);
 
@@ -69,6 +81,9 @@ private:
     BudgetId persistentBudget_ = kInvalidBudget;
     std::unique_ptr<Arena> frameArena_;
     std::unique_ptr<JobSystem> jobs_;
+    std::unique_ptr<AsyncIO> io_;
+    InputQueue inputQueue_;
+    TouchEvent lastTouch_;
     EngineStats stats_;
 
     bool initialized_ = false;

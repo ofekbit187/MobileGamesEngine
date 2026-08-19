@@ -76,12 +76,24 @@ Java_com_mobilegamesengine_app_EngineBridge_nativeTick(JNIEnv*, jobject, jdouble
 JNIEXPORT void JNICALL
 Java_com_mobilegamesengine_app_EngineBridge_nativeTouchEvent(
     JNIEnv*, jobject, jint pointerId, jint action, jfloat x, jfloat y, jlong timestampNs) {
-    // Input pipeline lands with task 1.8; events are accepted at the boundary now.
-    (void)pointerId;
-    (void)action;
-    (void)x;
-    (void)y;
-    (void)timestampNs;
+    // MotionEvent action constants: 0=DOWN, 1=UP, 2=MOVE, 3=CANCEL,
+    // 5=POINTER_DOWN, 6=POINTER_UP.
+    mge::TouchAction touchAction;
+    switch (action) {
+        case 0:
+        case 5: touchAction = mge::TouchAction::Down; break;
+        case 1:
+        case 6: touchAction = mge::TouchAction::Up; break;
+        case 2: touchAction = mge::TouchAction::Move; break;
+        default: touchAction = mge::TouchAction::Cancel; break;
+    }
+    mge::TouchEvent event;
+    event.pointerId = pointerId;
+    event.action = touchAction;
+    event.x = x;
+    event.y = y;
+    event.timestampNs = timestampNs;
+    gEngine.pushTouchEvent(event);
 }
 
 }  // extern "C"

@@ -2,8 +2,11 @@ add_executable(mge_tests
     test_main.cpp
     test_math.cpp
     test_memory.cpp
+    test_ring_allocator.cpp
     test_frame_clock.cpp
     test_jobs.cpp
+    test_input.cpp
+    test_io.cpp
     test_engine.cpp
 )
 

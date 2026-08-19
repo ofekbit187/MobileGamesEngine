@@ -154,4 +154,43 @@ private:
     size_t chargedBytes_ = 0;
 };
 
+// FIFO ring allocator over one budget-charged block, for streaming staging
+// buffers: producers allocate at the head, and whole runs of allocations are
+// retired in order once consumed (e.g. after an upload completes). Markers
+// name a point in the stream; retire(marker) frees everything older.
+class RingAllocator {
+public:
+    using Marker = uint64_t;
+
+    RingAllocator(BudgetRegistry& registry, BudgetId budget, size_t capacityBytes);
+    ~RingAllocator();
+
+    RingAllocator(const RingAllocator&) = delete;
+    RingAllocator& operator=(const RingAllocator&) = delete;
+
+    // Returns nullptr when the ring can't fit the request until older data is
+    // retired (refuse, never grow — P1). Alignment must be a power of two.
+    void* alloc(size_t sizeBytes, size_t alignment = 16);
+
+    // Names the current head. Everything allocated before this call is freed
+    // by retire(thatMarker).
+    Marker marker() const { return head_; }
+
+    // Frees all allocations older than `upTo` (a value from marker()).
+    void retire(Marker upTo);
+
+    size_t usedBytes() const { return static_cast<size_t>(head_ - tail_); }
+    size_t capacityBytes() const { return capacity_; }
+    bool valid() const { return block_ != nullptr; }
+
+private:
+    BudgetRegistry& registry_;
+    BudgetId budget_ = kInvalidBudget;
+    uint8_t* block_ = nullptr;
+    size_t capacity_ = 0;
+    // Monotonic stream offsets; physical position is offset % capacity.
+    uint64_t head_ = 0;
+    uint64_t tail_ = 0;
+};
+
 }  // namespace mge

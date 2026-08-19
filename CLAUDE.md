@@ -13,10 +13,13 @@ scripts/verify.sh                 # everything the environment supports
 
 Individually:
 
-- Host build + 17 unit tests + headless runner:
+- Host build + unit tests + headless runner:
   `cmake -B build -G Ninja && cmake --build build && ctest --test-dir build`
   then `./build/tools/host_runner/mge_host_runner` (must print
   `steady-state heap allocations: 0` — this is the P1 gate).
+- Vulkan work is testable headlessly: `apt-get install libvulkan-dev
+  mesa-vulkan-drivers` (llvmpipe), then `./build/tools/vk_smoke/mge_vk_smoke`
+  executes real GPU commands and verifies pixels on the CPU.
 - Android SDK/NDK not installed? `scripts/setup-android-sdk.sh` provisions
   `~/android-sdk` (~2.5 GB download; dl.google.com must be reachable).
 - APK: `ANDROID_HOME=~/android-sdk gradle :app:assembleDebug` (or `./gradlew`).

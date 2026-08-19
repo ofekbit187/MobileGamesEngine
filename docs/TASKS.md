@@ -23,12 +23,12 @@ Status legend: `[ ]` not started · `[~]` in progress · `[x]` done
 
 - [~] **1.1** Android application shell (Kotlin): activity, surface hosting, engine bootstrap over JNI — *APK builds (arm64, NDK 27); engine logic verified on the shipped ABI via QEMU; on-device runtime check pending real hardware*
 - [~] **1.2** Lifecycle translation: pause/resume, surface loss/recreate, config change, process-death-safe shutdown hooks — *engine-side handling implemented + tested on host and arm64; device verification pending*
-- [~] **1.3** Core memory system: global + per-system budgets, arena/pool/ring allocators, live usage reporting (P1 enforcement point) — *budgets, arena, pool done + tested; ring buffer pending*
-- [~] **1.4** Job system with lanes (simulation / streaming I/O / decode / render) and main-thread frame orchestration — *v0 done + tested; allocation-free job structs pending (replaces std::function)*
-- [ ] **1.5** Async priority I/O API over Android storage (app-private files + packaged assets)
+- [x] **1.3** Core memory system: global + per-system budgets, arena/pool/ring allocators, live usage reporting (P1 enforcement point)
+- [x] **1.4** Job system with lanes (simulation / streaming I/O / decode / render) and main-thread frame orchestration — *allocation-free job structs, fixed-capacity lanes that refuse when full*
+- [~] **1.5** Async priority I/O API over Android storage (app-private files + packaged assets) — *priority-ordered async reads over real paths (app-private + extracted asset packs) done + tested, pause/resume tied to lifecycle; in-APK AAsset container reads pending*
 - [x] **1.6** Math library (vectors, quaternions, transforms, AABBs) shaped for later data layouts
 - [~] **1.7** Diagnostics v0: logging, frame timer, memory-budget dashboard overlayed as debug text — *logging + budget report done; on-screen overlay needs Phase 2*
-- [~] **1.8** Raw input capture: touch events timestamped and queued into the engine — *captured at the JNI boundary; engine-side queue pending*
+- [x] **1.8** Raw input capture: touch events timestamped and queued into the engine — *SPSC ring from platform thread to simulation, drained per tick, overflow counted; JNI wired*
 
 **Exit criteria:** app runs a colored-clear frame loop at stable 60fps through every lifecycle event, with live memory-budget readout and zero steady-state allocations in the loop.
 
@@ -36,7 +36,7 @@ Status legend: `[ ]` not started · `[~]` in progress · `[x]` done
 
 *Goal: the single 3D pipeline, drawing imported models within explicit GPU budgets.*
 
-- [ ] **2.1** Vulkan device/swapchain bring-up integrated with the surface lifecycle
+- [~] **2.1** Vulkan device/swapchain bring-up integrated with the surface lifecycle — *instance/device/queue up, GPU memory budgeted through BudgetRegistry (refuse-at-cap), headless clear+readback verified pixel-exact on llvmpipe (`tools/vk_smoke`); surface/swapchain integration with the app module pending*
 - [ ] **2.2** Frame graph v0: forward pass + UI overlay pass slots
 - [ ] **2.3** GPU resource manager: budgeted upload/evict for meshes and textures (P1 on the GPU side)
 - [ ] **2.4** Engine runtime asset format v1: quantized vertex streams, compressed textures, LOD chain container (design doc first, then implementation)

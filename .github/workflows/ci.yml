@@ -11,6 +11,9 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Install Vulkan (headers + llvmpipe software implementation)
+        run: sudo apt-get update && sudo apt-get install -y libvulkan-dev mesa-vulkan-drivers
+
       - name: Configure
         run: cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=Release
 
@@ -22,6 +25,9 @@ jobs:
 
       - name: Host prototype runner (P1 gate — zero steady-state allocations)
         run: ./build/tools/host_runner/mge_host_runner
+
+      - name: Vulkan smoke (headless GPU commands + pixel verification)
+        run: ./build/tools/vk_smoke/mge_vk_smoke
 
   android-apk:
     name: Android APK (arm64, NDK)

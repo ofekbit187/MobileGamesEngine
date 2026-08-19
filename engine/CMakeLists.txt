@@ -5,6 +5,7 @@ add_library(mge_core STATIC
     src/core/log.cpp
     src/core/memory.cpp
     src/core/jobs.cpp
+    src/core/io.cpp
     src/framework/engine.cpp
 )
 
@@ -14,6 +15,20 @@ target_compile_options(mge_core PRIVATE -Wall -Wextra)
 
 find_package(Threads REQUIRED)
 target_link_libraries(mge_core PUBLIC Threads::Threads)
+
+# Graphics module (task 2.1): built where a Vulkan SDK is available. Android
+# wiring (surface + swapchain via the app module) is the next 2.1 step; until
+# then the module is host-side and exercised headlessly (llvmpipe in CI).
+if(NOT ANDROID)
+    find_package(Vulkan QUIET)
+    if(Vulkan_FOUND)
+        add_library(mge_graphics STATIC src/graphics/vulkan_device.cpp)
+        target_link_libraries(mge_graphics PUBLIC mge_core Vulkan::Vulkan)
+        target_compile_options(mge_graphics PRIVATE -Wall -Wextra)
+    else()
+        message(STATUS "Vulkan not found — mge_graphics and vk_smoke skipped")
+    endif()
+endif()
 
 if(ANDROID)
     if(MGE_EMULATED_TESTS)
