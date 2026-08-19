@@ -136,6 +136,71 @@ bool CharacterSystem::unequip(EntityId entity, EquipSlot slot) {
     return true;
 }
 
+// --------------------------------------------- status effects (task 9.6) ---
+
+bool CharacterSystem::addEffect(EntityId entity, const StatusEffect& effect) {
+    CharacterComponent* character = get(entity);
+    if (character == nullptr) return false;
+    for (uint8_t i = 0; i < character->effectCount; ++i) {
+        if (character->effects[i].id == effect.id) {
+            character->effects[i] = effect;  // refresh
+            return true;
+        }
+    }
+    if (character->effectCount >= kMaxStatusEffects) return false;  // refuse (P1)
+    character->effects[character->effectCount++] = effect;
+    return true;
+}
+
+bool CharacterSystem::removeEffect(EntityId entity, uint64_t effectId) {
+    CharacterComponent* character = get(entity);
+    if (character == nullptr) return false;
+    for (uint8_t i = 0; i < character->effectCount; ++i) {
+        if (character->effects[i].id == effectId) {
+            character->effects[i] = character->effects[--character->effectCount];
+            return true;
+        }
+    }
+    return false;
+}
+
+const StatusEffect* CharacterSystem::findEffect(EntityId entity, uint64_t effectId) const {
+    const CharacterComponent* character = get(entity);
+    if (character == nullptr) return nullptr;
+    for (uint8_t i = 0; i < character->effectCount; ++i) {
+        if (character->effects[i].id == effectId) return &character->effects[i];
+    }
+    return nullptr;
+}
+
+float CharacterSystem::sumMagnitude(EntityId entity, uint32_t tagMask) const {
+    const CharacterComponent* character = get(entity);
+    if (character == nullptr) return 0.0f;
+    float sum = 0.0f;
+    for (uint8_t i = 0; i < character->effectCount; ++i) {
+        if ((character->effects[i].tags & tagMask) != 0) sum += character->effects[i].magnitude;
+    }
+    return sum;
+}
+
+void CharacterSystem::tickEffects(float dt) {
+    for (uint32_t c = 0; c < capacity_; ++c) {
+        if (!used_[c]) continue;
+        CharacterComponent& character = components_[c];
+        for (uint8_t i = 0; i < character.effectCount;) {
+            StatusEffect& effect = character.effects[i];
+            if (effect.duration >= 0.0f) {
+                effect.duration -= dt;
+                if (effect.duration <= 0.0f) {
+                    character.effects[i] = character.effects[--character.effectCount];
+                    continue;  // re-check the swapped-in slot
+                }
+            }
+            ++i;
+        }
+    }
+}
+
 // -------------------------------------------------- persistence (task 8.9) --
 
 void captureCharacter(const CharacterComponent& component, SavedCharacter& out) {
@@ -164,6 +229,11 @@ void captureCharacter(const CharacterComponent& component, SavedCharacter& out) 
         out.equipment[s].layer = equipped.layer;
         out.equipment[s].sheathed = equipped.sheathed ? 1 : 0;
     }
+    out.effects.reserve(component.effectCount);
+    for (uint8_t i = 0; i < component.effectCount; ++i) {
+        const StatusEffect& effect = component.effects[i];
+        out.effects.push_back({effect.id, effect.tags, effect.magnitude, effect.duration});
+    }
 }
 
 void applyCharacter(const SavedCharacter& saved, CharacterComponent& out) {
@@ -190,6 +260,12 @@ void applyCharacter(const SavedCharacter& saved, CharacterComponent& out) {
                       savedSlot.item.color[3]}};
         slot.layer = savedSlot.layer;
         slot.sheathed = savedSlot.sheathed != 0;
+    }
+    out.effectCount = 0;
+    for (size_t i = 0; i < saved.effects.size() && i < kMaxStatusEffects; ++i) {
+        const SavedStatusEffect& effect = saved.effects[i];
+        out.effects[out.effectCount++] = {effect.id, effect.tags, effect.magnitude,
+                                          effect.duration};
     }
 }
 

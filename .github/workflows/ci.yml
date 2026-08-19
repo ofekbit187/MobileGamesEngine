@@ -43,6 +43,9 @@ jobs:
       - name: Humanoid demo (variants, walk cycle, wearables, AI hamlet)
         run: ./build/tools/humanoid_demo/mge_humanoid_demo build
 
+      - name: People demo (family tree, DNA heredity, voice pipeline)
+        run: ./build/tools/people_demo/mge_people_demo build
+
       - uses: actions/upload-artifact@v4
         with:
           name: vk-scene-capture
@@ -50,6 +53,7 @@ jobs:
             build/vk_scene.ppm
             build/humanoid_*.ppm
             build/hamlet_*.ppm
+            build/people_*.ppm
 
   android-apk:
     name: Android APK (arm64, NDK)

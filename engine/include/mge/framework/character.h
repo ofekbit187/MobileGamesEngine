@@ -49,6 +49,26 @@ enum class ControllerKind : uint8_t {
     Ai,         // steered by the AI system
 };
 
+// ------------------------------- status effects (task 9.6, PEOPLE.md §4) ---
+// Deliberately abstract: one record shape is the hook a lot of systems hang
+// from — buffs, diseases, blessings, "wanted by the guards", literacy — and
+// skills/education are the special permanent kind whose magnitude is the
+// rank. Ruled split: the engine owns storage, tags, durations, queries, and
+// stat-modifier hooks; games define what an effect MEANS in data.
+
+constexpr uint32_t kEffectTagSkill = 1u << 0;   // skills/education (permanent, rank)
+constexpr uint32_t kEffectTagSpeed = 1u << 1;   // movement-speed modifier hook
+constexpr uint32_t kEffectTagHealth = 1u << 2;  // max-health modifier hook
+// bits 8+ are game-defined.
+
+struct StatusEffect {
+    uint64_t id = 0;      // FNV name id ("skill/smithing", "effect/blessed")
+    uint32_t tags = 0;
+    float magnitude = 0;  // rank / strength / modifier value
+    float duration = -1;  // seconds remaining; < 0 = permanent
+};
+constexpr size_t kMaxStatusEffects = 16;
+
 // -------------------------------------------------------------- character ---
 
 // Equipment: named slots per body definition (task 8.7). The humanoid set is
@@ -86,6 +106,9 @@ struct CharacterComponent {
 
     ItemCollection inventory;                      // every character has one (P9)
     EquippedItem equipment[static_cast<size_t>(EquipSlot::Count)];
+    // Status effects (task 9.6): every character carries the list.
+    StatusEffect effects[kMaxStatusEffects];
+    uint8_t effectCount = 0;
 };
 
 // ------------------------------------------------------------ intents (8.2) --
@@ -116,6 +139,13 @@ struct SavedEquippedItem {
     uint8_t sheathed = 0;
 };
 
+struct SavedStatusEffect {
+    uint64_t id = 0;
+    uint32_t tags = 0;
+    float magnitude = 0;
+    float duration = -1;
+};
+
 struct SavedCharacter {
     uint32_t persistentId = 0;
     float health = 1.0f;
@@ -126,6 +156,7 @@ struct SavedCharacter {
     float sightRange = 15.0f;
     std::vector<SavedCharacterItem> items;
     SavedEquippedItem equipment[static_cast<size_t>(EquipSlot::Count)];
+    std::vector<SavedStatusEffect> effects;  // save schema v4 (task 9.6)
 };
 
 void captureCharacter(const CharacterComponent& component, SavedCharacter& out);
@@ -161,6 +192,18 @@ public:
     bool unequip(EntityId entity, EquipSlot slot);
     // Held-item state (CHARACTERS.md §6.1).
     bool setSheathed(EntityId entity, bool sheathed);
+
+    // Status effects (task 9.6). Adding an effect whose id is already
+    // present refreshes it (magnitude/duration replaced); a full list
+    // refuses (P1). sumMagnitude totals effects matching ANY given tag bit —
+    // the stat-modifier query hooks (speed, health, ...) games read from.
+    bool addEffect(EntityId entity, const StatusEffect& effect);
+    bool removeEffect(EntityId entity, uint64_t effectId);
+    const StatusEffect* findEffect(EntityId entity, uint64_t effectId) const;
+    float sumMagnitude(EntityId entity, uint32_t tagMask) const;
+    // One fixed step for timed effects: durations tick down, expired effects
+    // drop. Permanent effects (skills/education) never expire.
+    void tickEffects(float dt);
 
     // Persistence + streaming (task 8.9). Snapshot captures every character
     // with a persistentId; restore re-applies one onto a (new) entity after a

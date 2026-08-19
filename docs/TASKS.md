@@ -162,19 +162,19 @@ Status legend: `[ ]` not started · `[~]` in progress · `[x]` done
 
 *Goal: the person NPC kind — family trees as the generation unit, hereditary looks via DNA, names with provenance, status effects (skills/education included), occupation/residence/schedule stubs, and voiced text lines on the P5 fulfillment pattern. Design: [`PEOPLE.md`](PEOPLE.md). Open questions §7 await the owner's rulings before the affected tasks start.*
 
-- [ ] **9.1** Person identity layer on the humanoid character: `PersonId`, name refs, tree ref, relation links (mother/father/siblings/children/spouse)
-- [ ] **9.2** Family-tree data format (`.mgetree`) + ADR: compact person records (names, genomes, relations, identity), deterministic by seed, streamed like world data (P1/P2)
-- [ ] **9.3** Names: culture name pools, first-name assignment, family-name derivation through the tree *(awaits ruling: uniqueness scope, marriage/children naming rules)*
-- [ ] **9.4** DNA: genome over the `HumanoidVariant` trait set (two haplotypes, dominance/blend per trait, bounded mutation), phenotype resolver → variant; children resemble parents by construction
-- [ ] **9.5** Tree generator: multi-generation trees (couples, children, record-only ancestors) from a seed; sibling variety via recombination
-- [ ] **9.6** Status effects: storage, tags, magnitude, duration, stat-modifier hooks + queries; skills/education as permanent ranked effects *(awaits ruling: engine/game authority split)*
-- [ ] **9.7** Occupation, residence (interior-cell ref), schedule (time-of-day → place) data stubs — mechanisms deepen in a later dictation
-- [ ] **9.8** Text lines: folder-per-line layout, `line.txt` text + delivery marks, per-person voice description, at-least-one-line validation
-- [ ] **9.9** Voice fulfillment pipeline (P5 for audio): manifest export of unrecorded lines (text + directions + voice brief), delivered-take pickup under the same line id, random take selection, subtitle placeholder through the localization/RTL stack *(awaits ruling: per-language line sets)*
-- [ ] **9.10** Minimal wav playback sink for voice lines (or lands with the audio pillar — dependency noted)
-- [ ] **9.11** People showcase: a generated three-generation family rendered as a lineup (heredity visible), a person speaking a line (subtitle placeholder → delivered take), board update
+- [x] **9.1** Person identity layer on the humanoid character: `PersonId`, name refs, tree ref, relation links (mother/father/siblings/children/spouse) — *`PersonRecord`: relations by index, `personId` doubles as the save `persistentId`; children/sibling queries on the tree*
+- [x] **9.2** Family-tree data format (`.mgetree`) + ADR 0005: compact person records (names, genomes, relations, identity), deterministic by seed, checksummed like every engine format — *~200 B/person cold*
+- [x] **9.3** Names: culture name pools (`anglo` + `hebrew`, P11), first-name assignment, family-name derivation — *rulings applied: first names unique within the family (refuse on pool exhaustion, never duplicate); children always take the father's name; a woman takes her husband's name at marriage, birth name preserved*
+- [x] **9.4** DNA: genome over the `HumanoidVariant` trait set (two haplotypes, blend + darker-dominant skin, bounded mutation), phenotype resolver → variant; children resemble parents by construction — *tested: child phenotype inside the parents' allele span; siblings differ; sex offsets*
+- [x] **9.5** Tree generator: multi-generation trees (couples, married-in spouses, children, record-only dead ancestors) from a seed; sibling variety via recombination — *deterministic: same seed, same family, byte-identical*
+- [x] **9.6** Status effects: storage, tags, magnitude, duration, stat-modifier hook queries (`sumMagnitude` over speed/health/skill tags); skills/education as permanent ranked effects; persisted in save schema v4 (migration chain v1→…→v4) — *ruled split: engine owns mechanics, games own meaning*
+- [x] **9.7** Occupation, residence (interior-cell ref), schedule (time-of-day → place id) data stubs — mechanisms deepen in a later dictation
+- [x] **9.8** Text lines: folder-per-line layout, `line.txt` tone header + text with `[sigh]`/`[laugh]`/`[pause]` marks, per-person voice description (auto-composed brief), at-least-one-line validation
+- [~] **9.9** Voice fulfillment pipeline (P5 for audio): manifest export of unrecorded lines (text + directions + voice brief), delivered-take pickup under the same line id, random take selection, languages in fully separate folder trees per ruling — *running and tested end-to-end; the subtitle fallback returns the line text, but a dedicated subtitle UI widget isn't wired into a screen yet*
+- [~] **9.10** Minimal wav support: PCM16 load/validate/write for delivered takes — *an actual playback sink joins with the audio pillar (Phase 10 candidate)*
+- [x] **9.11** People showcase: a generated three-generation family rendered grouped by household (heredity visible), voice pipeline round trip (manifest → takes → random pick) in the demo; runs in CI and verify.sh
 
-**Exit criteria:** a seed generates a family tree whose members have derived names, visibly hereditary bodies, relations you can query, skills as status effects, and at least one text line each; the whole tree costs bytes while cold; one person's line plays as a subtitle before fulfillment and as a delivered wav take after, chosen at random among takes.
+**Exit criteria:** a seed generates a family tree whose members have derived names, visibly hereditary bodies, relations you can query, skills as status effects, and at least one text line each; the whole tree costs bytes while cold; one person's line plays as a subtitle before fulfillment and as a delivered wav take after, chosen at random among takes. — *Met, with two honest notes: "plays" today means the text/take is selected and validated (the audio output device joins with the audio pillar), and the subtitle path returns text without a dedicated on-screen widget yet.*
 
 ## Phase 10 and beyond — held for further dictation
 

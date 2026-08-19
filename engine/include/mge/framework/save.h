@@ -18,7 +18,8 @@
 
 namespace mge {
 
-constexpr uint32_t kSaveSchemaVersion = 3;  // v2: player health; v3: characters (8.9)
+// v2: player health; v3: characters (8.9); v4: status effects (9.6)
+constexpr uint32_t kSaveSchemaVersion = 4;
 
 struct PlayerState {
     Vec3 position{};

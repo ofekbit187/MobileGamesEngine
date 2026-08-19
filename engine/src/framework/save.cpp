@@ -52,6 +52,12 @@ bool migrateV2ToV3(SaveSnapshot& snapshot) {
     return true;
 }
 
+// v3 characters predate status effects: none recorded.
+bool migrateV3ToV4(SaveSnapshot& snapshot) {
+    for (SavedCharacter& character : snapshot.characters) character.effects.clear();
+    return true;
+}
+
 void serializePayload(const SaveSnapshot& snapshot, std::vector<uint8_t>& out) {
     append(out, &snapshot.player, sizeof(PlayerState));
     snapshot.deltas.serialize(out);
@@ -78,6 +84,10 @@ void serializePayload(const SaveSnapshot& snapshot, std::vector<uint8_t>& out) {
         append(out, &itemCount, sizeof(itemCount));
         append(out, character.items.data(), itemCount * sizeof(SavedCharacterItem));
         append(out, character.equipment, sizeof(character.equipment));
+        // v4 section: status effects (task 9.6).
+        const uint32_t effectCount = static_cast<uint32_t>(character.effects.size());
+        append(out, &effectCount, sizeof(effectCount));
+        append(out, character.effects.data(), effectCount * sizeof(SavedStatusEffect));
     }
 }
 
@@ -144,6 +154,18 @@ bool deserializePayload(const uint8_t* data, size_t size, uint32_t schemaVersion
                       itemCount * sizeof(SavedCharacterItem)) ||
                 !read(cursor, remaining, character.equipment, sizeof(character.equipment))) {
                 return false;
+            }
+            if (schemaVersion >= 4) {
+                uint32_t effectCount = 0;
+                if (!read(cursor, remaining, &effectCount, sizeof(effectCount)) ||
+                    effectCount > kMaxStatusEffects) {
+                    return false;
+                }
+                character.effects.resize(effectCount);
+                if (!read(cursor, remaining, character.effects.data(),
+                          effectCount * sizeof(SavedStatusEffect))) {
+                    return false;
+                }
             }
         }
     }
@@ -261,6 +283,7 @@ bool SaveManager::load(const char* slotName, SaveSnapshot& out) {
         switch (version) {
             case 1: migrated = migrateV1ToV2(out); break;
             case 2: migrated = migrateV2ToV3(out); break;
+            case 3: migrated = migrateV3ToV4(out); break;
             default: break;
         }
         if (!migrated) {

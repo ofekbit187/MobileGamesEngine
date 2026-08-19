@@ -26,8 +26,10 @@ streaming, P5 placeholder-then-fulfill, P9 player parity).
 **You don't generate people — you generate family trees.** A person never
 exists alone; they are a node in a tree that explains their name and looks.
 
-- Every person has a unique first name and a last name **derived from their
-  family tree**.
+- Every person has a first name — **unique within their family** (ruled) —
+  and a last name **derived from their family tree**: children always take
+  the father's family name, and a woman takes her husband's family name upon
+  marriage (her birth name is preserved as a record).
 - Relations per person: **mother, father**, and optionally **siblings,
   children, spouse**.
 - *[proposal]* Trees are compact data assets (a `.mgetree` file baked like
@@ -113,6 +115,9 @@ Every person has a **folder of text lines**, with **at least one line**.
   text, directions, and the person's voice description — exactly like the
   model manifest — and re-export shrinks as takes are delivered. Delivered
   wavs are picked up under the same line id with zero content edits.
+- **Languages are never mixed** (ruled): each language is a completely
+  separate folder tree under the voice root — `<root>/en/...`,
+  `<root>/he/...` — with its own line texts, takes, and manifest.
 - *[proposal]* Delivery notation in `line.txt`: plain text with bracketed
   marks inline — `[sigh]`, `[laugh]`, `[pause]` — plus header fields for
   tone (e.g. `tone: weary, warm`). Human-writable, agent-readable.
@@ -120,20 +125,21 @@ Every person has a **folder of text lines**, with **at least one line**.
   The line folders, manifests, and subtitle path can land first; a minimal
   wav playback sink joins with the audio system.
 
-## 7. Open questions for the owner
+## 7. Owner rulings (Dictation 5 follow-up — all questions resolved)
 
-1. **Name uniqueness scope.** Globally unique first names collapse at scale.
-   Proposal: full name (first + last) unique within a person's community;
-   the stable `PersonId` is the true identity.
-2. **Family-name rules.** Does a spouse take the other's family name (and
-   which)? Do children take the father's, mother's, or a game-configured
-   rule? Proposal: a per-game *culture pack* (name pools + naming rules);
-   shipped medieval default: children take the father's family name, spouses
-   keep their birth name.
-3. **Status-effect authority.** Engine owns storage/queries/stat-modifier
-   hooks, games define semantics in data — acceptable split?
-4. **Voice-line languages.** One language per game, or per-language text +
-   take sets under each line folder (Hebrew games need Hebrew lines — P11)?
-5. **Tree generation depth.** Generate ancestors (dead grandparents that
-   explain names/looks) as record-only nodes? Proposal: yes — cheap rows,
-   free history.
+1. **Name uniqueness: first names are unique within a family** (the tree).
+   The stable `PersonId` remains the machine identity.
+2. **Family-name rules (ruled, always):** children take the **father's**
+   family name; a woman takes **her husband's** family name upon marriage.
+   The engine preserves `birthFamilyName` (maiden name) as a record.
+   Culture packs supply name pools; the naming rules themselves are fixed
+   by this ruling, not per-culture.
+3. **Status-effect authority:** as proposed — the engine owns storage,
+   tags, magnitudes, durations, queries, and stat-modifier hooks; games
+   define effect semantics in data.
+4. **Voice-line languages: per-language text, never mixed.** Every language
+   lives in a **completely separate folder tree** under the voice root
+   (`<root>/<lang>/...`); a person's lines and takes for one language never
+   share a folder with another language's.
+5. **Tree depth:** as proposed — trees include record-only ancestors (dead
+   grandparents that explain names and looks); they cost rows, not bodies.

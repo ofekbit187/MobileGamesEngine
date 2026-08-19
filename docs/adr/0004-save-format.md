@@ -22,7 +22,9 @@ Payload:
   Collections    [registered item collections: id + items(assetId,count,color)]
   Characters     [schema v3, task 8.9: per persistent character —
                   persistentId, health/maxHealth, faction, alive, controller,
-                  sightRange, inventory items, equipment slots(+layer/sheathed)]
+                  sightRange, inventory items, equipment slots(+layer/sheathed);
+                  schema v4, task 9.6: + status effects (id, tags, magnitude,
+                  duration) — skills/education persist as permanent effects]
 ```
 
 - **Atomicity (P3/P7):** a save writes to `<slot>.mgesave.tmp`, fsyncs, then
