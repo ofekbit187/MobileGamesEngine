@@ -95,6 +95,7 @@ The realization of P2, and the primary enforcement point of P1.
 - **Residency management** — a chunk is *resident* (in memory), *loading*, or *cold* (on disk). Movement, camera, and gameplay hints drive a priority queue; the memory budget drives eviction. The player's surroundings are always resident; distant content exists only as lightweight metadata.
 - **Asset residency** — shared assets (models, textures) are reference-counted across chunks and streamed with mip/LOD granularity: a distant object may be resident only at its lowest LOD.
 - **Guarantees** — the frame never blocks on I/O. Non-resident content renders as lower LOD or not at all; gameplay queries against cold chunks return "not loaded" and systems must handle it (P2).
+- **Interiors (P10)** — every building is enterable, and its interior is a streamable cell of the same world, not a separate scene. Exteriors carry a lightweight shell (facade + door markers) at distance; **approach prediction** raises an interior's streaming priority as the player nears its entrance, so crossing the threshold is seamless. Interior cells evict aggressively once left (a visited tavern doesn't linger in memory). Cities are the same mechanism at district granularity — no city-gate loads. Last-resort behavior is a diegetic doorway delay, never a loading screen, and the streaming scale test counts those delays as tuning failures.
 
 ### 3.2 Asset System & Virtual Models
 
@@ -115,8 +116,12 @@ The realization of P5.
 
 The realization of P6.
 
-- **Widget & screen model** — retained widget tree with layout, styling, and navigation; rendered as batched geometry through the graphics engine's overlay pass. Low-allocation updates (P1).
-- **Original built-in designs** — the engine ships its own designed widget library and screen kit: HUD elements, main menu, pause menu, settings, dialogs, inventory-style grids, loading/boot screens. A game has a coherent visual identity by default and can restyle via themes.
+- **Widget & screen model** — retained widget tree with layout, styling, and navigation; rendered as batched geometry through the graphics engine's overlay pass. Low-allocation updates (P1). Layout is direction-aware from the ground up: every widget resolves against a reading direction, so RTL (Hebrew) mirrors correctly with no per-screen work (P11).
+- **Original built-in designs** — the engine ships its own designed widget library and screen kit: HUD elements, main menu, pause menu, settings, dialogs, inventory-style grids, loading/boot screens. The shipped identity is **medieval book-and-paper** (parchment grounds, ink typography, manuscript ornamentation — owner verdict); games restyle via themes.
+- **Localization & text** — text pipeline with bidirectional shaping (Hebrew first-class), localization keys as the default way UI references strings, and font fallback per script (P11).
+- **Data binding (RPG mechanisms)** — UI layouts reference game data natively rather than being hand-wired:
+  - *Collection views*: any registered item collection (player inventory, chest contents, merchant stock, quest log) can be referenced by ID from a layout and renders as a live, styled grid/list — updates, capacity, and item interactions included. "Inventory screen" and "chest screen" are declarations, not projects.
+  - *Live-object views*: a layout can embed a viewport bound to a live runtime object — e.g. the player's rendered character (current variant + worn equipment, P9/§3.5) in the inventory screen, or an item's 3D model in a tooltip — rendered by the engine into the UI within the same budgets.
 - **Virtual gameplay controls** — on-screen stick(s), buttons, and gesture zones are UI widgets bound to the control scheme in the Game Framework; they ship as part of the built-in designs.
 - **Input routing** — UI gets first claim on touches; unclaimed touches fall through to gameplay controls.
 

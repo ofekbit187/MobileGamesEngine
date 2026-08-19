@@ -71,22 +71,26 @@ Status legend: `[ ]` not started · `[~]` in progress · `[x]` done
 - [ ] **4.4** Asset streaming with LOD/mip granularity tied into the GPU resource manager
 - [ ] **4.5** Frame-never-blocks guarantee: deferral/LOD fallback paths in renderer and gameplay queries against cold chunks
 - [ ] **4.6** Streaming diagnostics: chunk-state visualizer, I/O and budget dashboards
-- [ ] **4.7** Scale test: synthetic multi-GB world traversed continuously within a fixed memory budget on a mid-range device
+- [ ] **4.7** Interior cells (P10): every building enterable; exterior shells at distance, approach-prediction prefetch on entrances, aggressive evict-on-leave; cities as district-granularity cells; diegetic doorway delay as instrumented last resort
+- [ ] **4.8** Scale test: synthetic multi-GB world traversed continuously within a fixed memory budget on a mid-range device — including building/city entries with zero flow breaks (doorway delays counted as failures to tune out)
 
-**Exit criteria:** the scale test passes — traversal with no loading screens, no frame stalls, memory flat at the configured budget.
+**Exit criteria:** the scale test passes — traversal with building and city entries, no loading screens, no frame stalls, memory flat at the configured budget.
 
 ## Phase 5 — UI system with built-in designs
 
 *Goal: P6 realized — the engine's own original UI, rendered by the engine.*
 
-- [ ] **5.1** Widget tree: layout, styling/theming, navigation, low-allocation updates
-- [ ] **5.2** UI renderer: batched geometry through the overlay pass; font atlas + text shaping
-- [ ] **5.3** Original design language: define the engine's visual identity (spec + theme tokens) — an original design, not a platform clone
+- [ ] **5.1** Widget tree: layout, styling/theming, navigation, low-allocation updates; direction-aware layout so RTL mirroring is free per-widget (P11)
+- [ ] **5.2** UI renderer: batched geometry through the overlay pass; font atlas + text shaping with bidi (Hebrew first-class), per-script font fallback
+- [ ] **5.3** Original design language: medieval book-and-paper identity (parchment/ink/manuscript — owner verdict; spec + theme tokens), an original design, not a platform clone
 - [ ] **5.4** Built-in widget library in that design: buttons, lists, sliders, toggles, dialogs, grids
 - [ ] **5.5** Built-in screen kit: boot screen, main menu, pause menu, settings, save-slot picker, HUD elements
 - [ ] **5.6** Virtual gameplay control widgets: sticks, buttons, gesture zones bound to Phase 3 control schemes
 - [ ] **5.7** Input routing: UI-first claim, fall-through to gameplay
-- [ ] **5.8** Wire the full screen kit + controls into the game template
+- [ ] **5.8** Localization system: string keys as default, language packs, runtime language switch incl. RTL relayout; ships with English + Hebrew (P11)
+- [ ] **5.9** Data binding — collection views: registered item collections (inventory, chest, merchant…) referenced by ID from layouts, rendering as live styled grids/lists with interactions (P6)
+- [ ] **5.10** Data binding — live-object views: UI viewport bound to live runtime objects (rendered character with worn equipment, item models) within render budgets (P6)
+- [ ] **5.11** Wire the full screen kit + controls into the game template — inventory + chest screens built purely via 5.9/5.10 bindings as the proof
 
 **Exit criteria:** the template game boots into an engine-designed menu, plays with on-screen controls, and pauses into an engine-designed pause screen.
 

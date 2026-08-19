@@ -54,7 +54,9 @@ Scene building must never be blocked on asset production.
 Games get a real, styled UI out of the box.
 
 - The engine ships an original, built-in UI system with its **own original designs** — widgets, screens, and visual style authored for this engine, not a copy of a platform toolkit and not a bare "bring your own skin" framework.
+- The engine's visual identity is **medieval, book-and-paper** — parchment, ink, and manuscript textures rather than glassy/futuristic chrome (owner verdict, 2026-08-19). Themes can restyle it, but the shipped default sets this tone.
 - The built-in designs cover what games actually need: HUD, menus, dialogs, inventory-style grids, settings, virtual gameplay controls (sticks/buttons).
+- **UI binds natively to game data.** Laying out a menu can reference a *registered item collection* (the player's inventory, a chest's contents, a merchant's stock) and get a live, styled collection view with one declaration — and reference *live runtime objects* (e.g. a rendered character with their worn equipment) as UI elements the same way. Frequently used RPG screens are one binding away, not hand-built plumbing.
 - UI obeys the same performance rules as everything else (P1): retained, batched, low-allocation rendering.
 
 ## P7 — Saving and loading are engine services
@@ -83,6 +85,23 @@ There is no difference between the player and NPCs except how they are controlle
 - Code that special-cases "the player" is a design smell; systems ask "which controller?" or "which faction?" instead.
 
 See [`CHARACTERS.md`](CHARACTERS.md) for the full character system design.
+
+## P10 — Every building opens, and the flow never breaks
+
+All buildings are accessible to the player, and entering them never interrupts play.
+
+- Interiors are part of the continuous streamed world (P2), not separate scenes: no loading screen on a doorway, no city-gate load, no visible hitch when crossing a threshold.
+- Long waits are acceptable exactly once — up front. Boot/initial loads may be arbitrarily long; **mid-game waits that break the flow are never acceptable**.
+- The memory answer is streaming smarts, not bigger budgets (P1): interiors live in their own streamable cells, prefetched by *approach prediction* (nearing a door raises its interior's priority) and evicted when left behind; a building far away is only its exterior shell.
+- If content genuinely cannot be resident in time, the engine stalls the *doorway* (the door takes a moment to open) — a diegetic delay, never a loading screen. This is the escape hatch of last resort, and the scale test treats its occurrence as a failure to tune against.
+
+## P11 — Speak the player's language, including right-to-left
+
+Localization is foundational, and Hebrew is a first-class language.
+
+- The UI and text pipeline are built RTL-capable from the start — bidirectional text shaping and mirrored layouts are part of the foundation, not a retrofit (retrofitting RTL breaks every layout assumption).
+- Every built-in widget and screen must render correctly in RTL: reading order, alignment, and layout mirroring are theme-level behavior the game creator gets for free.
+- Game-facing text is referenced through localization keys by default, so shipping another language never means touching UI layouts.
 
 ---
 
