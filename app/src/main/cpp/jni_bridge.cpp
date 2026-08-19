@@ -7,6 +7,7 @@
 #include <android/native_window_jni.h>
 
 #include "audio_sink_aaudio.h"
+#include "device_game.h"
 #include "mge/core/log.h"
 #include "mge/core/memory.h"
 #include "mge/framework/engine.h"
@@ -16,10 +17,13 @@ namespace {
 mge::Engine gEngine;
 ANativeWindow* gWindow = nullptr;
 // The audio pillar on device (task 10.7): the AAudio callback pulls this
-// mixer; game code plays voices/music/effects into it. Silent until then.
+// mixer; the device game plays voices/music/effects into it.
 mge::BudgetRegistry gAudioBudgets;
 mge::AudioMixer gMixer(gAudioBudgets);
 mge::AAudioSink gAudioSink;
+// The on-device hamlet (first on-glass bring-up): offscreen Vulkan render
+// blitted into the window, real touch, live positional audio.
+mge::DeviceGame gGame;
 
 }  // namespace
 
@@ -38,6 +42,7 @@ Java_com_mobilegamesengine_app_EngineBridge_nativeInit(JNIEnv*, jobject) {
 
 JNIEXPORT void JNICALL
 Java_com_mobilegamesengine_app_EngineBridge_nativeShutdown(JNIEnv*, jobject) {
+    gGame.stop();
     gAudioSink.stop();
     gEngine.shutdown();
     if (gWindow != nullptr) {
@@ -52,6 +57,8 @@ Java_com_mobilegamesengine_app_EngineBridge_nativeSurfaceCreated(
     if (gWindow != nullptr) ANativeWindow_release(gWindow);
     gWindow = ANativeWindow_fromSurface(env, surface);
     gEngine.onSurfaceCreated(width, height);
+    gGame.start(gEngine, gMixer, static_cast<uint32_t>(width),
+                static_cast<uint32_t>(height));
 }
 
 JNIEXPORT void JNICALL
@@ -82,7 +89,11 @@ Java_com_mobilegamesengine_app_EngineBridge_nativeResume(JNIEnv*, jobject) {
 
 JNIEXPORT void JNICALL
 Java_com_mobilegamesengine_app_EngineBridge_nativeTick(JNIEnv*, jobject, jdouble dtSeconds) {
-    gEngine.tick(dtSeconds);
+    if (gGame.running()) {
+        gGame.frame(dtSeconds, gWindow);  // sims (incl. engine tick), renders, blits
+    } else {
+        gEngine.tick(dtSeconds);
+    }
 }
 
 JNIEXPORT void JNICALL

@@ -50,9 +50,11 @@ if(NOT ANDROID)
     target_include_directories(mge_import PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/../third_party/cgltf)
 endif()
 
-# Graphics module (task 2.1): built where a Vulkan SDK is available. Android
-# wiring (surface + swapchain via the app module) is the next 2.1 step; until
-# then the module is host-side and exercised headlessly (llvmpipe in CI).
+# Graphics module (task 2.1): host builds use the SDK (llvmpipe headless in
+# CI); the Android APP build links the NDK's libvulkan for the on-device
+# offscreen-render path (the app module blits it; a true swapchain is the
+# remaining 2.1 step). Emulated arm64 test builds stay graphics-free —
+# static executables can't link the stub libvulkan under qemu.
 if(NOT ANDROID)
     find_package(Vulkan QUIET)
     if(Vulkan_FOUND)
@@ -66,6 +68,14 @@ if(NOT ANDROID)
     else()
         message(STATUS "Vulkan not found — mge_graphics and vk_smoke skipped")
     endif()
+elseif(NOT MGE_EMULATED_TESTS)
+    add_library(mge_graphics STATIC
+        src/graphics/vulkan_device.cpp
+        src/graphics/renderer.cpp
+    )
+    target_link_libraries(mge_graphics PUBLIC mge_core vulkan)
+    target_include_directories(mge_graphics PRIVATE generated)
+    target_compile_options(mge_graphics PRIVATE -Wall -Wextra)
 endif()
 
 if(ANDROID)

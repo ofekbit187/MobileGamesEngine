@@ -7,6 +7,6 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 # Pull in the engine core from the repository root.
 add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/../../../../engine engine)
 
-add_library(mge_app SHARED jni_bridge.cpp audio_sink_aaudio.cpp)
+add_library(mge_app SHARED jni_bridge.cpp audio_sink_aaudio.cpp device_game.cpp)
 
-target_link_libraries(mge_app PRIVATE mge_core android log aaudio)
+target_link_libraries(mge_app PRIVATE mge_core mge_graphics android log aaudio)
