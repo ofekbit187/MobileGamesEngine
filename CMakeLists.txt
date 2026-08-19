@@ -20,6 +20,7 @@ option(MGE_EMULATED_TESTS "Build tests/runner for Android ABI (run via qemu-user
 if(NOT ANDROID OR MGE_EMULATED_TESTS)
     add_subdirectory(tools/host_runner)
     add_subdirectory(tools/stream_test)
+    add_subdirectory(tools/audio_demo)
     enable_testing()
     add_subdirectory(tests)
 endif()

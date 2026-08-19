@@ -20,6 +20,7 @@ cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=Release >/dev/null
 cmake --build build >/dev/null
 ctest --test-dir build --output-on-failure >/dev/null
 ./build/tools/host_runner/mge_host_runner | grep -E "steady-state|OK"
+./build/tools/audio_demo/mge_audio_demo build | grep -E "voice line|wrote|bell pan|OK"
 ./build/tools/stream_test/mge_stream_test bake build/ci.mgeworld 12 33 | tail -1
 ./build/tools/stream_test/mge_stream_test run build/ci.mgeworld 30 48 | grep -E "peak|flow|update time|OK"
 if [ -x build/tools/vk_smoke/mge_vk_smoke ]; then

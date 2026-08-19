@@ -6,13 +6,20 @@
 #include <android/native_window.h>
 #include <android/native_window_jni.h>
 
+#include "audio_sink_aaudio.h"
 #include "mge/core/log.h"
+#include "mge/core/memory.h"
 #include "mge/framework/engine.h"
 
 namespace {
 
 mge::Engine gEngine;
 ANativeWindow* gWindow = nullptr;
+// The audio pillar on device (task 10.7): the AAudio callback pulls this
+// mixer; game code plays voices/music/effects into it. Silent until then.
+mge::BudgetRegistry gAudioBudgets;
+mge::AudioMixer gMixer(gAudioBudgets);
+mge::AAudioSink gAudioSink;
 
 }  // namespace
 
@@ -24,10 +31,14 @@ Java_com_mobilegamesengine_app_EngineBridge_nativeInit(JNIEnv*, jobject) {
     if (!gEngine.init(config)) {
         MGE_LOGE("jni", "engine init failed");
     }
+    if (!gAudioSink.start(gMixer)) {
+        MGE_LOGW("jni", "audio sink unavailable — running silent");
+    }
 }
 
 JNIEXPORT void JNICALL
 Java_com_mobilegamesengine_app_EngineBridge_nativeShutdown(JNIEnv*, jobject) {
+    gAudioSink.stop();
     gEngine.shutdown();
     if (gWindow != nullptr) {
         ANativeWindow_release(gWindow);
@@ -66,6 +77,7 @@ Java_com_mobilegamesengine_app_EngineBridge_nativePause(JNIEnv*, jobject) {
 JNIEXPORT void JNICALL
 Java_com_mobilegamesengine_app_EngineBridge_nativeResume(JNIEnv*, jobject) {
     gEngine.onResume();
+    gAudioSink.restartIfNeeded();  // reopen after a device error while away
 }
 
 JNIEXPORT void JNICALL

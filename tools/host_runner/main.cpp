@@ -9,6 +9,9 @@
 #include <cstdlib>
 #include <new>
 
+#include <cmath>
+
+#include "mge/audio/mixer.h"
 #include "mge/core/log.h"
 #include "mge/framework/engine.h"
 
@@ -45,6 +48,29 @@ int main() {
     engine.onSurfaceCreated(1080, 2400);
     engine.onResume();
 
+    // The audio mixer joins the P1 gate (task 10.5): a looping positional
+    // voice mixes every frame inside the allocation counter's window.
+    mge::BudgetRegistry audioBudgets;
+    mge::AudioMixer mixer(audioBudgets);
+    mge::AudioClip hum;
+    {
+        mge::WavData data;
+        data.sampleRate = 22050;
+        data.channels = 1;
+        data.samples.resize(2205);
+        for (size_t i = 0; i < data.samples.size(); ++i) {
+            data.samples[i] = static_cast<int16_t>(
+                6000.0f * std::sin(2.0f * mge::kPi * 110.0f * i / 22050.0f));
+        }
+        if (!hum.adopt(std::move(data), mixer)) return 1;
+    }
+    mge::AudioPlayParams humParams;
+    humParams.loop = true;
+    humParams.positional = true;
+    humParams.position = {3, 0, -2};
+    if (mixer.play(hum, humParams) == mge::kInvalidAudioVoice) return 1;
+    static int16_t mixBuffer[800 * 2];  // one 60 Hz frame of 48 kHz stereo
+
     constexpr int kWarmupFrames = 60;
     constexpr int kSteadyFrames = 600;
     constexpr double kFrameDt = 1.0 / 60.0;
@@ -61,7 +87,10 @@ int main() {
 
     const long allocsBefore = gAllocCount.load();
     const auto start = std::chrono::steady_clock::now();
-    for (int i = 0; i < kSteadyFrames; ++i) engine.tick(kFrameDt);
+    for (int i = 0; i < kSteadyFrames; ++i) {
+        engine.tick(kFrameDt);
+        mixer.mix(mixBuffer, 800);  // the audio pull rides the same gate
+    }
     const auto end = std::chrono::steady_clock::now();
     const long steadyAllocs = gAllocCount.load() - allocsBefore;
 

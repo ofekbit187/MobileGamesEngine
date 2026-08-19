@@ -20,6 +20,7 @@ add_library(mge_core STATIC
     src/people/family_tree.cpp
     src/people/voice.cpp
     src/audio/wav.cpp
+    src/audio/mixer.cpp
     src/graphics/primitives.cpp
     src/graphics/mesh_io.cpp
     src/streaming/world_file.cpp

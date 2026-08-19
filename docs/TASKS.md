@@ -176,14 +176,27 @@ Status legend: `[ ]` not started · `[~]` in progress · `[x]` done
 
 **Exit criteria:** a seed generates a family tree whose members have derived names, visibly hereditary bodies, relations you can query, skills as status effects, and at least one text line each; the whole tree costs bytes while cold; one person's line plays as a subtitle before fulfillment and as a delivered wav take after, chosen at random among takes. — *Met, with two honest notes: "plays" today means the text/take is selected and validated (the audio output device joins with the audio pillar), and the subtitle path returns text without a dedicated on-screen widget yet.*
 
-## Phase 10 and beyond — held for further dictation
+## Phase 10 — Audio pillar
+
+*Goal: the engine hears — a budgeted, allocation-free mixer core proven headlessly (this environment has no sound device, so correctness is samples-on-buffers), a thin AAudio sink at the platform boundary, and the voice-line pipeline made audible. Design: [`adr/0006-audio-architecture.md`](adr/0006-audio-architecture.md).*
+
+- [x] **10.1** Audio clips: budgeted PCM16 loading ("audio" budget owned by the mixer, refuse on cap), unload/release — *over-cap clip refused in tests*
+- [x] **10.2** Mixer core: fixed voice slots (refuse when full), per-voice gain/loop, linear resampling to the output rate, allocation-free `mix()` pulled by the device — *generation-checked voice ids; 22.05 kHz takes verified to play correct wall-clock length at 48 kHz*
+- [x] **10.3** Buses: music/sfx/voice under master, per-bus gains; music ducking (glide, no clicks) while the voice bus speaks — *duck depth and recovery asserted on samples*
+- [x] **10.4** Positional audio v1: listener position/forward, linear distance attenuation, constant-power stereo pan — *left/right energy asymmetry, near/far falloff, and beyond-max silence tested*
+- [x] **10.5** P1 gate: the host runner pumps the mixer (a looping positional voice) every steady-state frame — zero allocations enforced on host and arm64
+- [x] **10.6** Voice lines audible: delivered take → budgeted clip → Voice bus at the speaker's position, music ducking under it; subtitle text remains the no-take fallback
+- [~] **10.7** Android AAudio sink in the app module (P3 boundary): low-latency stereo stream, callback pulls `mix()`, error-flag + restart on resume; compiles and links into the APK — *on-device listening awaits a physical device session*
+- [x] **10.8** Audio showcase: `tools/audio_demo` walks a listener past a bell tower (pan sweeps right→center→left), wind + music beds, a Phase 9 voice take spoken mid-walk with audible ducking — mixed by the engine into a wav, verified on the samples, listenable on the review board; runs in CI/verify
+- Later (deliberately deferred): disk-streamed music on job lanes, reverb/occlusion, HRTF, lock-free command ring
+
+## Phase 11 and beyond — held for further dictation
 
 Deliberately not planned yet; known candidates awaiting direction:
 
 - On-device bring-up: Android surface/swapchain, textures/materials, template game on real glass
 - AI expansion (behavior model beyond the v1 state machine, schedules, group behavior) — v1 landed in 8.8
 - Advanced facial animation (lip-sync, emotes, gaze) — basic set specified in 8.20
-- Audio system (voice-line playback joins from 9.10)
 - Physics & collision beyond basic queries
 - World-authoring/editor tooling
 - Scripting / game-logic authoring model

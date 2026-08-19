@@ -26,6 +26,9 @@ jobs:
       - name: Host prototype runner (P1 gate — zero steady-state allocations)
         run: ./build/tools/host_runner/mge_host_runner
 
+      - name: Audio demo (mixer soundscape + voice take, rendered to wav)
+        run: ./build/tools/audio_demo/mge_audio_demo build
+
       - name: Streaming scale test (P2/P10 — bounded memory, no flow breaks)
         run: |
           ./build/tools/stream_test/mge_stream_test bake build/ci.mgeworld 12 33
@@ -54,6 +57,7 @@ jobs:
             build/humanoid_*.ppm
             build/hamlet_*.ppm
             build/people_*.ppm
+            build/audio_walk.wav
 
   android-apk:
     name: Android APK (arm64, NDK)
