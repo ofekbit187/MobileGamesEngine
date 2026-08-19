@@ -17,6 +17,7 @@
 #include "mge/core/io.h"
 #include "mge/core/memory.h"
 #include "mge/framework/asset_registry.h"
+#include "mge/framework/delta_log.h"
 #include "mge/framework/world.h"
 #include "mge/streaming/world_file.h"
 
@@ -66,17 +67,37 @@ public:
     ChunkState exteriorState(int32_t cx, int32_t cz) const;
     ChunkState chunkState(size_t chunkIndex) const;
 
+    // --- persistence integration (task 6.4, P7) ---
+    // The delta log consulted at instantiation (skip removed, apply moved,
+    // add dynamic spawns) and written to by the mutation APIs below. Set it
+    // BEFORE the first update; on game load, hand in the loaded log.
+    void setDeltaLog(WorldDeltaLog* deltas) { deltas_ = deltas; }
+
+    // Permanently removes a streamed entity (shipped placement or dynamic
+    // spawn), recording the delta. The change survives evict/reload/saves.
+    bool removeStreamedEntity(EntityId entity);
+    // Moves a streamed entity, recording the delta.
+    bool moveStreamedEntity(EntityId entity, const Vec3& position, float yaw);
+    // Spawns a dynamic entity into the resident chunk containing `position`,
+    // recording the delta. Returns kInvalidEntity if that chunk isn't
+    // resident or the log is absent.
+    EntityId spawnDynamic(AssetId asset, const Vec3& position, float yaw,
+                          const float color[4]);
+
     // ASCII residency map around the player: 'P' player, '#' resident,
     // '~' loading, '.' cold, ' ' outside the world. Rows are z, cols x.
     void debugMap(char* out, size_t outSize, int32_t radius) const;
 
 private:
+    static constexpr uint16_t kDynamicFlag = 0x8000;  // entitySource: dynamic spawn
+
     struct ChunkRuntime {
         ChunkState state = ChunkState::Cold;
         IoRequest request;
         uint8_t* staging = nullptr;   // placement bytes while Loading/Loaded
         size_t stagingSize = 0;
-        std::vector<EntityId> entities;  // sized maxPlacementsPerChunk at init
+        std::vector<EntityId> entities;       // sized at init
+        std::vector<uint16_t> entitySource;   // placement index, or kDynamicFlag|spawnedIdx
         uint32_t entityCount = 0;
         int32_t priorityRing = 0;
     };
@@ -98,6 +119,8 @@ private:
     void evictChunk(size_t chunkIndex);
     void addAssetRef(AssetId id, IoPriority priority);
     void releaseAssetRef(AssetId id);
+    bool findEntity(EntityId entity, size_t& chunkIndex, uint32_t& slot);
+    void detachEntitySlot(size_t chunkIndex, uint32_t slot);
     uint8_t* budgetAlloc(size_t bytes);
     void budgetFree(uint8_t* buffer, size_t bytes);
 
@@ -114,6 +137,7 @@ private:
     size_t chunkCount_ = 0;
     std::unordered_map<AssetId, AssetRuntime> assetRuntime_;
     std::vector<size_t> loadedQueue_;  // chunks with placements read, awaiting spawn
+    WorldDeltaLog* deltas_ = nullptr;
     uint32_t inFlight_ = 0;
     Vec3 lastPlayerPos_{};
     bool warmedUp_ = false;

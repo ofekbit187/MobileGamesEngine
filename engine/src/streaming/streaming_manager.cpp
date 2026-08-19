@@ -34,7 +34,9 @@ bool StreamingManager::init(const char* worldPath, World& world, AssetRegistry& 
     chunkCount_ = reader_.chunks().size();
     chunks_ = std::make_unique<ChunkRuntime[]>(chunkCount_);
     for (size_t i = 0; i < chunkCount_; ++i) {
-        chunks_[i].entities.resize(config_.maxPlacementsPerChunk);
+        // Headroom beyond shipped placements for dynamic spawns.
+        chunks_[i].entities.resize(config_.maxPlacementsPerChunk + 64);
+        chunks_[i].entitySource.resize(config_.maxPlacementsPerChunk + 64);
     }
     loadedQueue_.reserve(64);
 
@@ -252,8 +254,14 @@ void StreamingManager::instantiateChunk(size_t chunkIndex) {
     ChunkRuntime& chunk = chunks_[chunkIndex];
     const Placement* placements = reinterpret_cast<const Placement*>(chunk.staging);
 
+    const uint32_t deltaChunkIndex = static_cast<uint32_t>(chunkIndex);
+    const IoPriority assetPriority =
+        info.kind == CellKind::Interior ? IoPriority::High : IoPriority::Normal;
     chunk.entityCount = 0;
     for (uint32_t p = 0; p < info.placementCount; ++p) {
+        // Save deltas (task 6.4): removed placements never come back.
+        if (deltas_ != nullptr && deltas_->isRemoved(deltaChunkIndex, static_cast<uint16_t>(p)))
+            continue;
         const Placement& placement = placements[p];
         const EntityId entity = world_->spawn();
         if (entity == kInvalidEntity) {
@@ -263,15 +271,46 @@ void StreamingManager::instantiateChunk(size_t chunkIndex) {
         TransformComponent transform;
         transform.position = {placement.pos[0], placement.pos[1], placement.pos[2]};
         transform.yaw = placement.yaw;
+        if (deltas_ != nullptr) {
+            if (const MovedPlacement* moved =
+                    deltas_->findMoved(deltaChunkIndex, static_cast<uint16_t>(p))) {
+                transform.position = moved->position;
+                transform.yaw = moved->yaw;
+            }
+        }
         world_->setTransform(entity, transform);
         ModelComponent model;
         model.asset = placement.asset;
         memcpy(model.color, placement.color, sizeof(model.color));
         world_->setModel(entity, model);
+        chunk.entitySource[chunk.entityCount] = static_cast<uint16_t>(p);
         chunk.entities[chunk.entityCount++] = entity;
 
-        addAssetRef(placement.asset,
-                    info.kind == CellKind::Interior ? IoPriority::High : IoPriority::Normal);
+        addAssetRef(placement.asset, assetPriority);
+    }
+    // Dynamic spawns recorded in the delta come back with the chunk.
+    if (deltas_ != nullptr) {
+        if (const ChunkDelta* delta = deltas_->find(deltaChunkIndex)) {
+            for (size_t si = 0; si < delta->spawned.size(); ++si) {
+                const SpawnedEntity& spawned = delta->spawned[si];
+                if (spawned.asset == kInvalidAsset) continue;  // tombstone
+                if (chunk.entityCount >= chunk.entities.size()) break;
+                const EntityId entity = world_->spawn();
+                if (entity == kInvalidEntity) break;
+                TransformComponent transform;
+                transform.position = spawned.position;
+                transform.yaw = spawned.yaw;
+                world_->setTransform(entity, transform);
+                ModelComponent model;
+                model.asset = spawned.asset;
+                memcpy(model.color, spawned.color, sizeof(model.color));
+                world_->setModel(entity, model);
+                chunk.entitySource[chunk.entityCount] =
+                    static_cast<uint16_t>(kDynamicFlag | si);
+                chunk.entities[chunk.entityCount++] = entity;
+                addAssetRef(spawned.asset, assetPriority);
+            }
+        }
     }
 
     budgetFree(chunk.staging, chunk.stagingSize);
@@ -337,6 +376,110 @@ void StreamingManager::releaseAssetRef(AssetId id) {
         runtime.state = AssetRuntime::State::Cold;
         --stats_.residentAssets;
     }
+}
+
+bool StreamingManager::findEntity(EntityId entity, size_t& chunkIndex, uint32_t& slot) {
+    for (size_t c = 0; c < chunkCount_; ++c) {
+        if (chunks_[c].state != ChunkState::Resident) continue;
+        for (uint32_t i = 0; i < chunks_[c].entityCount; ++i) {
+            if (chunks_[c].entities[i] == entity) {
+                chunkIndex = c;
+                slot = i;
+                return true;
+            }
+        }
+    }
+    return false;
+}
+
+void StreamingManager::detachEntitySlot(size_t chunkIndex, uint32_t slot) {
+    // Swap-remove keeps the arrays dense.
+    ChunkRuntime& chunk = chunks_[chunkIndex];
+    const uint32_t last = chunk.entityCount - 1;
+    chunk.entities[slot] = chunk.entities[last];
+    chunk.entitySource[slot] = chunk.entitySource[last];
+    --chunk.entityCount;
+}
+
+bool StreamingManager::removeStreamedEntity(EntityId entity) {
+    size_t chunkIndex;
+    uint32_t slot;
+    if (deltas_ == nullptr || !findEntity(entity, chunkIndex, slot)) return false;
+    ChunkRuntime& chunk = chunks_[chunkIndex];
+    const uint16_t source = chunk.entitySource[slot];
+    if ((source & kDynamicFlag) != 0) {
+        deltas_->tombstoneSpawned(static_cast<uint32_t>(chunkIndex), source & ~kDynamicFlag);
+    } else {
+        deltas_->recordRemoved(static_cast<uint32_t>(chunkIndex), source);
+    }
+    const ModelComponent* model = world_->model(entity);
+    if (model != nullptr) releaseAssetRef(model->asset);
+    world_->despawn(entity);
+    detachEntitySlot(chunkIndex, slot);
+    return true;
+}
+
+bool StreamingManager::moveStreamedEntity(EntityId entity, const Vec3& position, float yaw) {
+    size_t chunkIndex;
+    uint32_t slot;
+    if (deltas_ == nullptr || !findEntity(entity, chunkIndex, slot)) return false;
+    ChunkRuntime& chunk = chunks_[chunkIndex];
+    const uint16_t source = chunk.entitySource[slot];
+    if ((source & kDynamicFlag) != 0) {
+        if (ChunkDelta* delta = const_cast<ChunkDelta*>(
+                deltas_->find(static_cast<uint32_t>(chunkIndex)))) {
+            SpawnedEntity& spawned = delta->spawned[source & ~kDynamicFlag];
+            spawned.position = position;
+            spawned.yaw = yaw;
+        }
+    } else {
+        deltas_->recordMoved(static_cast<uint32_t>(chunkIndex), source, position, yaw);
+    }
+    TransformComponent* transform = world_->transform(entity);
+    if (transform != nullptr) {
+        transform->position = position;
+        transform->yaw = yaw;
+        transform->prevPosition = position;
+        transform->prevYaw = yaw;
+    }
+    return true;
+}
+
+EntityId StreamingManager::spawnDynamic(AssetId asset, const Vec3& position, float yaw,
+                                        const float color[4]) {
+    if (deltas_ == nullptr) return kInvalidEntity;
+    const ChunkCoord coord = World::chunkAt(position);
+    const WorldChunkInfo* info = reader_.findExterior(coord.x, coord.z);
+    if (info == nullptr) return kInvalidEntity;
+    const size_t chunkIndex = static_cast<size_t>(info - reader_.chunks().data());
+    ChunkRuntime& chunk = chunks_[chunkIndex];
+    if (chunk.state != ChunkState::Resident || chunk.entityCount >= chunk.entities.size()) {
+        return kInvalidEntity;
+    }
+    SpawnedEntity spawned;
+    spawned.asset = asset;
+    spawned.position = position;
+    spawned.yaw = yaw;
+    memcpy(spawned.color, color, sizeof(spawned.color));
+    const size_t si = deltas_->recordSpawned(static_cast<uint32_t>(chunkIndex), spawned);
+
+    const EntityId entity = world_->spawn();
+    if (entity == kInvalidEntity) {
+        deltas_->tombstoneSpawned(static_cast<uint32_t>(chunkIndex), si);
+        return kInvalidEntity;
+    }
+    TransformComponent transform;
+    transform.position = position;
+    transform.yaw = yaw;
+    world_->setTransform(entity, transform);
+    ModelComponent model;
+    model.asset = asset;
+    memcpy(model.color, color, sizeof(model.color));
+    world_->setModel(entity, model);
+    chunk.entitySource[chunk.entityCount] = static_cast<uint16_t>(kDynamicFlag | si);
+    chunk.entities[chunk.entityCount++] = entity;
+    addAssetRef(asset, IoPriority::Normal);
+    return entity;
 }
 
 ChunkState StreamingManager::exteriorState(int32_t cx, int32_t cz) const {

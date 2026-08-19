@@ -98,14 +98,14 @@ Status legend: `[ ]` not started · `[~]` in progress · `[x]` done
 
 *Goal: P7 realized — delta-based, atomic, versioned persistence as an engine service.*
 
-- [ ] **6.1** Save format design doc: per-chunk deltas, schema versioning, checksums
-- [ ] **6.2** Delta recording in the entity/world model (mutations tracked against shipped content)
-- [ ] **6.3** Atomic save writer: snapshot on simulation boundary, async write, verified swap
-- [ ] **6.4** Load path: chunk stream + delta application (integrates with Phase 4 residency)
-- [ ] **6.5** Save slots + metadata (thumbnail, playtime, timestamp) surfaced in the Phase 5 save-slot screen
-- [ ] **6.6** Version migration framework + kill-test suite (process death injected mid-save must never corrupt)
+- [x] **6.1** Save format design doc: per-chunk deltas, schema versioning, checksums — *ADR 0004; `.mgesave` v1 implemented to it*
+- [~] **6.2** Delta recording (mutations tracked against shipped content) — *WorldDeltaLog + streaming mutation APIs (remove/move/spawnDynamic) recording removed/moved placements and dynamic spawns; automatic tracking of arbitrary component mutations arrives with Phase 8 gameplay state*
+- [~] **6.3** Atomic save writer: snapshot serialize, tmp + fsync + rename swap, checksum — *kill-test verified at four injected death points; async write on the I/O lane deferred (saves are delta-small, ADR 0004)*
+- [x] **6.4** Load path: chunk stream + delta application — *deltas apply lazily at chunk instantiation (skip removed, apply moved, add spawns); full cycle tested through a real save file across two streaming sessions*
+- [~] **6.5** Save slots + metadata surfaced in the save-slot screen — *slots, timestamps, playtime, validity + Codex "Chronicles" picker rendering from real files; thumbnails pending*
+- [x] **6.6** Version migration framework + kill-test suite — *v1→v2 migration chain worked example, future-version rejection, checksum gate, process-death injection: previous save always intact*
 
-**Exit criteria:** kill-test suite passes; template game saves/loads world changes across app restarts and process death.
+**Exit criteria:** kill-test suite passes; template game saves/loads world changes across app restarts and process death. — *Kill-test suite passes; the save→fresh-session→reapply cycle is proven in tests; wiring save/load into the template game's flow is the remaining step.*
 
 ## Phase 7 — Virtual models & fulfillment pipeline
 

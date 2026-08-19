@@ -12,6 +12,7 @@
 
 #include "mge/framework/camera_controller.h"
 #include "mge/framework/items.h"
+#include "mge/framework/save.h"
 #include "mge/graphics/primitives.h"
 #include "mge/graphics/renderer.h"
 #include "mge/graphics/vulkan_device.h"
@@ -155,6 +156,8 @@ int main(int argc, char** argv) {
     strings.set(Language::Hebrew, "demo.title", "אחוזת הגחלת");
     strings.set(Language::English, "demo.character", "Aldric");
     strings.set(Language::Hebrew, "demo.character", "אלדריק");
+    strings.set(Language::English, "slots.title", "Chronicles");
+    strings.set(Language::Hebrew, "slots.title", "כרוניקות");
 
     Ui ui;
     if (!ui.init(&font, codexTheme(), &strings)) return 1;
@@ -257,6 +260,55 @@ int main(int argc, char** argv) {
     characterView.clear[1] = 0.808f;
     characterView.clear[2] = 0.671f;
     capture("inventory", &characterView, 1);
+
+    // --- 5) Save-slot picker (task 6.5): real slots written by SaveManager ---
+    {
+        std::string dir = "/tmp";
+        if (const char* t = getenv("TMPDIR")) dir = t;
+        SaveManager saves(dir.c_str());
+        SaveSnapshot snapshotA;
+        snapshotA.player.health = 0.8f;
+        snapshotA.playtimeSeconds = 4.0 * 3600 + 12 * 60;
+        saves.save("chronicle_1", snapshotA);
+        SaveSnapshot snapshotB;
+        snapshotB.playtimeSeconds = 45 * 60;
+        saves.save("chronicle_2", snapshotB);
+
+        std::vector<SaveSlotInfo> slots;
+        saves.listSlots(slots);
+        // Keep only our demo slots, newest first look irrelevant for capture.
+        std::vector<SaveSlotInfo> shown;
+        for (const SaveSlotInfo& slot : slots) {
+            if (slot.name.rfind("chronicle_", 0) == 0) shown.push_back(slot);
+        }
+
+        ui.beginFrame(kW, kH);
+        ui.screenDim();
+        ui.panel({kW * 0.5f - 340, 70, 680, 560});
+        ui.label({kW * 0.5f - 300, 100, 600, 46}, "slots.title", 1.3f, TextAlign::Center);
+        float y = 180;
+        uint32_t id = 500;
+        for (const SaveSlotInfo& slot : shown) {
+            const UiRect card{kW * 0.5f - 290, y, 580, 96};
+            ui.button(id++, card, "");
+            char line[128];
+            snprintf(line, sizeof(line), "%s", slot.name.c_str());
+            ui.strings().set(Language::English, "slots.tmp_name", line);
+            ui.label({card.x + 70, card.y + 10, card.w - 90, 36}, "slots.tmp_name", 0.9f,
+                     TextAlign::Left);
+            const int hours = static_cast<int>(slot.playtimeSeconds / 3600);
+            const int minutes = static_cast<int>(slot.playtimeSeconds / 60) % 60;
+            snprintf(line, sizeof(line), "%dh %02dm%s", hours, minutes,
+                     slot.valid ? "" : "  (damaged)");
+            ui.strings().set(Language::English, "slots.tmp_meta", line);
+            ui.labelInk({card.x + 70, card.y + 50, card.w - 90, 30}, "slots.tmp_meta", 0.68f,
+                        TextAlign::Left, ui.theme().inkFaint);
+            y += 116;
+        }
+        capture("slots", nullptr, 0);
+        saves.removeSlot("chronicle_1");
+        saves.removeSlot("chronicle_2");
+    }
 
     scene.destroy(renderer);
     renderer.shutdown();
