@@ -16,6 +16,7 @@ add_library(mge_core STATIC
     src/framework/character.cpp
     src/framework/ai.cpp
     src/character/humanoid.cpp
+    src/character/body_mesh.cpp
     src/people/dna.cpp
     src/people/family_tree.cpp
     src/people/voice.cpp
