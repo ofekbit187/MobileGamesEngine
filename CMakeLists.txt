@@ -23,6 +23,11 @@ if(NOT ANDROID OR MGE_EMULATED_TESTS)
     add_subdirectory(tests)
 endif()
 
+if(TARGET mge_import)
+    add_subdirectory(tools/asset_import)
+endif()
+
 if(TARGET mge_graphics)
     add_subdirectory(tools/vk_smoke)
+    add_subdirectory(tools/vk_scene)
 endif()

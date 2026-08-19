@@ -37,15 +37,15 @@ Status legend: `[ ]` not started · `[~]` in progress · `[x]` done
 *Goal: the single 3D pipeline, drawing imported models within explicit GPU budgets.*
 
 - [~] **2.1** Vulkan device/swapchain bring-up integrated with the surface lifecycle — *instance/device/queue up, GPU memory budgeted through BudgetRegistry (refuse-at-cap), headless clear+readback verified pixel-exact on llvmpipe (`tools/vk_smoke`); surface/swapchain integration with the app module pending*
-- [ ] **2.2** Frame graph v0: forward pass + UI overlay pass slots
-- [ ] **2.3** GPU resource manager: budgeted upload/evict for meshes and textures (P1 on the GPU side)
-- [ ] **2.4** Engine runtime asset format v1: quantized vertex streams, compressed textures, LOD chain container (design doc first, then implementation)
-- [ ] **2.5** glTF import tool producing the runtime format (native import — P5 prerequisite)
-- [ ] **2.6** Material model + engine shaders: basic lit opaque, alpha-tested, unlit
-- [ ] **2.7** Camera, transforms, frustum culling, LOD selection by distance
-- [ ] **2.8** Placeholder rendering path: engine-generated primitive volumes (box/cylinder/capsule) with distinct visual treatment + optional label (virtual-model prerequisite)
+- [~] **2.2** Frame graph v0: forward pass + UI overlay pass slots — *forward pass with offscreen color+depth target running headlessly; formal frame-graph structure + UI overlay slot pending*
+- [~] **2.3** GPU resource manager: budgeted upload/evict for meshes and textures (P1 on the GPU side) — *budgeted mesh upload/destroy running (refuse-at-cap, verified back-to-zero); eviction + textures pending*
+- [~] **2.4** Engine runtime asset format v1: quantized vertex streams, compressed textures, LOD chain container — *v1 `.mgemesh` (LOD chain container, per-LOD bounds) implemented + round-trip tested; quantization/textures deferred to v2, see ADR 0002*
+- [~] **2.5** glTF import tool producing the runtime format (native import — P5 prerequisite) — *`mge_asset_import` bakes glTF meshes (node transforms, normals, index merge) to `.mgemesh`, tested; materials/textures/LOD generation pending*
+- [~] **2.6** Material model + engine shaders: basic lit opaque, alpha-tested, unlit — *basic lit opaque + placeholder materials running (embedded SPIR-V, GLSL→header toolchain); alpha-tested/unlit/textures pending*
+- [x] **2.7** Camera, transforms, frustum culling, LOD selection by distance — *unit-tested + proven live in the scene render (behind-camera culled, far tower at LOD1)*
+- [x] **2.8** Placeholder rendering path: engine-generated primitive volumes (box/cylinder/capsule) with distinct visual treatment — *hatched amber treatment rendering at declared proportions; text label deferred to the UI overlay*
 
-**Exit criteria:** an imported glTF scene renders with LODs under a fixed GPU memory budget; a declared-size placeholder box renders through the same path.
+**Exit criteria:** an imported glTF scene renders with LODs under a fixed GPU memory budget; a declared-size placeholder box renders through the same path. — *Met headlessly by `tools/vk_scene` (imported glTF + LOD towers + placeholders, GPU budget verified back to zero); on-device rendering still requires the 2.1 surface half.*
 
 ## Phase 3 — Game framework v1
 

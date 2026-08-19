@@ -29,6 +29,17 @@ jobs:
       - name: Vulkan smoke (headless GPU commands + pixel verification)
         run: ./build/tools/vk_smoke/mge_vk_smoke
 
+      - name: Bake sample asset (glTF -> mgemesh)
+        run: ./build/tools/asset_import/mge_asset_import tests/data/cube.gltf build/cube.mgemesh
+
+      - name: Scene render (culling, LOD, placeholders, imported asset)
+        run: ./build/tools/vk_scene/mge_vk_scene build/vk_scene.ppm build/cube.mgemesh
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: vk-scene-capture
+          path: build/vk_scene.ppm
+
   android-apk:
     name: Android APK (arm64, NDK)
     runs-on: ubuntu-latest

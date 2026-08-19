@@ -113,16 +113,32 @@ struct Mat4 {
         return r;
     }
 
-    // Vulkan-style perspective: right-handed, depth 0..1, Y flipped by the caller if needed.
+    // Vulkan-style perspective: right-handed, depth 0..1, Y negated for
+    // Vulkan's downward clip-space Y (keeps CCW front faces correct).
     static Mat4 perspective(float fovYRadians, float aspect, float nearZ, float farZ) {
         Mat4 r;
         const float f = 1.0f / std::tan(fovYRadians * 0.5f);
         r.m[0] = f / aspect;
-        r.m[5] = f;
+        r.m[5] = -f;
         r.m[10] = farZ / (nearZ - farZ);
         r.m[11] = -1.0f;
         r.m[14] = (nearZ * farZ) / (nearZ - farZ);
         r.m[15] = 0.0f;
+        return r;
+    }
+
+    // Right-handed view matrix looking from eye toward target.
+    static Mat4 lookAt(const Vec3& eye, const Vec3& target, const Vec3& up) {
+        const Vec3 f = (target - eye).normalized();   // forward
+        const Vec3 s = f.cross(up).normalized();      // right
+        const Vec3 u = s.cross(f);                    // corrected up
+        Mat4 r;
+        r.m[0] = s.x;  r.m[4] = s.y;  r.m[8] = s.z;
+        r.m[1] = u.x;  r.m[5] = u.y;  r.m[9] = u.z;
+        r.m[2] = -f.x; r.m[6] = -f.y; r.m[10] = -f.z;
+        r.m[12] = -s.dot(eye);
+        r.m[13] = -u.dot(eye);
+        r.m[14] = f.dot(eye);
         return r;
     }
 
