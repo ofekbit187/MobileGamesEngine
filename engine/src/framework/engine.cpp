@@ -1,6 +1,7 @@
 #include "mge/framework/engine.h"
 
 #include "mge/core/log.h"
+#include "mge/framework/camera_controller.h"
 
 namespace mge {
 
@@ -29,6 +30,7 @@ bool Engine::init(const EngineConfig& config) {
     }
     jobs_ = std::make_unique<JobSystem>();
     io_ = std::make_unique<AsyncIO>();
+    world_ = std::make_unique<World>(config.worldEntityCapacity);
 
     initialized_ = true;
     MGE_LOGI(kTag, "engine initialized (fixed step %.4fs, frame arena %zu KiB)",
@@ -43,6 +45,7 @@ void Engine::shutdown() {
     io_.reset();
     jobs_->drainAll();
     jobs_.reset();
+    world_.reset();
     frameArena_.reset();
     initialized_ = false;
     MGE_LOGI(kTag, "engine shut down after %llu frames / %llu sim steps",
@@ -54,12 +57,14 @@ void Engine::onSurfaceCreated(int widthPx, int heightPx) {
     surfaceReady_ = true;
     surfaceWidth_ = widthPx;
     surfaceHeight_ = heightPx;
+    controls_.configure(static_cast<float>(widthPx), static_cast<float>(heightPx));
     MGE_LOGI(kTag, "surface created %dx%d", widthPx, heightPx);
 }
 
 void Engine::onSurfaceChanged(int widthPx, int heightPx) {
     surfaceWidth_ = widthPx;
     surfaceHeight_ = heightPx;
+    controls_.configure(static_cast<float>(widthPx), static_cast<float>(heightPx));
 }
 
 void Engine::onSurfaceLost() {
@@ -86,8 +91,7 @@ void Engine::drainInput() {
     while (inputQueue_.pop(event)) {
         lastTouch_ = event;
         ++stats_.inputEventCount;
-        // Control schemes (task 3.5) consume these; until then the drain keeps
-        // the queue bounded and the stats honest.
+        controls_.handle(event);
     }
 }
 
@@ -115,10 +119,23 @@ void Engine::tick(double dtSeconds) {
 }
 
 void Engine::simulateStep(double stepSeconds) {
-    // Simulation systems land here in phase order: input intents, characters,
-    // streaming tick, UI update. For the prototype the step only exercises the
-    // per-frame arena the way real systems will.
-    (void)stepSeconds;
+    // Order per architecture: input intents -> player control -> world step.
+    // (Streaming tick and UI update join this sequence in their phases.)
+    const GameplayIntents intents = controls_.consume();
+
+    if (world_->entities().isAlive(player_)) {
+        TransformComponent* t = world_->transform(player_);
+        MovementComponent* m = world_->movement(player_);
+        if (t != nullptr && m != nullptr) {
+            t->yaw += intents.lookX * config_.turnSensitivity;
+            const Vec3 forward = yawForward(t->yaw);
+            const Vec3 right = yawRight(t->yaw);
+            m->velocity = (right * intents.moveX + forward * intents.moveY) * m->maxSpeed;
+        }
+    }
+
+    world_->step(stepSeconds);
+
     void* scratch = frameArena_->alloc(256);
     (void)scratch;
 }

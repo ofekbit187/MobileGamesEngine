@@ -7,6 +7,7 @@
 // detectable, memory use is not negotiable.
 
 #include <atomic>
+#include <cstddef>
 #include <cstdint>
 
 namespace mge {

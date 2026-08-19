@@ -24,6 +24,7 @@ if [ -x build/tools/vk_smoke/mge_vk_smoke ]; then
     ./build/tools/vk_smoke/mge_vk_smoke build/vk_smoke.ppm | grep -E "device|pixels|OK"
     ./build/tools/asset_import/mge_asset_import tests/data/cube.gltf build/cube.mgemesh
     ./build/tools/vk_scene/mge_vk_scene build/vk_scene.ppm build/cube.mgemesh | grep -E "submitted|share|OK"
+    ./build/tools/template_game/mge_template_game build/walk build/cube.mgemesh | grep -E "fulfilled|capture|traveled|OK"
 else
     echo "vk_smoke/vk_scene: SKIPPED (no Vulkan SDK — apt-get install libvulkan-dev mesa-vulkan-drivers)"
 fi

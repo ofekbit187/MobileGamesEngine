@@ -9,6 +9,7 @@ add_executable(mge_tests
     test_io.cpp
     test_graphics_cpu.cpp
     test_mesh_io.cpp
+    test_framework_game.cpp
     test_engine.cpp
 )
 

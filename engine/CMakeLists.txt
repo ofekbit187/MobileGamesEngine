@@ -7,6 +7,9 @@ add_library(mge_core STATIC
     src/core/jobs.cpp
     src/core/io.cpp
     src/framework/engine.cpp
+    src/framework/world.cpp
+    src/framework/controls.cpp
+    src/framework/asset_registry.cpp
     src/graphics/primitives.cpp
     src/graphics/mesh_io.cpp
 )

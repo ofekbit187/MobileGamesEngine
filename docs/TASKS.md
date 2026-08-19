@@ -51,15 +51,15 @@ Status legend: `[ ]` not started · `[~]` in progress · `[x]` done
 
 *Goal: what a "game" is — loop, world, entities, controls — with the template project.*
 
-- [ ] **3.1** Fixed-step game loop with render interpolation, orchestrating the Phase 1 lanes
-- [ ] **3.2** Entity/component model: compact data-oriented storage, stable IDs, pooling (P1)
-- [ ] **3.3** World model: continuous 3D space partitioned into chunk regions (streaming-ready even before streaming lands)
-- [ ] **3.4** Asset registry: stable asset IDs, reference counting, resolve-by-ID with "not resident" as a normal answer (P2 prerequisite)
-- [ ] **3.5** Input pipeline → control schemes → gameplay intents; touch-native default scheme (virtual stick + camera drag + action buttons, logic only — widgets arrive in Phase 5)
-- [ ] **3.6** Game template v0: new-game scaffold with working world, controls, camera, and a placed mix of real + placeholder models
-- [ ] **3.7** Third-person/first-person camera controllers for the default scheme
+- [x] **3.1** Fixed-step game loop with render interpolation, orchestrating the Phase 1 lanes — *Engine::tick: input drain → intents → player control → world step; renderAlpha() interpolates prev/current sim state*
+- [~] **3.2** Entity/component model: compact data-oriented storage, stable IDs, pooling (P1) — *index+generation ids, fixed-capacity refuse-at-cap registry, parallel component arrays; archetype/pooled component growth later*
+- [~] **3.3** World model: continuous 3D space partitioned into chunk regions — *components, chunk-coordinate addressing, movement step with prev-state; per-chunk entity lists arrive with streaming (Phase 4)*
+- [~] **3.4** Asset registry: stable asset IDs, resolve-by-ID with "not resident" as a normal answer — *FNV-1a ids, mesh + virtual-model kinds, GPU residency cache resolving to null when absent; reference counting pending Phase 4 eviction*
+- [x] **3.5** Input pipeline → control schemes → gameplay intents; touch-native default scheme (virtual stick + camera drag + tap actions, logic only — widgets arrive in Phase 5)
+- [~] **3.6** Game template v0: new-game scaffold with working world, controls, camera, and a placed mix of real + placeholder models — *`tools/template_game`: scripted-touch walkthrough with captures, runs in CI; save wiring and on-device run pending*
+- [x] **3.7** Third-person/first-person camera controllers for the default scheme
 
-**Exit criteria:** the template game: walk a character around a small hand-built world of real and placeholder models on a touchscreen.
+**Exit criteria:** the template game: walk a character around a small hand-built world of real and placeholder models on a touchscreen. — *Met headlessly: the full stack (touch events → control scheme → player → world → interpolated third-person render) walks the character through the hamlet in `tools/template_game`; the literal touchscreen needs the 2.1 surface half.*
 
 ## Phase 4 — World streaming
 
@@ -111,12 +111,12 @@ Status legend: `[ ]` not started · `[~]` in progress · `[x]` done
 
 *Goal: P5 fully realized — author worlds asset-free, fulfill assets later via external agents.*
 
-- [ ] **7.1** Virtual model asset type: ID, proportions, shape hint, structured description, gameplay metadata
-- [ ] **7.2** Authoring API: declare + place virtual models in the world exactly like real models
-- [ ] **7.3** Placeholder integration: correct size/position/orientation via the Phase 2 placeholder path; collidable/interactable per metadata
+- [~] **7.1** Virtual model asset type: ID, proportions, shape hint, structured description, gameplay metadata — *in AssetRegistry (Phase 3); structured description schema + richer metadata pending*
+- [~] **7.2** Authoring API: declare + place virtual models in the world exactly like real models — *registerVirtualModel + place-by-id working in the template game*
+- [~] **7.3** Placeholder integration: correct size/position/orientation via the Phase 2 placeholder path; collidable/interactable per metadata — *rendering at declared proportions verified; collision pending physics queries*
 - [ ] **7.4** Description schema designed for external-agent consumption (what/style/materials/features), with validation
 - [ ] **7.5** Manifest export: list of unfulfilled virtual models (ID + proportions + description) for external agents
-- [ ] **7.6** Fulfillment: import a produced model under a virtual ID → replaces placeholder everywhere, zero scene edits; proportion-mismatch warnings
+- [~] **7.6** Fulfillment: import a produced model under a virtual ID → replaces placeholder everywhere, zero scene edits; proportion-mismatch warnings — *registry-level fulfill() working (template's crate is fulfilled by the imported glTF asset live); streamed-world propagation pending Phase 4*
 - [ ] **7.7** Round-trip demo: author placeholder world → export manifest → fulfill with generated models → same world, real assets
 
 **Exit criteria:** the round-trip demo works end-to-end with no scene changes between placeholder and fulfilled states.
