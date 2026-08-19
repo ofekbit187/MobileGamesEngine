@@ -70,14 +70,34 @@ class GameActivity : Activity(), SurfaceHolder.Callback, Choreographer.FrameCall
 
     override fun onTouchEvent(event: MotionEvent): Boolean {
         val actionMasked = event.actionMasked
-        val index = event.actionIndex
-        EngineBridge.nativeTouchEvent(
-            event.getPointerId(index),
-            actionMasked,
-            event.getX(index),
-            event.getY(index),
-            event.eventTime * 1_000_000,
-        )
+        val timeNs = event.eventTime * 1_000_000
+        when (actionMasked) {
+            // MOVE batches ALL active pointers into one event (actionIndex is
+            // meaningless here) — forward each finger, or the second pointer
+            // never moves and walking + looking can't happen together.
+            MotionEvent.ACTION_MOVE ->
+                for (i in 0 until event.pointerCount) {
+                    EngineBridge.nativeTouchEvent(
+                        event.getPointerId(i), actionMasked, event.getX(i), event.getY(i), timeNs)
+                }
+            // CANCEL ends every active pointer at once.
+            MotionEvent.ACTION_CANCEL ->
+                for (i in 0 until event.pointerCount) {
+                    EngineBridge.nativeTouchEvent(
+                        event.getPointerId(i), actionMasked, event.getX(i), event.getY(i), timeNs)
+                }
+            // DOWN/UP/POINTER_DOWN/POINTER_UP concern exactly one pointer.
+            else -> {
+                val index = event.actionIndex
+                EngineBridge.nativeTouchEvent(
+                    event.getPointerId(index),
+                    actionMasked,
+                    event.getX(index),
+                    event.getY(index),
+                    timeNs,
+                )
+            }
+        }
         return true
     }
 }
