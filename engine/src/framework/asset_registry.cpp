@@ -86,6 +86,12 @@ bool AssetRegistry::fulfill(AssetId id, LodMesh mesh) {
     return true;
 }
 
+void AssetRegistry::unload(AssetId id) {
+    auto it = records_.find(id);
+    if (it == records_.end() || it->second->kind != AssetKind::Mesh) return;
+    it->second->mesh = LodMesh{};
+}
+
 const AssetRecord* AssetRegistry::find(AssetId id) const {
     auto it = records_.find(id);
     return it != records_.end() ? it->second.get() : nullptr;

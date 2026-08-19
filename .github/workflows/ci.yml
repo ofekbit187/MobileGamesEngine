@@ -26,6 +26,11 @@ jobs:
       - name: Host prototype runner (P1 gate — zero steady-state allocations)
         run: ./build/tools/host_runner/mge_host_runner
 
+      - name: Streaming scale test (P2/P10 — bounded memory, no flow breaks)
+        run: |
+          ./build/tools/stream_test/mge_stream_test bake build/ci.mgeworld 12 33
+          ./build/tools/stream_test/mge_stream_test run build/ci.mgeworld 30 48
+
       - name: Vulkan smoke (headless GPU commands + pixel verification)
         run: ./build/tools/vk_smoke/mge_vk_smoke
 

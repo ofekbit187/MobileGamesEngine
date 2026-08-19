@@ -12,6 +12,8 @@ add_library(mge_core STATIC
     src/framework/asset_registry.cpp
     src/graphics/primitives.cpp
     src/graphics/mesh_io.cpp
+    src/streaming/world_file.cpp
+    src/streaming/streaming_manager.cpp
 )
 
 target_include_directories(mge_core PUBLIC include)

@@ -26,13 +26,22 @@ struct LodHeader {
     float bounds[6];
 };
 
+void append(std::vector<uint8_t>& out, const void* data, size_t size) {
+    const uint8_t* bytes = static_cast<const uint8_t*>(data);
+    out.insert(out.end(), bytes, bytes + size);
+}
+
+bool read(const uint8_t*& cursor, size_t& remaining, void* dest, size_t size) {
+    if (remaining < size) return false;
+    memcpy(dest, cursor, size);
+    cursor += size;
+    remaining -= size;
+    return true;
+}
+
 }  // namespace
 
-bool writeMeshFile(const char* path, const LodMesh& mesh) {
-    if (mesh.lods.empty()) return false;
-    FILE* f = fopen(path, "wb");
-    if (f == nullptr) return false;
-
+void serializeMesh(const LodMesh& mesh, std::vector<uint8_t>& out) {
     FileHeader header{};
     memcpy(header.magic, kMagic, 4);
     header.version = kVersion;
@@ -43,9 +52,8 @@ bool writeMeshFile(const char* path, const LodMesh& mesh) {
     header.bounds[3] = mesh.bounds.max.x;
     header.bounds[4] = mesh.bounds.max.y;
     header.bounds[5] = mesh.bounds.max.z;
-    fwrite(&header, sizeof(header), 1, f);
+    append(out, &header, sizeof(header));
 
-    bool ok = true;
     for (size_t i = 0; i < mesh.lods.size(); ++i) {
         const MeshData& lod = mesh.lods[i];
         LodHeader lodHeader{};
@@ -59,25 +67,20 @@ bool writeMeshFile(const char* path, const LodMesh& mesh) {
         lodHeader.bounds[3] = lod.bounds.max.x;
         lodHeader.bounds[4] = lod.bounds.max.y;
         lodHeader.bounds[5] = lod.bounds.max.z;
-        ok = ok && fwrite(&lodHeader, sizeof(lodHeader), 1, f) == 1;
-        ok = ok && fwrite(lod.vertices.data(), sizeof(Vertex), lod.vertices.size(), f) ==
-                       lod.vertices.size();
-        ok = ok && fwrite(lod.indices.data(), sizeof(uint32_t), lod.indices.size(), f) ==
-                       lod.indices.size();
+        append(out, &lodHeader, sizeof(lodHeader));
+        append(out, lod.vertices.data(), lod.vertices.size() * sizeof(Vertex));
+        append(out, lod.indices.data(), lod.indices.size() * sizeof(uint32_t));
     }
-    fclose(f);
-    return ok;
 }
 
-bool readMeshFile(const char* path, LodMesh& out) {
-    FILE* f = fopen(path, "rb");
-    if (f == nullptr) return false;
+bool deserializeMesh(const uint8_t* data, size_t size, LodMesh& out) {
+    const uint8_t* cursor = data;
+    size_t remaining = size;
 
     FileHeader header{};
-    if (fread(&header, sizeof(header), 1, f) != 1 || memcmp(header.magic, kMagic, 4) != 0 ||
-        header.version != kVersion || header.lodCount == 0 || header.lodCount > 16) {
-        MGE_LOGE("mesh_io", "bad mesh file: %s", path);
-        fclose(f);
+    if (!read(cursor, remaining, &header, sizeof(header)) ||
+        memcmp(header.magic, kMagic, 4) != 0 || header.version != kVersion ||
+        header.lodCount == 0 || header.lodCount > 16) {
         return false;
     }
 
@@ -86,25 +89,55 @@ bool readMeshFile(const char* path, LodMesh& out) {
     out.bounds.max = {header.bounds[3], header.bounds[4], header.bounds[5]};
     out.lods.resize(header.lodCount);
 
-    bool ok = true;
-    for (uint32_t i = 0; i < header.lodCount && ok; ++i) {
+    for (uint32_t i = 0; i < header.lodCount; ++i) {
         LodHeader lodHeader{};
-        ok = fread(&lodHeader, sizeof(lodHeader), 1, f) == 1;
-        if (!ok) break;
+        if (!read(cursor, remaining, &lodHeader, sizeof(lodHeader))) return false;
         MeshData& lod = out.lods[i];
         lod.vertices.resize(lodHeader.vertexCount);
         lod.indices.resize(lodHeader.indexCount);
-        ok = fread(lod.vertices.data(), sizeof(Vertex), lodHeader.vertexCount, f) ==
-                 lodHeader.vertexCount &&
-             fread(lod.indices.data(), sizeof(uint32_t), lodHeader.indexCount, f) ==
-                 lodHeader.indexCount;
+        if (!read(cursor, remaining, lod.vertices.data(),
+                  lodHeader.vertexCount * sizeof(Vertex)) ||
+            !read(cursor, remaining, lod.indices.data(),
+                  lodHeader.indexCount * sizeof(uint32_t))) {
+            out = LodMesh{};
+            return false;
+        }
         lod.bounds.min = {lodHeader.bounds[0], lodHeader.bounds[1], lodHeader.bounds[2]};
         lod.bounds.max = {lodHeader.bounds[3], lodHeader.bounds[4], lodHeader.bounds[5]};
         if (i + 1 < header.lodCount) out.switchDistances.push_back(lodHeader.switchDistance);
     }
+    return true;
+}
+
+bool writeMeshFile(const char* path, const LodMesh& mesh) {
+    if (mesh.lods.empty()) return false;
+    std::vector<uint8_t> blob;
+    serializeMesh(mesh, blob);
+    FILE* f = fopen(path, "wb");
+    if (f == nullptr) return false;
+    const bool ok = fwrite(blob.data(), 1, blob.size(), f) == blob.size();
     fclose(f);
-    if (!ok) out = LodMesh{};
     return ok;
+}
+
+bool readMeshFile(const char* path, LodMesh& out) {
+    FILE* f = fopen(path, "rb");
+    if (f == nullptr) return false;
+    fseek(f, 0, SEEK_END);
+    const long size = ftell(f);
+    fseek(f, 0, SEEK_SET);
+    if (size <= 0) {
+        fclose(f);
+        return false;
+    }
+    std::vector<uint8_t> blob(static_cast<size_t>(size));
+    const bool readOk = fread(blob.data(), 1, blob.size(), f) == blob.size();
+    fclose(f);
+    if (!readOk || !deserializeMesh(blob.data(), blob.size(), out)) {
+        MGE_LOGE("mesh_io", "bad mesh file: %s", path);
+        return false;
+    }
+    return true;
 }
 
 }  // namespace mge

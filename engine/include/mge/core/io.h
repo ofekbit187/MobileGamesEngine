@@ -54,6 +54,21 @@ struct IoRequest {
 
     IoStatus status() const { return status_.load(std::memory_order_acquire); }
 
+    // Clears a completed (or never-submitted) request for reuse. Never call
+    // while status() is Pending.
+    void reset() {
+        path = nullptr;
+        offset = 0;
+        dest = nullptr;
+        size = 0;
+        priority = IoPriority::Normal;
+        onComplete = nullptr;
+        user = nullptr;
+        bytesRead = 0;
+        errorCode = 0;
+        status_.store(IoStatus::Idle, std::memory_order_release);
+    }
+
 private:
     friend class AsyncIO;
     std::atomic<IoStatus> status_{IoStatus::Idle};

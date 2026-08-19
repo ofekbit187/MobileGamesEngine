@@ -68,6 +68,16 @@ public:
 
     const AssetRecord* find(AssetId id) const;  // nullptr = unknown id
 
+    // Streaming residency (P2): a registered mesh whose payload has been
+    // dropped is known but not resident — callers degrade, never crash.
+    bool resident(AssetId id) const {
+        const AssetRecord* record = find(id);
+        return record != nullptr && !record->mesh.lods.empty();
+    }
+    // Drops a mesh asset's payload (keeps the record + id). Virtual models
+    // keep their placeholder volume — they are always "resident".
+    void unload(AssetId id);
+
     // Manifest of unfulfilled virtual models for external agents (task 7.5).
     void unfulfilled(std::vector<const AssetRecord*>& out) const;
 
