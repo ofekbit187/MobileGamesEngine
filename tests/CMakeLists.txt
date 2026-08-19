@@ -14,6 +14,8 @@ add_executable(mge_tests
     test_ui.cpp
     test_save.cpp
     test_fulfillment.cpp
+    test_character.cpp
+    test_humanoid.cpp
     test_engine.cpp
 )
 

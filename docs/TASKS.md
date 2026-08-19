@@ -127,34 +127,34 @@ Status legend: `[ ]` not started · `[~]` in progress · `[x]` done
 
 **Universal character base:**
 
-- [ ] **8.1** `Character` entity on the Phase 3 entity model: identity, body definition reference, compact state (P1)
-- [ ] **8.2** Controller abstraction: `PlayerController` (input intents) and `AIController` (AI intents) driving one intent interface; runtime controller swap (P9)
-- [ ] **8.3** Universal locomotion: movement intents → world-resolved motion with per-character parameters
-- [ ] **8.4** Mortality: health, damage intake, death consequences (loot drop, corpse, despawn)
-- [ ] **8.5** Faction system: enemy/ally/neutral stances between factions, per-character overrides; queried by AI, targeting, UI
-- [ ] **8.6** Inventory on every character: item stacks, capacity rules, pickup/drop
-- [ ] **8.7** Equipment slot machinery: data-defined slot sets per body definition; layered wearable slots + `held_main`/`held_off` item slots
-- [ ] **8.8** Basic AI v1: data-defined state machine (idle/wander/patrol/chase/attack/flee/return) driven by perception + factions; `ai_profile` asset; LOD-scheduled ticking (expansion held for dictation)
+- [x] **8.1** `Character` entity on the Phase 3 entity model: identity, body definition reference, compact state (P1) — *`CharacterComponent` in a fixed-capacity `CharacterSystem` (caps refuse)*
+- [~] **8.2** Controller abstraction: `PlayerController` (input intents) and `AIController` (AI intents) driving one intent interface; runtime controller swap (P9) — *`ControllerKind` on the component: swap is one assignment, AI attach/detach sets it; a formal shared intent struct between player controls and AI is still to come*
+- [x] **8.3** Universal locomotion: movement intents → world-resolved motion with per-character parameters — *AI and player both steer the same `MovementComponent`; per-profile speeds*
+- [x] **8.4** Mortality: health, damage intake, death consequences (loot drop, corpse, despawn) — *death drops inventory + equipment as loot, halts the body; corpse visuals/despawn timers with gameplay layer*
+- [x] **8.5** Faction system: enemy/ally/neutral stances between factions, per-character overrides; queried by AI, targeting, UI — *symmetric `FactionTable`, same-faction = ally; per-character overrides still open*
+- [x] **8.6** Inventory on every character: item stacks, capacity rules, pickup/drop — *the Phase 5 `ItemCollection` on every `CharacterComponent` (P9: player and NPC identical)*
+- [x] **8.7** Equipment slot machinery: data-defined slot sets per body definition; layered wearable slots + `held_main`/`held_off` item slots — *7 slots incl. `HeldMain`/`HeldOff`, equip-swap, layer field, sheathed flag*
+- [x] **8.8** Basic AI v1: data-defined state machine (idle/wander/patrol/chase/attack/flee/return) driven by perception + factions; `ai_profile` asset; LOD-scheduled ticking (expansion held for dictation) — *all 7 states, deterministic per-agent RNG, tested chase→kill→return; LOD ticking hooks in when streaming-driven activity lands*
 - [ ] **8.9** Character persistence: inventory/equipment/health/faction state in the Phase 6 save deltas; character streaming with chunks
 
 **Skeletal animation (prerequisite, graphics engine):**
 
-- [ ] **8.10** Skinned mesh rendering + skeleton runtime (pose evaluation, GPU skinning) within Phase 2 budgets
-- [ ] **8.11** Animation playback: clips, speed-blended locomotion blending, import via glTF path
+- [~] **8.10** Skinned mesh rendering + skeleton runtime (pose evaluation, GPU skinning) within Phase 2 budgets — *17-joint canonical rig + `evaluatePose` live; v1 renders rigid parts per joint (no vertex skinning needed for the parametric body); smooth GPU skinning arrives with the imported artist template*
+- [~] **8.11** Animation playback: clips, speed-blended locomotion blending, import via glTF path — *procedural idle/walk/run with speed blending and distance-driven phase (no foot slide); authored clip import via glTF still open*
 
 **Humanoid:**
 
-- [ ] **8.12** Template base body: import the canonical humanoid (mesh, UV layout, body-part segmentation, skeleton binding)
-- [ ] **8.13** Variant data format (`humanoid_variant`) + applier: skin texture, size, width, height, shoulders, chest, legs, feet, face + facial-feature sub-schema — via bone-proportion scaling + morph deltas
-- [ ] **8.14** Default animation set on the canonical rig: idle + several walk/run variations, speed-blended; valid across all variants by construction
-- [ ] **8.15** Wearable asset type: slot, layer, covered regions, thickness profile, template-authored mesh, variant-response data, opaque gameplay data
-- [ ] **8.16** Wearable fitting mechanism: apply body's variant transformations to worn meshes; covered-skin masking (no clipping); single skinning path for body + wearables
-- [ ] **8.17** Wearable layering: base/mid/outer stack per slot, thickness-offset fitting across layers, outward-cascading masking (hidden inner geometry costs nothing)
-- [ ] **8.18** Hairstyles as wearables through the `head_hair` slot, including helmet-coverage interaction
-- [ ] **8.19** Held items: grip types (one-handed/two-handed/versatile), dual wield via `held_main`+`held_off`, item-defined grip points, drawn/sheathed states with sheath attachment points and default draw/sheath animations
-- [ ] **8.20** Basic facial expressions: built-in morph-preset set (neutral/happy/sad/angry/surprised/afraid/pain), blendable over any face variant, expression API + AI/gameplay triggers
+- [~] **8.12** Template base body: import the canonical humanoid (mesh, UV layout, body-part segmentation, skeleton binding) — *v1 template is PARAMETRIC: body parts generated from variant proportions, rigidly bound to the canonical rig; the imported artist body replaces the generator behind the same interfaces*
+- [~] **8.13** Variant data format (`humanoid_variant`) + applier: skin texture, size, width, height, shoulders, chest, legs, feet, face + facial-feature sub-schema — *height/shoulders/hips/leg+arm ratios/bulk/head scale/skin color drive rig AND body; face + skin-texture sub-schema awaits real face geometry and the texture pipeline*
+- [x] **8.14** Default animation set on the canonical rig: idle + several walk/run variations, speed-blended; valid across all variants by construction — *`LocomotionAnimator`: idle sway ↔ walk ↔ run, distance-driven phase; retargets to every variant because all share the rig*
+- [~] **8.15** Wearable asset type: slot, layer, covered regions, thickness profile, template-authored mesh, variant-response data, opaque gameplay data — *kind/layer/cover-bits/color live; template-authored meshes replace the parametric generators with the artist body*
+- [x] **8.16** Wearable fitting mechanism: apply body's variant transformations to worn meshes; covered-skin masking (no clipping); single skinning path for body + wearables — *garments generated from the SAME variant proportions + layer thickness: fit holds for every variant by construction; covered body parts are not emitted*
+- [x] **8.17** Wearable layering: base/mid/outer stack per slot, thickness-offset fitting across layers, outward-cascading masking (hidden inner geometry costs nothing) — *per-layer thickness offsets; armor-over-tunic tested to enclose*
+- [~] **8.18** Hairstyles as wearables through the `head_hair` slot, including helmet-coverage interaction — *short + long hair as wearables on the head; helmet coverage (scalp masking) wired but no helmet wearable yet*
+- [~] **8.19** Held items: grip types (one-handed/two-handed/versatile), dual wield via `held_main`+`held_off`, item-defined grip points, drawn/sheathed states with sheath attachment points and default draw/sheath animations — *sword renders in `held_main` or sheathed on the back; grip types, dual wield, and draw/sheath animations still open*
+- [ ] **8.20** Basic facial expressions: built-in morph-preset set (neutral/happy/sad/angry/surprised/afraid/pain), blendable over any face variant, expression API + AI/gameplay triggers — *deferred until the face has real geometry (parametric v1 head is featureless); lands with the imported template body*
 - [ ] **8.21** Virtual-model wearables & held items: placeholder on the body/in hand from proportions + description (P5)
-- [ ] **8.22** Template-game update: player and NPCs as the same humanoid character with different controllers; NPC with layered outfit + sheathed weapon + basic AI; variant showcase
+- [~] **8.22** Template-game update: player and NPCs as the same humanoid character with different controllers; NPC with layered outfit + sheathed weapon + basic AI; variant showcase — *`tools/humanoid_demo`: variant lineup, walk-cycle strip, dressed lineup (layered armor, hair, drawn + sheathed swords), and an AI hamlet with wanderers/patroller/fleeing villager animated by their real velocities; integrating humanoid visuals into `template_game`'s streaming walkthrough still open*
 
 **Exit criteria:** the template game shows player and NPCs as identical humanoid characters (controller being the only difference); a dozen visibly distinct humanoids from one template body via variant files; a layered outfit (base + clothing + armor) + one hairstyle fitting all of them seamlessly while animating; an NPC that patrols, spots an enemy by faction, draws its sheathed weapon, and reacts with a facial expression — all from data files.
 

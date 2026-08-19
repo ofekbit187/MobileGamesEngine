@@ -40,10 +40,16 @@ jobs:
       - name: Scene render (culling, LOD, placeholders, imported asset)
         run: ./build/tools/vk_scene/mge_vk_scene build/vk_scene.ppm build/cube.mgemesh
 
+      - name: Humanoid demo (variants, walk cycle, wearables, AI hamlet)
+        run: ./build/tools/humanoid_demo/mge_humanoid_demo build
+
       - uses: actions/upload-artifact@v4
         with:
           name: vk-scene-capture
-          path: build/vk_scene.ppm
+          path: |
+            build/vk_scene.ppm
+            build/humanoid_*.ppm
+            build/hamlet_*.ppm
 
   android-apk:
     name: Android APK (arm64, NDK)
