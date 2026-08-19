@@ -36,10 +36,16 @@ enum class AssetKind : uint8_t {
 
 enum class PlaceholderShape : uint8_t { Box = 0, Cylinder, Capsule };
 
+// Structured for external-agent consumption (task 7.4): `description` says
+// WHAT the asset is; the optional fields pin down how it should look. An
+// agent (human artist or generative tool) receives these via the manifest.
 struct VirtualModelDesc {
-    Vec3 proportions{1, 1, 1};  // full extents (w, h, d)
+    Vec3 proportions{1, 1, 1};  // full extents (w, h, d), meters
     PlaceholderShape shape = PlaceholderShape::Box;
-    std::string description;  // written for the external agent that will build it
+    std::string description;  // what it is, e.g. "wooden market stall"
+    std::string style;        // art direction, e.g. "rustic medieval, hand-hewn"
+    std::string materials;    // dominant materials, e.g. "oak, canvas, rope"
+    std::string features;     // distinguishing details, e.g. "striped roof, worn planks"
     bool collidable = true;
 };
 

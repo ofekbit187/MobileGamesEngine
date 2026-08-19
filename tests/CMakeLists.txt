@@ -13,6 +13,7 @@ add_executable(mge_tests
     test_streaming.cpp
     test_ui.cpp
     test_save.cpp
+    test_fulfillment.cpp
     test_engine.cpp
 )
 

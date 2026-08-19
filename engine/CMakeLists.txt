@@ -12,6 +12,7 @@ add_library(mge_core STATIC
     src/framework/asset_registry.cpp
     src/framework/delta_log.cpp
     src/framework/save.cpp
+    src/framework/virtual_models.cpp
     src/graphics/primitives.cpp
     src/graphics/mesh_io.cpp
     src/streaming/world_file.cpp

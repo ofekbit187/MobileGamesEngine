@@ -105,6 +105,17 @@ MeshData makeCapsule(float radius, float height, int segments, int rings) {
     return m;
 }
 
+void appendMesh(MeshData& dst, const MeshData& src, const Vec3& offset) {
+    const uint32_t base = static_cast<uint32_t>(dst.vertices.size());
+    dst.vertices.reserve(dst.vertices.size() + src.vertices.size());
+    for (const Vertex& v : src.vertices) {
+        dst.vertices.push_back({v.position + offset, v.normal});
+    }
+    dst.indices.reserve(dst.indices.size() + src.indices.size());
+    for (uint32_t index : src.indices) dst.indices.push_back(base + index);
+    dst.computeBounds();
+}
+
 MeshData makePlane(float width, float depth) {
     MeshData m;
     const float x = width * 0.5f, z = depth * 0.5f;

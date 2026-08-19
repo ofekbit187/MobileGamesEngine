@@ -21,4 +21,8 @@ MeshData makeCapsule(float radius, float height, int segments = 24, int rings = 
 // Flat XZ plane centered at origin, normal +Y.
 MeshData makePlane(float width, float depth);
 
+// Merges src into dst at an offset — composing multi-part models from
+// primitives (used by tooling and fulfillment demos).
+void appendMesh(MeshData& dst, const MeshData& src, const Vec3& offset);
+
 }  // namespace mge

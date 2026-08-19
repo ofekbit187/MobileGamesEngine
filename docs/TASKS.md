@@ -111,15 +111,15 @@ Status legend: `[ ]` not started · `[~]` in progress · `[x]` done
 
 *Goal: P5 fully realized — author worlds asset-free, fulfill assets later via external agents.*
 
-- [~] **7.1** Virtual model asset type: ID, proportions, shape hint, structured description, gameplay metadata — *in AssetRegistry (Phase 3); structured description schema + richer metadata pending*
-- [~] **7.2** Authoring API: declare + place virtual models in the world exactly like real models — *registerVirtualModel + place-by-id working in the template game*
-- [~] **7.3** Placeholder integration: correct size/position/orientation via the Phase 2 placeholder path; collidable/interactable per metadata — *rendering at declared proportions verified; collision pending physics queries*
-- [ ] **7.4** Description schema designed for external-agent consumption (what/style/materials/features), with validation
-- [ ] **7.5** Manifest export: list of unfulfilled virtual models (ID + proportions + description) for external agents
-- [~] **7.6** Fulfillment: import a produced model under a virtual ID → replaces placeholder everywhere, zero scene edits; proportion-mismatch warnings — *registry-level fulfill() working (template's crate is fulfilled by the imported glTF asset live); streamed-world propagation pending Phase 4*
-- [ ] **7.7** Round-trip demo: author placeholder world → export manifest → fulfill with generated models → same world, real assets
+- [x] **7.1** Virtual model asset type: ID, proportions, shape hint, structured description, gameplay metadata — *description + style + materials + features + collidable; richer gameplay hooks (interactable) arrive with Phase 8*
+- [x] **7.2** Authoring API: declare + place virtual models in the world exactly like real models — *registry + world-baker paths both working*
+- [~] **7.3** Placeholder integration: correct size/position/orientation via the placeholder path — *rendering verified; collision pending physics queries*
+- [x] **7.4** Description schema for external-agent consumption (what/style/materials/features) with validation — *validateVirtualModelDesc gates authoring*
+- [x] **7.5** Manifest export: JSON manifest of unfulfilled models (id, delivery filename, proportions, shape, structured description) — *re-export shrinks as models are fulfilled*
+- [x] **7.6** Fulfillment: baked model delivered under a virtual ID replaces the placeholder everywhere, zero scene edits; proportion-mismatch warnings — *fulfillFromDirectory ingests `<id>.mgemesh` deliveries; live GPU-cache invalidation is app-side; shipped-world patch packs remain a format-v2 item (ADR 0003)*
+- [x] **7.7** Round-trip demo: author placeholder world → export manifest → fulfill with agent-built models → same world, real assets — *`tools/fulfill_demo`, before/after renders, runs in CI*
 
-**Exit criteria:** the round-trip demo works end-to-end with no scene changes between placeholder and fulfilled states.
+**Exit criteria:** the round-trip demo works end-to-end with no scene changes between placeholder and fulfilled states. — *Met: same placement list renders both states; only the resolved assets differ.*
 
 ## Phase 8 — Character system
 
