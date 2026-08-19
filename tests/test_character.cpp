@@ -123,6 +123,97 @@ MGE_TEST(equipment_slots_swap_and_sheathe) {
     MGE_CHECK(!characters.setSheathed(hero, true));  // nothing held now
 }
 
+// ------------------------- persistence (8.9) --------------------------------
+
+MGE_TEST(character_state_survives_save_roundtrip) {
+    World world(32);
+    CharacterSystem characters(world);
+    const EntityId bandit = makeCharacter(world, characters, {0, 0, 0}, 3);
+    CharacterComponent* c = characters.get(bandit);
+    c->persistentId = 42;
+    c->controller = ControllerKind::Ai;
+    c->health = 0.35f;  // wounded — must stay wounded across sessions
+    c->inventory.add({assetIdFromName("item/coin"), "item.coin", 7, {1, 1, 0, 1}});
+    c->inventory.add({assetIdFromName("item/sword"), "item.sword", 1, {1, 1, 1, 1}});
+    MGE_CHECK(characters.equip(bandit, 1, EquipSlot::HeldMain));
+    MGE_CHECK(characters.setSheathed(bandit, true));
+
+    std::vector<SavedCharacter> saved;
+    characters.snapshot(saved);
+    MGE_CHECK(saved.size() == 1);
+
+    // "Next session": fresh world, fresh systems, new entity for the NPC.
+    World world2(32);
+    CharacterSystem characters2(world2);
+    const EntityId respawned = makeCharacter(world2, characters2, {0, 0, 0}, 0);
+    MGE_CHECK(characters2.restore(respawned, saved[0]) != nullptr);
+    const CharacterComponent* r = characters2.get(respawned);
+    MGE_CHECK(r->persistentId == 42);
+    MGE_CHECK(r->faction == 3);
+    MGE_CHECK(r->controller == ControllerKind::Ai);
+    MGE_CHECK_NEAR(r->health, 0.35f, 1e-6f);
+    MGE_CHECK(r->inventory.size() == 1);  // the coins; sword is equipped
+    MGE_CHECK(r->inventory.at(0)->count == 7);
+    const EquippedItem& held = r->equipment[static_cast<size_t>(EquipSlot::HeldMain)];
+    MGE_CHECK(held.item.asset == assetIdFromName("item/sword"));
+    MGE_CHECK(held.sheathed);
+    MGE_CHECK(characters2.findByPersistentId(42) == respawned);
+}
+
+MGE_TEST(dead_character_stays_dead_across_sessions) {
+    World world(32);
+    CharacterSystem characters(world);
+    const EntityId bandit = makeCharacter(world, characters, {0, 0, 0}, 3);
+    characters.get(bandit)->persistentId = 7;
+    MGE_CHECK(characters.damage(bandit, 2.0f));
+
+    std::vector<SavedCharacter> saved;
+    characters.snapshot(saved);
+    MGE_CHECK(saved.size() == 1 && saved[0].alive == 0);
+
+    World world2(32);
+    CharacterSystem characters2(world2);
+    const EntityId respawned = makeCharacter(world2, characters2, {0, 0, 0}, 3);
+    characters2.restore(respawned, saved[0]);
+    MGE_CHECK(!characters2.get(respawned)->alive);
+    MGE_CHECK(!characters2.damage(respawned, 1.0f));  // still no zombie
+}
+
+MGE_TEST(chunk_eviction_parks_character_state) {
+    // Character streaming (8.9): the NPC's entity dies with its chunk, but
+    // persistent state parks; when the chunk returns, a new entity picks the
+    // state back up. Memory stays bounded by character capacity (P1/P2).
+    World world(32);
+    CharacterSystem characters(world);
+    const EntityId npc = makeCharacter(world, characters, {100, 0, 100}, 2);
+    CharacterComponent* c = characters.get(npc);
+    c->persistentId = 9;
+    c->health = 0.5f;
+    c->inventory.add({assetIdFromName("item/rope"), "item.rope", 2, {1, 1, 1, 1}});
+    MGE_CHECK(characters.count() == 1);
+
+    // Chunk evicted: streaming despawns the entity out from under the system.
+    world.despawn(npc);
+    std::vector<SavedCharacter> parked;
+    characters.pruneDead(&parked);
+    MGE_CHECK(characters.count() == 0);
+    MGE_CHECK(parked.size() == 1 && parked[0].persistentId == 9);
+
+    // Chunk reloaded: the game respawns the NPC and restores by id.
+    const EntityId again = makeCharacter(world, characters, {100, 0, 100}, 0);
+    MGE_CHECK(characters.restore(again, parked[0]) != nullptr);
+    MGE_CHECK_NEAR(characters.get(again)->health, 0.5f, 1e-6f);
+    MGE_CHECK(characters.get(again)->inventory.size() == 1);
+
+    // Transient characters (persistentId 0) prune without parking.
+    const EntityId transient = makeCharacter(world, characters, {0, 0, 0}, 0);
+    world.despawn(transient);
+    parked.clear();
+    characters.pruneDead(&parked);
+    MGE_CHECK(parked.empty());
+    MGE_CHECK(characters.count() == 1);  // the restored NPC remains
+}
+
 // ------------------------------- AI ----------------------------------------
 
 MGE_TEST(ai_wander_stays_near_home) {
@@ -177,6 +268,42 @@ MGE_TEST(ai_guard_chases_attacks_and_returns) {
     }
     MGE_CHECK((world.transform(guard)->position).length() < 1.5f);
     MGE_CHECK(ai.stateOf(guard) == AiState::Idle);
+}
+
+MGE_TEST(ai_draws_on_contact_and_sheathes_after) {
+    // CHARACTERS.md §6.1: the guard's sword rests on his back until an enemy
+    // shows, comes out for the fight, and goes back after.
+    World world(64);
+    CharacterSystem characters(world);
+    AiSystem ai(world, characters);
+    characters.factions().set(1, 3, Stance::Enemy);
+
+    const EntityId guard = makeCharacter(world, characters, {0, 0, 0}, 1);
+    CharacterComponent* c = characters.get(guard);
+    c->inventory.add({assetIdFromName("item/sword"), "item.sword", 1, {1, 1, 1, 1}});
+    MGE_CHECK(characters.equip(guard, 0, EquipSlot::HeldMain));
+    MGE_CHECK(characters.setSheathed(guard, true));
+    AiProfile profile;
+    profile.aggressive = true;
+    profile.canWander = false;
+    MGE_CHECK(ai.attach(guard, profile));
+
+    const EntityId bandit = makeCharacter(world, characters, {8, 0, 0}, 3, 0.4f);
+    (void)bandit;
+
+    // Contact -> chase, and the sword is drawn.
+    ai.step(1.0f / 60.0f);
+    MGE_CHECK(ai.stateOf(guard) == AiState::Chase);
+    const auto slot = static_cast<size_t>(EquipSlot::HeldMain);
+    MGE_CHECK(!c->equipment[slot].sheathed);
+
+    // Fight to the end, walk home: sheathed again.
+    for (int i = 0; i < 60 * 30; ++i) {
+        ai.step(1.0f / 60.0f);
+        world.step(1.0 / 60.0);
+    }
+    MGE_CHECK(ai.stateOf(guard) == AiState::Idle);
+    MGE_CHECK(c->equipment[slot].sheathed);
 }
 
 MGE_TEST(ai_fearful_flees) {

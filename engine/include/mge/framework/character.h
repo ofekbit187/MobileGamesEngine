@@ -7,6 +7,7 @@
 // humanoid-only machinery (body, variants, wearables) lives in mge/character/.
 
 #include <cstdint>
+#include <vector>
 
 #include "mge/framework/items.h"
 #include "mge/framework/world.h"
@@ -79,10 +80,56 @@ struct CharacterComponent {
     float sightRange = 15.0f;
     // AI bookkeeping (indices into the AI system's state storage).
     uint16_t aiIndex = UINT16_MAX;
+    // Stable game-assigned identity for save files and streaming (task 8.9).
+    // 0 = transient: not persisted, state dies with the entity.
+    uint32_t persistentId = 0;
 
     ItemCollection inventory;                      // every character has one (P9)
     EquippedItem equipment[static_cast<size_t>(EquipSlot::Count)];
 };
+
+// ------------------------------------------------------------ intents (8.2) --
+// The shared controller contract: PLAYER and AI produce the same intent, one
+// applier resolves it against the world. Controllers differ in how the intent
+// is produced, never in how it acts (P9).
+struct CharacterIntent {
+    Vec3 move{};           // world-space movement vector (magnitude = throttle)
+    float speed = 0;       // target speed in m/s at full throttle
+    float lookDelta = 0;   // yaw change from look input (player camera)
+    bool faceMove = false; // face the movement direction (AI); player faces look
+};
+
+void applyIntent(World& world, EntityId entity, const CharacterIntent& intent);
+
+// -------------------------------------------------- persistence (task 8.9) --
+// The compact on-disk character record. Item name keys are not persisted —
+// identity is the asset id; presentation re-derives from the registry.
+struct SavedCharacterItem {
+    AssetId asset = kInvalidAsset;
+    uint32_t count = 0;
+    float color[4] = {1, 1, 1, 1};
+};
+
+struct SavedEquippedItem {
+    SavedCharacterItem item;
+    uint8_t layer = 1;
+    uint8_t sheathed = 0;
+};
+
+struct SavedCharacter {
+    uint32_t persistentId = 0;
+    float health = 1.0f;
+    float maxHealth = 1.0f;
+    FactionId faction = 0;
+    uint8_t alive = 1;
+    uint8_t controller = 0;  // ControllerKind — restored so NPCs resume as AI
+    float sightRange = 15.0f;
+    std::vector<SavedCharacterItem> items;
+    SavedEquippedItem equipment[static_cast<size_t>(EquipSlot::Count)];
+};
+
+void captureCharacter(const CharacterComponent& component, SavedCharacter& out);
+void applyCharacter(const SavedCharacter& saved, CharacterComponent& out);
 
 // Character storage: parallel to World entities, fixed capacity (P1).
 class CharacterSystem {
@@ -114,6 +161,18 @@ public:
     bool unequip(EntityId entity, EquipSlot slot);
     // Held-item state (CHARACTERS.md §6.1).
     bool setSheathed(EntityId entity, bool sheathed);
+
+    // Persistence + streaming (task 8.9). Snapshot captures every character
+    // with a persistentId; restore re-applies one onto a (new) entity after a
+    // load or a chunk reload. pruneDead frees slots whose world entity is gone
+    // (chunk evicted / entity despawned), parking persistent state into
+    // `parked` first so nothing a player did to an NPC is lost while its
+    // chunk is cold — memory stays bounded by character capacity, not world
+    // size (P1/P2).
+    void snapshot(std::vector<SavedCharacter>& out) const;
+    CharacterComponent* restore(EntityId entity, const SavedCharacter& saved);
+    void pruneDead(std::vector<SavedCharacter>* parked = nullptr);
+    EntityId findByPersistentId(uint32_t persistentId) const;
 
     template <typename F>
     void forEach(F&& f) {

@@ -79,6 +79,37 @@ MGE_TEST(save_roundtrip) {
     saves.removeSlot("test_slot");
 }
 
+MGE_TEST(characters_persist_in_save_files) {
+    // Task 8.9: SavedCharacter records ride the same atomic, checksummed
+    // save file as everything else — schema v3.
+    SaveManager saves(tmpDir().c_str());
+    SaveSnapshot snapshot = makeSnapshot();
+    SavedCharacter guard;
+    guard.persistentId = 11;
+    guard.health = 0.8f;
+    guard.faction = 1;
+    guard.controller = static_cast<uint8_t>(ControllerKind::Ai);
+    guard.items.push_back({assetIdFromName("item/bread"), 3, {1, 1, 1, 1}});
+    auto& held = guard.equipment[static_cast<size_t>(EquipSlot::HeldMain)];
+    held.item = {assetIdFromName("item/sword"), 1, {1, 1, 1, 1}};
+    held.sheathed = 1;
+    snapshot.characters.push_back(guard);
+
+    MGE_CHECK(saves.save("char_slot", snapshot));
+    SaveSnapshot loaded;
+    MGE_CHECK(saves.load("char_slot", loaded));
+    MGE_CHECK(loaded.characters.size() == 1);
+    const SavedCharacter& r = loaded.characters[0];
+    MGE_CHECK(r.persistentId == 11);
+    MGE_CHECK_NEAR(r.health, 0.8f, 1e-6f);
+    MGE_CHECK(r.faction == 1);
+    MGE_CHECK(r.items.size() == 1 && r.items[0].count == 3);
+    MGE_CHECK(r.equipment[static_cast<size_t>(EquipSlot::HeldMain)].item.asset ==
+              assetIdFromName("item/sword"));
+    MGE_CHECK(r.equipment[static_cast<size_t>(EquipSlot::HeldMain)].sheathed == 1);
+    saves.removeSlot("char_slot");
+}
+
 MGE_TEST(kill_test_death_mid_save_preserves_previous) {
     SaveManager saves(tmpDir().c_str());
 
@@ -171,6 +202,7 @@ MGE_TEST(schema_migration_v1_to_v2) {
     MGE_CHECK(saves.load("old_slot", loaded));
     MGE_CHECK_NEAR(loaded.player.position.x, 5.0f, 1e-6);
     MGE_CHECK_NEAR(loaded.player.health, 1.0f, 1e-6);  // migration default
+    MGE_CHECK(loaded.characters.empty());              // v2->v3: none recorded
 
     // A save from the future is rejected, never misread.
     header.schemaVersion = 999;

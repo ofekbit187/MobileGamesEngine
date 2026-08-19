@@ -1,21 +1,29 @@
-// Template game v0 (task 3.6): the "new game" starting point, run headlessly.
-// A world composed through the asset registry (real meshes + virtual models),
-// a player character driven by the touch control scheme, third-person camera,
-// and the full Engine fixed-step loop with render interpolation.
+// Template game v1 (tasks 3.6 + 8.22): the "new game" starting point, run
+// headlessly. A world composed through the asset registry (real meshes +
+// virtual models), and the Phase 8 exit criteria live: the player and the
+// NPCs are the SAME humanoid character — one component set, different
+// controllers (P9). The player walks under scripted touch control; a guard
+// in a layered outfit patrols with his sword sheathed on his back; a
+// villager wanders. Every body animates from its actual velocity. At the
+// end the characters' state rides a real save file and comes back (8.9).
 //
-// A scripted touch sequence walks the player through the hamlet; frames are
-// captured at waypoints (● real engine output for the review board). On
-// device the exact same stack runs — only the touch events and the surface
-// are real instead of scripted.
+// Frames are captured at waypoints (● real engine output for the review
+// board). On device the exact same stack runs — only the touch events and
+// the surface are real instead of scripted.
 
 #include <cstdio>
+#include <cstring>
 #include <string>
 #include <unordered_map>
 #include <vector>
 
+#include "mge/character/humanoid.h"
+#include "mge/framework/ai.h"
 #include "mge/framework/asset_registry.h"
 #include "mge/framework/camera_controller.h"
+#include "mge/framework/character.h"
 #include "mge/framework/engine.h"
+#include "mge/framework/save.h"
 #include "mge/graphics/mesh_io.h"
 #include "mge/graphics/primitives.h"
 #include "mge/graphics/renderer.h"
@@ -53,6 +61,50 @@ struct GpuAssetCache {
     }
 };
 
+// A humanoid's visual on the GPU: one mesh per rig part (same pattern as
+// tools/humanoid_demo; replaced by skinned rendering with the artist body).
+struct RigInstance {
+    Skeleton skeleton;
+    std::vector<RigPart> parts;
+    std::vector<GpuLodMesh> gpu;
+};
+
+bool uploadRig(Renderer& renderer, const HumanoidVariant& variant,
+               const WearableInstance* wearables, size_t wearableCount, RigInstance& out) {
+    out.skeleton = buildSkeleton(variant);
+    buildHumanoidVisual(variant, wearables, wearableCount, out.parts);
+    out.gpu.resize(out.parts.size());
+    for (size_t i = 0; i < out.parts.size(); ++i) {
+        LodMesh lod;
+        lod.lods.push_back(out.parts[i].mesh);
+        lod.computeBounds();
+        if (!renderer.uploadLodMesh(lod, out.gpu[i])) return false;
+    }
+    return true;
+}
+
+void destroyRig(Renderer& renderer, RigInstance& rig) {
+    for (GpuLodMesh& mesh : rig.gpu) renderer.destroyLodMesh(mesh);
+    rig.gpu.clear();
+}
+
+void emitRig(std::vector<DrawItem>& items, const RigInstance& rig, const Pose& pose,
+             const Vec3& position, float yaw) {
+    Mat4 world[kJointCount];
+    evaluatePose(rig.skeleton, pose, world);
+    const Mat4 root =
+        Mat4::translation(position) * Mat4::rotation(Quat::fromAxisAngle({0, 1, 0}, -yaw));
+    for (size_t i = 0; i < rig.parts.size(); ++i) {
+        DrawItem item;
+        item.mesh = &rig.gpu[i];
+        item.model = root * world[static_cast<size_t>(rig.parts[i].joint)];
+        item.worldBounds = Aabb::fromCenterExtents(position + Vec3{0, 1.2f, 0}, {3, 3, 3});
+        item.lodReference = position;
+        memcpy(item.baseColor, rig.parts[i].color, sizeof item.baseColor);
+        items.push_back(item);
+    }
+}
+
 TouchEvent touch(int32_t id, TouchAction action, float x, float y, int64_t timeNs) {
     TouchEvent e;
     e.pointerId = id;
@@ -70,6 +122,18 @@ bool savePpm(const char* path, const std::vector<uint8_t>& rgba, uint32_t w, uin
     for (size_t i = 0; i < rgba.size(); i += 4) fwrite(&rgba[i], 1, 3, f);
     fclose(f);
     return true;
+}
+
+WearableInstance colored(WearableKind kind, float r, float g, float b, uint8_t layer = 1,
+                         bool sheathed = false) {
+    WearableInstance w;
+    w.kind = kind;
+    w.layer = layer;
+    w.sheathed = sheathed;
+    w.color[0] = r;
+    w.color[1] = g;
+    w.color[2] = b;
+    return w;
 }
 
 }  // namespace
@@ -109,8 +173,6 @@ int main(int argc, char** argv) {
     const AssetId groundId = assets.registerMesh("world/ground", meshOf(makePlane(80, 80)));
     const AssetId houseId = assets.registerMesh("prop/house", meshOf(makeBox({3.2f, 2.6f, 2.8f})));
     const AssetId towerId = assets.registerMesh("prop/tower", meshOf(makeCylinder(1.2f, 7.0f, 32)));
-    const AssetId playerId = assets.registerMesh("char/villager_body",
-                                                meshOf(makeCapsule(0.35f, 1.8f, 20, 8)));
 
     VirtualModelDesc stallDesc;
     stallDesc.proportions = {2.4f, 2.1f, 1.8f};
@@ -159,13 +221,94 @@ int main(int argc, char** argv) {
     place(wellId, {3.0f, 0.7f, -4.5f}, 0, 0.85f, 0.55f, 0.18f);
     place(crateId, {-1.0f, 0.5f, -5.0f}, 0.2f, 0.85f, 0.55f, 0.18f);
 
-    const EntityId player = place(playerId, {0, 0.9f, 4.0f}, 0, 0.30f, 0.42f, 0.58f);
-    world.setMovement(player, MovementComponent{{}, 4.0f});
+    // --- Characters (Phase 8, P9): player and NPCs are the SAME entity kind,
+    //     the only difference is which controller steers them. ---
+    CharacterSystem characters(world);
+    AiSystem ai(world, characters);
+    characters.factions().set(1, 3, Stance::Enemy);  // guards vs bandits (none today)
+
+    auto spawnCharacter = [&](Vec3 pos, FactionId faction, uint32_t persistentId) {
+        const EntityId e = world.spawn();
+        TransformComponent t;
+        t.position = pos;
+        world.setTransform(e, t);
+        world.setMovement(e, MovementComponent{{}, 4.0f});
+        CharacterComponent* c = characters.attach(e);
+        c->faction = faction;
+        c->persistentId = persistentId;
+        return e;
+    };
+
+    const EntityId player = spawnCharacter({0, 0, 4.0f}, 0, 1);
+    characters.get(player)->controller = ControllerKind::Player;
     engine.setPlayerEntity(player);
 
-    // --- GPU residency ---
+    const EntityId guard = spawnCharacter({3.0f, 0, -2.0f}, 1, 2);
+    characters.get(guard)->inventory.add(
+        {assetIdFromName("item/sword"), "item.sword", 1, {0.72f, 0.75f, 0.79f, 1}});
+    characters.equip(guard, 0, EquipSlot::HeldMain);
+    characters.setSheathed(guard, true);  // on his back until trouble shows
+    AiProfile guardProfile;
+    guardProfile.canPatrol = true;
+    guardProfile.canWander = false;
+    guardProfile.aggressive = true;
+    guardProfile.patrolCount = 2;
+    guardProfile.patrolPoints[0] = {3.0f, 0, -2.0f};
+    guardProfile.patrolPoints[1] = {-3.5f, 0, -7.0f};
+    ai.attach(guard, guardProfile);
+
+    const EntityId villager = spawnCharacter({-4.0f, 0, -3.0f}, 0, 3);
+    AiProfile villagerProfile;
+    villagerProfile.canWander = true;
+    villagerProfile.homeRadius = 4.0f;
+    ai.attach(villager, villagerProfile);
+
+    // --- Humanoid visuals: one template, three variant files, three outfits.
+    HumanoidVariant playerVariant;
+    HumanoidVariant guardVariant;
+    guardVariant.bulk = 1.3f;
+    guardVariant.shoulderWidth = 0.50f;
+    HumanoidVariant villagerVariant;
+    villagerVariant.height = 1.62f;
+    villagerVariant.bulk = 0.9f;
+    villagerVariant.shoulderWidth = 0.38f;
+    villagerVariant.skin[0] = 0.62f;
+    villagerVariant.skin[1] = 0.45f;
+    villagerVariant.skin[2] = 0.33f;
+
+    const WearableInstance playerOutfit[4] = {
+        colored(WearableKind::Tunic, 0.30f, 0.38f, 0.45f),
+        colored(WearableKind::Pants, 0.28f, 0.22f, 0.16f),
+        colored(WearableKind::Boots, 0.22f, 0.16f, 0.11f),
+        colored(WearableKind::HairShort, 0.22f, 0.14f, 0.08f)};
+    const WearableInstance guardOutfit[5] = {
+        colored(WearableKind::Tunic, 0.42f, 0.32f, 0.20f, 1),
+        colored(WearableKind::Armor, 0.55f, 0.57f, 0.62f, 2),  // layered over the tunic
+        colored(WearableKind::Pants, 0.25f, 0.22f, 0.18f),
+        colored(WearableKind::Boots, 0.18f, 0.14f, 0.10f),
+        colored(WearableKind::Sword, 0.72f, 0.75f, 0.79f, 1, true)};  // sheathed
+    const WearableInstance villagerOutfit[4] = {
+        colored(WearableKind::Tunic, 0.55f, 0.42f, 0.26f),
+        colored(WearableKind::Pants, 0.30f, 0.24f, 0.18f),
+        colored(WearableKind::Boots, 0.24f, 0.17f, 0.11f),
+        colored(WearableKind::HairLong, 0.55f, 0.40f, 0.20f)};
+
+    struct Actor {
+        EntityId entity;
+        RigInstance rig;
+        LocomotionAnimator anim;
+    };
+    Actor actors[3];
+    actors[0].entity = player;
+    actors[1].entity = guard;
+    actors[2].entity = villager;
+    if (!uploadRig(renderer, playerVariant, playerOutfit, 4, actors[0].rig)) return 1;
+    if (!uploadRig(renderer, guardVariant, guardOutfit, 5, actors[1].rig)) return 1;
+    if (!uploadRig(renderer, villagerVariant, villagerOutfit, 4, actors[2].rig)) return 1;
+
+    // --- GPU residency for props ---
     GpuAssetCache cache(renderer);
-    for (AssetId id : {groundId, houseId, towerId, playerId, stallId, wellId, crateId}) {
+    for (AssetId id : {groundId, houseId, towerId, stallId, wellId, crateId}) {
         if (!cache.upload(assets, id)) return 1;
     }
 
@@ -209,14 +352,20 @@ int main(int argc, char** argv) {
             engine.pushTouchEvent(script[scriptCursor].e);
             ++scriptCursor;
         }
+        ai.step(static_cast<float>(dt));  // NPC intents; player intents come from touch
         engine.tick(dt);
+        for (Actor& actor : actors) {
+            const MovementComponent* m = world.movement(actor.entity);
+            actor.anim.update(static_cast<float>(dt),
+                              m != nullptr ? m->velocity.length() : 0.0f);
+        }
 
         if (captureCursor < captureTimes.size() && now >= captureTimes[captureCursor]) {
             const float alpha = engine.renderAlpha();
             const TransformComponent* pt = world.transform(player);
             const Vec3 playerPos = lerp(pt->prevPosition, pt->position, alpha);
             const float playerYaw = pt->prevYaw + (pt->yaw - pt->prevYaw) * alpha;
-            cameraController.update(camera, playerPos, playerYaw);
+            cameraController.update(camera, playerPos + Vec3{0, 0.9f, 0}, playerYaw);
 
             std::vector<DrawItem> items;
             world.forEachRenderable([&](EntityId, const TransformComponent& t,
@@ -243,6 +392,16 @@ int main(int argc, char** argv) {
                 if (item.material == MaterialKind::Placeholder) item.params[0] = 6.0f;
                 items.push_back(item);
             });
+            // The characters: interpolated like everything else, posed by
+            // their animators (speed-driven — real velocities, no scripting).
+            for (Actor& actor : actors) {
+                const TransformComponent* t = world.transform(actor.entity);
+                const Vec3 pos = lerp(t->prevPosition, t->position, alpha);
+                const float yaw = t->prevYaw + (t->yaw - t->prevYaw) * alpha;
+                Pose pose;
+                actor.anim.samplePose(pose);
+                emitRig(items, actor.rig, pose, pos, yaw);
+            }
 
             RenderStats stats;
             if (!renderer.renderFrame(camera, items.data(), items.size(), &stats)) return 1;
@@ -262,21 +421,57 @@ int main(int argc, char** argv) {
     const TransformComponent* finalT = world.transform(player);
     const float traveled = (finalT->position - startPos).length();
     printf("player traveled %.1f m, final yaw %.2f rad\n", traveled, finalT->yaw);
+    const float guardTraveled = (world.transform(guard)->position -
+                                 Vec3{3.0f, 0, -2.0f}).length();
+    printf("guard patrol distance from post: %.1f m (state %d)\n", guardTraveled,
+           static_cast<int>(ai.stateOf(guard)));
     printf("engine: %llu frames, %llu sim steps, %llu input events\n",
            static_cast<unsigned long long>(engine.stats().frameCount),
            static_cast<unsigned long long>(engine.stats().simStepCount),
            static_cast<unsigned long long>(engine.stats().inputEventCount));
 
+    // --- Character persistence (8.9): the walkabout's state rides a real
+    //     save file — wound the guard, save, load, verify it came back. ---
+    characters.damage(guard, 0.25f);
+    bool persistenceOk = false;
+    {
+        std::string dir = "/tmp";
+        if (const char* t = getenv("TMPDIR")) dir = t;
+        SaveManager saves(dir.c_str());
+        SaveSnapshot snapshot;
+        snapshot.player.position = finalT->position;
+        snapshot.player.yaw = finalT->yaw;
+        characters.snapshot(snapshot.characters);
+        if (saves.save("template_walk", snapshot)) {
+            SaveSnapshot loaded;
+            if (saves.load("template_walk", loaded) && loaded.characters.size() == 3) {
+                for (const SavedCharacter& c : loaded.characters) {
+                    if (c.persistentId != 2) continue;
+                    const auto held = static_cast<size_t>(EquipSlot::HeldMain);
+                    persistenceOk = c.health > 0.74f && c.health < 0.76f &&
+                                    c.equipment[held].item.asset ==
+                                        assetIdFromName("item/sword") &&
+                                    c.equipment[held].sheathed == 1;
+                }
+            }
+            saves.removeSlot("template_walk");
+        }
+        printf("persistence: guard wound + sheathed sword %s the save file\n",
+               persistenceOk ? "survived" : "DID NOT survive");
+    }
+
+    for (Actor& actor : actors) destroyRig(renderer, actor.rig);
     cache.destroyAll();
     renderer.shutdown();
     const size_t gpuResidual = device.gpuBudgetStats().usedBytes;
     device.shutdown();
     engine.shutdown();
 
-    const bool ok = captures == 3 && traveled > 15.0f && finalT->yaw > 0.5f && gpuResidual == 0;
+    const bool ok = captures == 3 && traveled > 15.0f && finalT->yaw > 0.5f &&
+                    guardTraveled > 0.5f && persistenceOk && gpuResidual == 0;
     if (!ok) {
-        fprintf(stderr, "FAIL: captures=%d traveled=%.1f yaw=%.2f gpuResidual=%zu\n", captures,
-                traveled, finalT->yaw, gpuResidual);
+        fprintf(stderr, "FAIL: captures=%d traveled=%.1f yaw=%.2f guard=%.1f persist=%d gpuResidual=%zu\n",
+                captures, traveled, finalT->yaw, guardTraveled, persistenceOk, gpuResidual);
         return 1;
     }
     printf("OK\n");

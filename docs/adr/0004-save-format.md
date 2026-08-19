@@ -20,6 +20,9 @@ Payload:
                    moved shipped placements     (index + new transform),
                    spawned dynamic entities     (asset id + transform + color) }
   Collections    [registered item collections: id + items(assetId,count,color)]
+  Characters     [schema v3, task 8.9: per persistent character —
+                  persistentId, health/maxHealth, faction, alive, controller,
+                  sightRange, inventory items, equipment slots(+layer/sheathed)]
 ```
 
 - **Atomicity (P3/P7):** a save writes to `<slot>.mgesave.tmp`, fsyncs, then
@@ -40,6 +43,12 @@ Payload:
 - **Item identity:** saved items carry (assetId, count, color); display
   metadata (localization key) is re-resolved by the game on load, keeping
   strings out of saves.
+- **Character identity (v3, task 8.9):** characters persist under a
+  game-assigned `persistentId` (0 = transient, never saved). The same records
+  serve save files and streaming: when a chunk eviction despawns an NPC's
+  entity, its state parks in the same `SavedCharacter` form and is re-applied
+  when the game respawns it — nothing a player did to an NPC is lost while
+  its chunk is cold, and cold NPCs cost no live character slots (P1/P2).
 
 ## Deferred to v2
 

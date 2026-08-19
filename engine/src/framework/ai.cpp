@@ -75,25 +75,23 @@ EntityId AiSystem::findNearestEnemy(EntityId self, const Vec3& position, float r
 }
 
 void AiSystem::moveToward(EntityId entity, const Vec3& target, float speed) {
-    TransformComponent* transform = world_.transform(entity);
-    MovementComponent* movement = world_.movement(entity);
-    if (transform == nullptr || movement == nullptr) return;
+    const TransformComponent* transform = world_.transform(entity);
+    if (transform == nullptr) return;
     Vec3 delta = target - transform->position;
     delta.y = 0;
     const float distance = delta.length();
-    if (distance < 0.05f) {
-        movement->velocity = {0, 0, 0};
-        return;
+    // Same intent contract the player controller uses (task 8.2, P9).
+    CharacterIntent intent;
+    if (distance >= 0.05f) {
+        intent.move = delta * (1.0f / distance);
+        intent.speed = speed;
+        intent.faceMove = true;
     }
-    const Vec3 direction = delta * (1.0f / distance);
-    movement->velocity = direction * speed;
-    transform->yaw = std::atan2(direction.x, -direction.z);
+    applyIntent(world_, entity, intent);
 }
 
 void AiSystem::stop(EntityId entity) {
-    if (MovementComponent* movement = world_.movement(entity)) {
-        movement->velocity = {0, 0, 0};
-    }
+    applyIntent(world_, entity, CharacterIntent{});
 }
 
 void AiSystem::step(float dt) {
@@ -140,6 +138,8 @@ void AiSystem::stepAgent(Agent& agent, float dt) {
             state.state = AiState::Chase;
             state.target = enemy;
             state.stateTime = 0;
+            // Contact: draw the held weapon (CHARACTERS.md §6.1).
+            characters_.setSheathed(agent.entity, false);
         }
     }
 
@@ -184,6 +184,7 @@ void AiSystem::stepAgent(Agent& agent, float dt) {
                 (position - state.home).length() > profile.giveUpRange) {
                 state.state = AiState::Return;
                 state.stateTime = 0;
+                characters_.setSheathed(agent.entity, true);  // combat over
                 break;
             }
             const float distance = (targetTransform->position - position).length();
@@ -202,6 +203,7 @@ void AiSystem::stepAgent(Agent& agent, float dt) {
             if (target == nullptr || !target->alive || targetTransform == nullptr) {
                 state.state = AiState::Return;
                 state.stateTime = 0;
+                characters_.setSheathed(agent.entity, true);  // combat over
                 break;
             }
             const float distance = (targetTransform->position - position).length();

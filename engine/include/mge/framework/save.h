@@ -12,12 +12,13 @@
 #include <vector>
 
 #include "mge/core/math.h"
+#include "mge/framework/character.h"
 #include "mge/framework/delta_log.h"
 #include "mge/framework/items.h"
 
 namespace mge {
 
-constexpr uint32_t kSaveSchemaVersion = 2;  // v2: player health added
+constexpr uint32_t kSaveSchemaVersion = 3;  // v2: player health; v3: characters (8.9)
 
 struct PlayerState {
     Vec3 position{};
@@ -43,6 +44,10 @@ struct SaveSnapshot {
     double playtimeSeconds = 0;
     WorldDeltaLog deltas;
     std::vector<SavedCollection> collections;
+    // v3 (task 8.9): every character with a persistentId — live ones snapshot
+    // from the CharacterSystem, cold ones from the game's parked store, so
+    // NPC state survives streaming and sessions alike.
+    std::vector<SavedCharacter> characters;
 };
 
 struct SaveSlotInfo {

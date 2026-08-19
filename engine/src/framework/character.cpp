@@ -1,8 +1,30 @@
 #include "mge/framework/character.h"
 
+#include <cmath>
+
 #include "mge/core/log.h"
 
 namespace mge {
+
+// ------------------------------------------------------------ intents (8.2) --
+
+void applyIntent(World& world, EntityId entity, const CharacterIntent& intent) {
+    TransformComponent* transform = world.transform(entity);
+    MovementComponent* movement = world.movement(entity);
+    if (transform == nullptr || movement == nullptr) return;
+    transform->yaw += intent.lookDelta;
+    Vec3 move = intent.move;
+    move.y = 0;
+    if (move.lengthSq() < 1e-8f || intent.speed <= 0.0f) {
+        movement->velocity = {0, 0, 0};
+        return;
+    }
+    movement->velocity = move * intent.speed;
+    if (intent.faceMove) {
+        const Vec3 dir = move.normalized();
+        transform->yaw = std::atan2(dir.x, -dir.z);
+    }
+}
 
 CharacterSystem::CharacterSystem(World& world, uint32_t capacity)
     : world_(world),
@@ -112,6 +134,99 @@ bool CharacterSystem::unequip(EntityId entity, EquipSlot slot) {
     if (!character->inventory.add(equipped.item)) return false;  // inventory full: refuse
     equipped = EquippedItem{};
     return true;
+}
+
+// -------------------------------------------------- persistence (task 8.9) --
+
+void captureCharacter(const CharacterComponent& component, SavedCharacter& out) {
+    out = SavedCharacter{};
+    out.persistentId = component.persistentId;
+    out.health = component.health;
+    out.maxHealth = component.maxHealth;
+    out.faction = component.faction;
+    out.alive = component.alive ? 1 : 0;
+    out.controller = static_cast<uint8_t>(component.controller);
+    out.sightRange = component.sightRange;
+    out.items.reserve(component.inventory.size());
+    for (uint32_t i = 0; i < component.inventory.size(); ++i) {
+        const Item& item = *component.inventory.at(i);
+        SavedCharacterItem saved;
+        saved.asset = item.asset;
+        saved.count = item.count;
+        for (int c = 0; c < 4; ++c) saved.color[c] = item.color[c];
+        out.items.push_back(saved);
+    }
+    for (size_t s = 0; s < static_cast<size_t>(EquipSlot::Count); ++s) {
+        const EquippedItem& equipped = component.equipment[s];
+        out.equipment[s].item.asset = equipped.item.asset;
+        out.equipment[s].item.count = equipped.item.count;
+        for (int c = 0; c < 4; ++c) out.equipment[s].item.color[c] = equipped.item.color[c];
+        out.equipment[s].layer = equipped.layer;
+        out.equipment[s].sheathed = equipped.sheathed ? 1 : 0;
+    }
+}
+
+void applyCharacter(const SavedCharacter& saved, CharacterComponent& out) {
+    // Name keys re-derive from the asset registry; identity is the asset id.
+    const ItemCollection empty;
+    out.inventory = empty;
+    out.persistentId = saved.persistentId;
+    out.health = saved.health;
+    out.maxHealth = saved.maxHealth;
+    out.faction = saved.faction;
+    out.alive = saved.alive != 0;
+    out.controller = static_cast<ControllerKind>(saved.controller);
+    out.sightRange = saved.sightRange;
+    out.aiIndex = UINT16_MAX;  // AI re-attaches after restore
+    for (const SavedCharacterItem& item : saved.items) {
+        out.inventory.add({item.asset, "", item.count,
+                           {item.color[0], item.color[1], item.color[2], item.color[3]}});
+    }
+    for (size_t s = 0; s < static_cast<size_t>(EquipSlot::Count); ++s) {
+        const SavedEquippedItem& savedSlot = saved.equipment[s];
+        EquippedItem& slot = out.equipment[s];
+        slot.item = {savedSlot.item.asset, "", savedSlot.item.count,
+                     {savedSlot.item.color[0], savedSlot.item.color[1], savedSlot.item.color[2],
+                      savedSlot.item.color[3]}};
+        slot.layer = savedSlot.layer;
+        slot.sheathed = savedSlot.sheathed != 0;
+    }
+}
+
+void CharacterSystem::snapshot(std::vector<SavedCharacter>& out) const {
+    for (uint32_t i = 0; i < capacity_; ++i) {
+        if (!used_[i] || components_[i].persistentId == 0) continue;
+        out.emplace_back();
+        captureCharacter(components_[i], out.back());
+    }
+}
+
+CharacterComponent* CharacterSystem::restore(EntityId entity, const SavedCharacter& saved) {
+    CharacterComponent* component = attach(entity);
+    if (component == nullptr) return nullptr;
+    applyCharacter(saved, *component);
+    return component;
+}
+
+void CharacterSystem::pruneDead(std::vector<SavedCharacter>* parked) {
+    for (uint32_t i = 0; i < capacity_; ++i) {
+        if (!used_[i] || world_.entities().isAlive(entities_[i])) continue;
+        if (parked != nullptr && components_[i].persistentId != 0) {
+            parked->emplace_back();
+            captureCharacter(components_[i], parked->back());
+        }
+        used_[i] = 0;
+        --liveCount_;
+    }
+}
+
+EntityId CharacterSystem::findByPersistentId(uint32_t persistentId) const {
+    if (persistentId != 0) {
+        for (uint32_t i = 0; i < capacity_; ++i) {
+            if (used_[i] && components_[i].persistentId == persistentId) return entities_[i];
+        }
+    }
+    return kInvalidEntity;
 }
 
 bool CharacterSystem::setSheathed(EntityId entity, bool sheathed) {

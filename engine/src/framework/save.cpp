@@ -46,6 +46,12 @@ bool migrateV1ToV2(SaveSnapshot& snapshot) {
     return true;
 }
 
+// v2 payloads predate character persistence: no characters to restore.
+bool migrateV2ToV3(SaveSnapshot& snapshot) {
+    snapshot.characters.clear();
+    return true;
+}
+
 void serializePayload(const SaveSnapshot& snapshot, std::vector<uint8_t>& out) {
     append(out, &snapshot.player, sizeof(PlayerState));
     snapshot.deltas.serialize(out);
@@ -56,6 +62,22 @@ void serializePayload(const SaveSnapshot& snapshot, std::vector<uint8_t>& out) {
         const uint32_t itemCount = static_cast<uint32_t>(collection.items.size());
         append(out, &itemCount, sizeof(itemCount));
         append(out, collection.items.data(), itemCount * sizeof(SavedItem));
+    }
+    // v3 section: characters (task 8.9).
+    const uint32_t characterCount = static_cast<uint32_t>(snapshot.characters.size());
+    append(out, &characterCount, sizeof(characterCount));
+    for (const SavedCharacter& character : snapshot.characters) {
+        append(out, &character.persistentId, sizeof(character.persistentId));
+        append(out, &character.health, sizeof(character.health));
+        append(out, &character.maxHealth, sizeof(character.maxHealth));
+        append(out, &character.faction, sizeof(character.faction));
+        append(out, &character.alive, sizeof(character.alive));
+        append(out, &character.controller, sizeof(character.controller));
+        append(out, &character.sightRange, sizeof(character.sightRange));
+        const uint32_t itemCount = static_cast<uint32_t>(character.items.size());
+        append(out, &itemCount, sizeof(itemCount));
+        append(out, character.items.data(), itemCount * sizeof(SavedCharacterItem));
+        append(out, character.equipment, sizeof(character.equipment));
     }
 }
 
@@ -93,6 +115,36 @@ bool deserializePayload(const uint8_t* data, size_t size, uint32_t schemaVersion
         collection.items.resize(itemCount);
         if (!read(cursor, remaining, collection.items.data(), itemCount * sizeof(SavedItem))) {
             return false;
+        }
+    }
+
+    if (schemaVersion >= 3) {
+        uint32_t characterCount = 0;
+        if (!read(cursor, remaining, &characterCount, sizeof(characterCount)) ||
+            characterCount > 4096) {
+            return false;
+        }
+        out.characters.resize(characterCount);
+        for (SavedCharacter& character : out.characters) {
+            uint32_t itemCount = 0;
+            if (!read(cursor, remaining, &character.persistentId,
+                      sizeof(character.persistentId)) ||
+                !read(cursor, remaining, &character.health, sizeof(character.health)) ||
+                !read(cursor, remaining, &character.maxHealth, sizeof(character.maxHealth)) ||
+                !read(cursor, remaining, &character.faction, sizeof(character.faction)) ||
+                !read(cursor, remaining, &character.alive, sizeof(character.alive)) ||
+                !read(cursor, remaining, &character.controller, sizeof(character.controller)) ||
+                !read(cursor, remaining, &character.sightRange, sizeof(character.sightRange)) ||
+                !read(cursor, remaining, &itemCount, sizeof(itemCount)) ||
+                itemCount > ItemCollection::kCapacity) {
+                return false;
+            }
+            character.items.resize(itemCount);
+            if (!read(cursor, remaining, character.items.data(),
+                      itemCount * sizeof(SavedCharacterItem)) ||
+                !read(cursor, remaining, character.equipment, sizeof(character.equipment))) {
+                return false;
+            }
         }
     }
     return true;
@@ -208,6 +260,7 @@ bool SaveManager::load(const char* slotName, SaveSnapshot& out) {
         bool migrated = false;
         switch (version) {
             case 1: migrated = migrateV1ToV2(out); break;
+            case 2: migrated = migrateV2ToV3(out); break;
             default: break;
         }
         if (!migrated) {

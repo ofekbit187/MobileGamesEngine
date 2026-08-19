@@ -156,38 +156,50 @@ int main(int argc, char** argv) {
 
     bool ok = true;
 
-    // ---- 1. Variant lineup (8.12/8.13): one rig, five data files -----------
+    // ---- 1. Variant lineup (8.12/8.13): one rig, twelve data files ---------
+    // The Phase 8 exit criterion asks for "a dozen visibly distinct humanoids
+    // from one template body via variant files" — here they are, generated
+    // deterministically so the same twelve render every run.
     {
-        HumanoidVariant variants[5];
-        // average (defaults)
-        variants[1].height = 2.02f; variants[1].shoulderWidth = 0.46f;
-        variants[1].legRatio = 0.53f; variants[1].bulk = 0.85f;
-        variants[1].skin[0] = 0.55f; variants[1].skin[1] = 0.40f; variants[1].skin[2] = 0.29f;
-        variants[2].height = 1.55f; variants[2].shoulderWidth = 0.46f;
-        variants[2].hipWidth = 0.36f; variants[2].bulk = 1.35f;
-        variants[2].skin[0] = 0.70f; variants[2].skin[1] = 0.52f; variants[2].skin[2] = 0.38f;
-        variants[3].height = 2.30f; variants[3].shoulderWidth = 0.62f;
-        variants[3].hipWidth = 0.42f; variants[3].bulk = 1.60f; variants[3].headScale = 0.92f;
-        variants[3].skin[0] = 0.62f; variants[3].skin[1] = 0.58f; variants[3].skin[2] = 0.50f;
-        variants[4].height = 1.62f; variants[4].shoulderWidth = 0.36f;
-        variants[4].hipWidth = 0.26f; variants[4].bulk = 0.80f; variants[4].headScale = 1.08f;
-        variants[4].skin[0] = 0.86f; variants[4].skin[1] = 0.68f; variants[4].skin[2] = 0.55f;
+        HumanoidVariant variants[12];
+        const float heights[12] = {1.75f, 2.02f, 1.55f, 2.30f, 1.62f, 1.88f,
+                                   1.70f, 2.10f, 1.50f, 1.95f, 1.66f, 1.80f};
+        const float bulks[12] = {1.0f, 0.85f, 1.35f, 1.60f, 0.80f, 1.15f,
+                                 0.90f, 1.45f, 1.10f, 0.75f, 1.25f, 0.95f};
+        const float shoulders[12] = {0.42f, 0.46f, 0.46f, 0.62f, 0.36f, 0.50f,
+                                     0.40f, 0.56f, 0.38f, 0.44f, 0.48f, 0.41f};
+        const float skins[12][3] = {
+            {0.80f, 0.62f, 0.48f}, {0.55f, 0.40f, 0.29f}, {0.70f, 0.52f, 0.38f},
+            {0.62f, 0.58f, 0.50f}, {0.86f, 0.68f, 0.55f}, {0.48f, 0.34f, 0.25f},
+            {0.75f, 0.58f, 0.44f}, {0.66f, 0.48f, 0.34f}, {0.82f, 0.64f, 0.52f},
+            {0.58f, 0.44f, 0.32f}, {0.72f, 0.55f, 0.40f}, {0.63f, 0.47f, 0.35f}};
+        for (int i = 0; i < 12; ++i) {
+            variants[i].height = heights[i];
+            variants[i].bulk = bulks[i];
+            variants[i].shoulderWidth = shoulders[i];
+            variants[i].hipWidth = 0.24f + 0.09f * bulks[i];
+            variants[i].legRatio = 0.47f + 0.01f * (i % 5);
+            variants[i].headScale = 0.92f + 0.03f * (i % 6);
+            for (int c = 0; c < 3; ++c) variants[i].skin[c] = skins[i][c];
+        }
 
         std::vector<DrawItem> items;
         items.push_back(prop(&ground, {0, 0, 0}, 0, 0.44f, 0.48f, 0.37f));
-        std::vector<RigInstance> rigs(5);
+        std::vector<RigInstance> rigs(12);
         LocomotionAnimator idle;
         for (int i = 0; i < 90; ++i) idle.update(1.0f / 60.0f, 0.0f);
         Pose pose;
         idle.samplePose(pose);
-        const float xs[5] = {-4.4f, -2.2f, 0.0f, 2.4f, 4.6f};
-        for (int i = 0; i < 5; ++i) {
+        for (int i = 0; i < 12; ++i) {
             if (!uploadRig(renderer, variants[i], nullptr, 0, rigs[i])) return 1;
-            emitRig(items, rigs[i], pose, {xs[i], 0, 0}, kPi);  // facing the camera
+            // Back row staggered between the front row's gaps.
+            const float x = -5.5f + 2.2f * (i % 6) + (i < 6 ? 0.0f : 1.1f);
+            const float z = i < 6 ? 0.0f : -3.4f;
+            emitRig(items, rigs[i], pose, {x, 0, z}, kPi);  // facing the camera
         }
         Camera camera;
-        camera.eye = {0.0f, 1.9f, 6.8f};
-        camera.target = {0.0f, 1.05f, 0.0f};
+        camera.eye = {0.0f, 2.6f, 9.6f};
+        camera.target = {0.0f, 1.15f, -1.2f};
         camera.aspect = static_cast<float>(config.width) / config.height;
         ok = ok && capture(renderer, camera, items, outDir + "/humanoid_variants.ppm", 0.30);
         for (RigInstance& rig : rigs) destroyRig(renderer, rig);

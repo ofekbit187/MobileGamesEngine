@@ -2,6 +2,7 @@
 
 #include "mge/core/log.h"
 #include "mge/framework/camera_controller.h"
+#include "mge/framework/character.h"
 
 namespace mge {
 
@@ -124,13 +125,18 @@ void Engine::simulateStep(double stepSeconds) {
     const GameplayIntents intents = controls_.consume();
 
     if (world_->entities().isAlive(player_)) {
-        TransformComponent* t = world_->transform(player_);
-        MovementComponent* m = world_->movement(player_);
+        const TransformComponent* t = world_->transform(player_);
+        const MovementComponent* m = world_->movement(player_);
         if (t != nullptr && m != nullptr) {
-            t->yaw += intents.lookX * config_.turnSensitivity;
-            const Vec3 forward = yawForward(t->yaw);
-            const Vec3 right = yawRight(t->yaw);
-            m->velocity = (right * intents.moveX + forward * intents.moveY) * m->maxSpeed;
+            // Same intent contract the AI uses (task 8.2, P9): the controllers
+            // differ in how the intent is produced, never in how it acts.
+            const float yaw = t->yaw + intents.lookX * config_.turnSensitivity;
+            CharacterIntent intent;
+            intent.lookDelta = intents.lookX * config_.turnSensitivity;
+            intent.move = yawRight(yaw) * intents.moveX + yawForward(yaw) * intents.moveY;
+            intent.speed = m->maxSpeed;
+            intent.faceMove = false;  // the player faces where the camera looks
+            applyIntent(*world_, player_, intent);
         }
     }
 
