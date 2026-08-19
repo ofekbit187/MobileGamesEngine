@@ -14,9 +14,16 @@ add_library(mge_core STATIC
     src/graphics/mesh_io.cpp
     src/streaming/world_file.cpp
     src/streaming/streaming_manager.cpp
+    src/ui/text.cpp
+    src/ui/font.cpp
+    src/ui/localization.cpp
+    src/ui/draw_list.cpp
+    src/ui/ui.cpp
 )
 
 target_include_directories(mge_core PUBLIC include)
+# Vendored single-header libs (stb_truetype for font baking).
+target_include_directories(mge_core PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/../third_party/stb)
 
 target_compile_options(mge_core PRIVATE -Wall -Wextra)
 

@@ -80,17 +80,17 @@ Status legend: `[ ]` not started · `[~]` in progress · `[x]` done
 
 *Goal: P6 realized — the engine's own original UI, rendered by the engine.*
 
-- [ ] **5.1** Widget tree: layout, styling/theming, navigation, low-allocation updates; direction-aware layout so RTL mirroring is free per-widget (P11)
-- [ ] **5.2** UI renderer: batched geometry through the overlay pass; font atlas + text shaping with bidi (Hebrew first-class), per-script font fallback
-- [ ] **5.3** Original design language: medieval book-and-paper identity (parchment/ink/manuscript — owner verdict; spec + theme tokens), an original design, not a platform clone
-- [ ] **5.4** Built-in widget library in that design: buttons, lists, sliders, toggles, dialogs, grids
-- [ ] **5.5** Built-in screen kit: boot screen, main menu, pause menu, settings, save-slot picker, HUD elements
-- [ ] **5.6** Virtual gameplay control widgets: sticks, buttons, gesture zones bound to Phase 3 control schemes
-- [ ] **5.7** Input routing: UI-first claim, fall-through to gameplay
-- [ ] **5.8** Localization system: string keys as default, language packs, runtime language switch incl. RTL relayout; ships with English + Hebrew (P11)
-- [ ] **5.9** Data binding — collection views: registered item collections (inventory, chest, merchant…) referenced by ID from layouts, rendering as live styled grids/lists with interactions (P6)
-- [ ] **5.10** Data binding — live-object views: UI viewport bound to live runtime objects (rendered character with worn equipment, item models) within render budgets (P6)
-- [ ] **5.11** Wire the full screen kit + controls into the game template — inventory + chest screens built purely via 5.9/5.10 bindings as the proof
+- [~] **5.1** Widget tree: layout, styling/theming, navigation, direction-aware (RTL mirroring free per-widget, P11) — *immediate-build widgets over retained interaction state, fixed-capacity/allocation-free per frame; full retained tree + navigation stack pending*
+- [~] **5.2** UI renderer: batched geometry through the overlay pass; font atlas + text with bidi (Hebrew first-class) — *quad batch + alpha-blended overlay pipeline + atlas texture running; v1 bidi run reordering (full UAX#9 later); per-script font fallback pending*
+- [~] **5.3** Codex design language (medieval book-and-paper, owner verdict) — *v1 tokens + styled widget set rendering (parchment/double-rule/wax seals); full spec doc + owner approval of the rendered look pending*
+- [~] **5.4** Built-in widget library: buttons, sliders, toggles, grids running; lists and dialogs pending
+- [~] **5.5** Built-in screen kit — *main menu, HUD (health/compass/item slot), inventory running; boot, pause, settings, save-slot picker pending*
+- [~] **5.6** Virtual gameplay control widgets — *stick ring + wax-seal buttons drawn over the Phase 3 scheme state; gesture zones + full widget/scheme binding pending*
+- [x] **5.7** Input routing: UI-first claim with fall-through to gameplay — tested (tap on button consumed, tap on world falls through)
+- [~] **5.8** Localization: string keys default, runtime language switch incl. RTL relayout, ships English + Hebrew — *language packs from data files pending*
+- [~] **5.9** Data binding — collection views: registered collections by id rendering as live grids with selection — *drag/move/context interactions pending*
+- [~] **5.10** Data binding — live-object views: 3D object rendered into a UI rect with its own camera (player character in the inventory) — *worn-equipment composition arrives with Phase 8*
+- [~] **5.11** Wire the kit into the template — *ui_demo composes menu→HUD→inventory over the live scene with bindings; merge into template_game pending*
 
 **Exit criteria:** the template game boots into an engine-designed menu, plays with on-screen controls, and pauses into an engine-designed pause screen.
 

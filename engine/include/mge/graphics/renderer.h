@@ -17,6 +17,7 @@
 #include "mge/graphics/camera.h"
 #include "mge/graphics/mesh_data.h"
 #include "mge/graphics/vulkan_device.h"
+#include "mge/ui/draw_list.h"
 
 namespace mge {
 
@@ -59,6 +60,18 @@ struct RenderStats {
     uint32_t submitted = 0;
     uint32_t drawn = 0;
     uint32_t culled = 0;
+    uint32_t uiQuads = 0;
+};
+
+// A live-object view (task 5.10): 3D content rendered into a UI rectangle —
+// e.g. the player's character inside the inventory screen. Drawn after the
+// world pass with its own camera, clipped to the rect.
+struct ObjectViewDraw {
+    Camera camera;
+    const DrawItem* items = nullptr;
+    size_t count = 0;
+    float rect[4] = {0, 0, 100, 100};   // x, y, w, h in pixels
+    float clear[4] = {0.1f, 0.1f, 0.1f, 1.0f};
 };
 
 struct RendererConfig {
@@ -87,9 +100,15 @@ public:
     void destroyMesh(GpuMesh& mesh);
     void destroyLodMesh(GpuLodMesh& mesh);
 
+    // Uploads the UI font atlas and enables the overlay pipeline (task 5.2).
+    bool setUiFont(const FontAtlas& font);
+
     // Culls, LOD-selects, records, submits, and waits (v1 sync model).
+    // Optional: object views (rendered into their rects after the world) and
+    // a UI draw list composited on top (the overlay pass, P6).
     bool renderFrame(const Camera& camera, const DrawItem* items, size_t count,
-                     RenderStats* stats = nullptr);
+                     RenderStats* stats = nullptr, const UiDrawList* ui = nullptr,
+                     const ObjectViewDraw* objectViews = nullptr, size_t objectViewCount = 0);
 
     // Copies the last rendered frame (RGBA8, width*height*4 bytes) to dest.
     bool readback(uint8_t* dest, size_t destSize);
@@ -132,6 +151,31 @@ private:
     VkPipelineLayout pipelineLayout_ = VK_NULL_HANDLE;
     VkPipeline litPipeline_ = VK_NULL_HANDLE;
     VkPipeline placeholderPipeline_ = VK_NULL_HANDLE;
+
+    // UI overlay (task 5.2)
+    bool createUiPipeline();
+    void recordObjectView(const ObjectViewDraw& view, uint32_t slotIndex);
+    void recordDrawItems(const Camera& camera, const DrawItem* items, size_t count,
+                         bool cull, RenderStats* stats);
+    VkImage uiAtlasImage_ = VK_NULL_HANDLE;
+    VkDeviceMemory uiAtlasMemory_ = VK_NULL_HANDLE;
+    VkDeviceSize uiAtlasMemorySize_ = 0;
+    VkImageView uiAtlasView_ = VK_NULL_HANDLE;
+    VkSampler uiSampler_ = VK_NULL_HANDLE;
+    VkDescriptorSetLayout uiSetLayout_ = VK_NULL_HANDLE;
+    VkDescriptorSet uiDescriptorSet_ = VK_NULL_HANDLE;
+    VkPipelineLayout uiPipelineLayout_ = VK_NULL_HANDLE;
+    VkPipeline uiPipeline_ = VK_NULL_HANDLE;
+    VkBuffer uiVertexBuffer_ = VK_NULL_HANDLE;
+    VkDeviceMemory uiVertexMemory_ = VK_NULL_HANDLE;
+    VkDeviceSize uiVertexMemorySize_ = 0;
+    VkBuffer uiIndexBuffer_ = VK_NULL_HANDLE;
+    VkDeviceMemory uiIndexMemory_ = VK_NULL_HANDLE;
+    VkDeviceSize uiIndexMemorySize_ = 0;
+
+    // Dynamic-uniform slots: 0 = main camera, 1.. = object views.
+    static constexpr uint32_t kMaxUniformSlots = 9;
+    VkDeviceSize uniformSlotStride_ = 256;
 
     // Commands + readback
     VkCommandPool commandPool_ = VK_NULL_HANDLE;
