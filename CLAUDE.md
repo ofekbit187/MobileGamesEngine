@@ -34,6 +34,25 @@ Individually:
 - `app/` — Kotlin shell + JNI glue; `tools/host_runner/` — headless prototype;
   `tests/` — dependency-free unit tests; `docs/adr/` — decisions
 
+## Showcase protocol (owner-mandated, default)
+
+The owner reviews progress on a living artifact page — the **dictation
+review board**: https://claude.ai/code/artifact/b259a23e-ebc6-4ada-a234-4a5c89c63fec
+
+- After every milestone (and whenever the owner asks "where do things
+  stand"), **update that artifact in place** (pass its URL as `url` when
+  publishing from a new session — do NOT create a new artifact/link).
+- Format: one card per dictated requirement, status chip
+  (running & verified / partly running / designed / not started), and
+  evidence. Evidence is always labeled: ● real output (produced by the
+  engine in this environment) vs ○ design proposal (mockup awaiting the
+  owner's verdict).
+- Everything visual is shown as a proposal *before* it is built and as a
+  real engine capture *after* — never present a mockup as engine output.
+- Read the artifact's comments (`action: "comments"`) at session start and
+  when asked; owner comments on cards are verdicts — docs update first,
+  then code.
+
 ## Rules of the codebase
 
 - Every allocation goes through a registered `BudgetRegistry` budget; caps
