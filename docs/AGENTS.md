@@ -27,10 +27,33 @@ mechanism is not a policy. When the dictation says "every character can interact
 where interaction lives — it is not a licence to invent what NPCs choose to do with it. If
 you believe the neighbouring work is needed, propose it; don't ship it uninvited.
 
-## 2. The roster
+## 2. Many focused sessions, not a parallel org chart
 
-**Status: proposed — awaiting the owner's verdict.** Roles are drawn from the seams the
-engine actually has, not from an org chart. One session per role; a role may be dormant.
+**Owner's ruling:** *"i want many sessions, we dont have to run them in parallel but i
+noticed that a session that is focused on single thing works much better in terms of
+quality and cost efficency."*
+
+So the unit of work is **one session, one job** — and the jobs are narrow. Sessions run
+when they run; concurrency is incidental, not the point. Two consequences:
+
+- **Charters are jobs, not departments.** "Renderer" is a department. "Textures and
+  materials through the existing forward pass" is a job: one session can hold all of it in
+  context, finish it, and end. The areas below are *where jobs come from*, not standing
+  assignments.
+- **Handoff is the deliverable, not just the code.** Because the next session starts cold,
+  a job is finished when someone who was not there can pick up: `docs/TASKS.md` honest to
+  the line, remainders named in the task text (not just "partial"), and any seam question
+  raised rather than silently worked around. A session that leaves an undocumented
+  half-state costs more than it saved.
+
+The architect writes each session's brief before it starts and reviews its work when it
+ends (§10) — that review is what keeps many narrow sessions adding up to one coherent
+engine.
+
+### Areas jobs are drawn from
+
+Roles are drawn from the seams the engine actually has. An area may be dormant, or may
+have several jobs run through it one after another.
 
 | Role | Owns | Charter |
 |---|---|---|
@@ -207,45 +230,66 @@ Live cross-session questions the architect is holding. Each names the sessions i
 the decision that unblocks them. These are the coordination the owner asked for, made
 concrete — not a backlog.
 
-### 9.1 Authored garments vs generated garments — **Body ⇄ Wearables**
+### 9.1 How wearables fit an imported body — **RESEARCHED, awaiting the owner's verdict**
 
-*The biggest unresolved seam in the engine, and it decides both sessions' direction.*
+*Status: the premise this item was written against has changed twice. The imported body has
+landed, and the owner commissioned the wearables session to research the fitting question
+rather than have the architect rule on it. That research is now in the repo:
+`docs/research/wearables.md`.*
 
-Today wearables are **parametric templates** (`WearableKind`: tunic, armor, pants, boots,
-hair, sword) generated from the same `HumanoidVariant` proportions as the body, plus a
-per-layer thickness. That is *why* "authored once, fits every variant" currently holds and
-why masking is exact — a covered region is simply not emitted, so clipping is impossible by
-construction.
+**What changed on the ground.** The template body is v3: Blender Studio's CC0 human base
+mesh, imported unmodified, with the canonical 17-joint rig fitted to its anatomy. It is in
+the mainline and it is a real artist mesh, not a generator. That ends the trick that made
+fitting free — today's garments are *generated from the same code profiles as the body*, so
+"fits by construction" was an artifact of both sides being generated. An imported body means
+the fitting guarantee has to survive on **imported meshes**.
 
-The body session is moving to an **imported artist body** with smooth skinning. When that
-lands, generated-from-proportions garments no longer automatically match a mesh nobody
-generated. Two futures:
+**What the research found.** Every shipped system falls into four families: texture
+compositing, part replacement/geosets, shared-skeleton layered skinning (what this engine
+does today), and surface binding/cages. The recommendation is not "pick one" — it is that
+**the runtime architecture we already have is correct and stays** (one rig, one palette, a
+single skinning path, region masking, layered slots), and what must be added is an
+**import-time fitting pipeline**: skin weights transferred from the body with confidence
+gating and inpainting where transfer fails, plus MakeHuman-style surface binding (body
+triangle + barycentric + offset per garment vertex) so morph-driven variants re-fit at
+spawn/equip on job lanes and **never per frame**. Layering chains offline: layer *k* binds
+against layer *k−1*'s outer surface offset by its thickness. Runtime cloth simulation and
+runtime cage/RBF solves are explicitly rejected on P1 grounds.
 
-- **A — garments stay generated.** Fitting stays exact and free; the price is that clothing
-  can only ever be as expressive as the parameter set, which will hold the art back.
-- **B — garments become authored meshes**, skinned to the same rig and deformed to the
-  variant by the same proportion machinery the body uses. Expressive; the price is that
-  fitting becomes an approximation and clipping becomes possible, so masking has to earn
-  its exactness a harder way.
+**Architect position: accept it.** It satisfies P1 in the way this engine means it — the
+frame path stays fitting-free, and cost per garment stays "its vertices in the existing skin
+pass". It keeps every dictated property (authored once, fits every variant, masks what it
+covers, animates through the same path, layers, hair is a wearable) while moving the
+guarantee from *generation* to *baked data*, which is the only form that survives artist
+meshes. Two findings are worth the owner's attention because they are expensive to retrofit
+and cheap to honour now:
 
-**Architect position:** B is where a real game ends up, but not yet — it is only worth
-paying for once the imported body and its variant deformation are proven, because B's
-fitting quality is bounded by them. Until then wearables should treat the parametric path
-as the shipping path and *not* start authoring garment meshes against a body that is still
-changing shape. Both sessions must land any move to B together; a half-migration renders
-characters in two incompatible ways at once.
+- **Hair must be segmented into sub-regions from day one.** WoW's hair is one geoset per
+  style, so a helmet can only hide *all* of it; fixing that was quoted at ~4,900 items ×
+  races × genders. We would pay the same price later.
+- **Ship the fitting guarantee with the first wearable.** Second Life shipped rigged
+  clothing without a fitting mechanism; clothes ignored the avatar's shape sliders, the
+  promised fix never shipped, and the content ecosystem fractured into per-brand body
+  standards permanently.
 
-**Needs:** the owner's direction on how much clothing expressiveness matters versus
-guaranteed-clean fitting, and the body session's confidence that variant deformation on the
-imported body is stable.
+**Blocks:** the wearables area cannot sensibly author garments against the v3 body until
+this is ruled on — the answer decides whether garments are modelled in a DCC (accepted) or
+kept generated (rejected). It also hands the body session six concrete requirements
+(§5 of the research: region shells including a real face region, the canonical rig binding,
+a frozen topology/vertex-order contract, morph deltas on the template mesh, a published
+glTF authoring reference, and per-region vertex groups) — none of which the current body
+fully provides yet. `BodyRegion::Face` is empty today, which the body session has recorded
+honestly and which the research says will matter the moment a mask or visor exists.
 
-### 9.2 Facial expressions are blocked on geometry — **Body ⇄ Renderer**
+### 9.2 Facial expressions need geometry AND renderer support — **Body ⇄ Renderer**
 
-Task 8.20 (seven blendable expression presets) is fully designed and has no code, for a real
-reason: the v1 parametric head has no facial geometry to morph. It unblocks when the
-imported face lands — and it also needs **morph-target support in the skinned draw path**,
-which is the renderer's, not the body's. Neither session can finish it alone; sequence it
-body-first, renderer-second, and don't start the expression API until both are in place.
+Task 8.20 (seven blendable expression presets) is fully designed with no code. The body is
+now an imported artist mesh, so the old blocker — "the parametric head is featureless" — is
+half gone, but the body session records `BodyRegion::Face` as still empty (the imported head
+is one shell). Two things must land before the expression API is worth writing, in this
+order: **face geometry and morph deltas on the template** (body session), then **morph-target
+support in the skinned draw path** (renderer). Neither session can finish it alone, and
+writing the API first would be designing against a shape nobody has.
 
 ### 9.3 Masking granularity must match coverage — **Body ⇄ Wearables**
 
