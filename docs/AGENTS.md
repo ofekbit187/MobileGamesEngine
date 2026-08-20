@@ -50,6 +50,11 @@ The architect writes each session's brief before it starts and reviews its work 
 ends (§11) — that review is what keeps many narrow sessions adding up to one coherent
 engine.
 
+**Model rule (owner):** every session runs on **Opus 5** — except the architect, which the
+owner runs on the model of their choosing. Whoever creates a session (owner or architect)
+pins `claude-opus-5` explicitly; the architect verifies the served model at the first
+check-in on any newly created session.
+
 ### Areas jobs are drawn from
 
 Roles are drawn from the seams the engine actually has. An area may be dormant, or may
