@@ -1,6 +1,7 @@
 // Phase 8 (universal side): characters, factions, mortality/loot, equipment,
 // and the basic AI state machine — deterministic, headless.
 
+#include "mge/framework/action.h"
 #include "mge/framework/ai.h"
 #include "mge/framework/character.h"
 #include "test_framework.h"
@@ -19,6 +20,10 @@ EntityId makeCharacter(World& world, CharacterSystem& characters, Vec3 pos,
     CharacterComponent* character = characters.attach(entity);
     character->faction = faction;
     character->health = character->maxHealth = health;
+    // These are creatures that walk, so they say so (task 12.2): the walk
+    // action is enforced, not decorative — an animal that never declares it
+    // stays where it stands, however hard its AI pushes.
+    character->actions.grant(actionWalk());
     return entity;
 }
 

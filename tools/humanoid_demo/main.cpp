@@ -354,6 +354,9 @@ int main(int argc, char** argv) {
             world.setMovement(entity, MovementComponent{{}, 6.0f});
             CharacterComponent* c = characters.attach(entity);
             c->faction = faction;
+            // The vocabulary these bodies have (task 12.2). Walking is
+            // enforced, so a body that never declares it never moves.
+            grantHumanoidActions(characters, entity);
             if (!ai.attach(entity, profile)) return false;
             actors[i].entity = entity;
             return uploadRig(renderer, variant, outfit, outfitCount, actors[i].rig);

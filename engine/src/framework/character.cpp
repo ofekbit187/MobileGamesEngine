@@ -321,6 +321,20 @@ bool CharacterSystem::can(EntityId actor, ActionId action) const {
     return character != nullptr && character->actions.has(action);
 }
 
+bool CharacterSystem::steer(EntityId actor, const CharacterIntent& intent) {
+    const CharacterComponent* character = get(actor);
+    if (character == nullptr || !character->alive) return false;
+    if (character->actions.has(actionWalk())) {
+        applyIntent(world_, actor, intent);
+        return true;
+    }
+    CharacterIntent rooted = intent;  // it may still turn, it just cannot go
+    rooted.move = Vec3{};
+    rooted.speed = 0;
+    applyIntent(world_, actor, rooted);
+    return false;
+}
+
 bool CharacterSystem::grant(EntityId actor, ActionId action) {
     CharacterComponent* character = get(actor);
     return character != nullptr && character->actions.grant(action);

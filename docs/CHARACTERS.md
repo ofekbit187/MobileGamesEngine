@@ -77,6 +77,10 @@ a humanoid walks, jumps and uses what is in its hands because *a humanoid does*;
 creature declares its own set. A wolf that gets `action/jump` gets it by declaring it, not by
 inheriting a humanoid assumption — and a snake simply never has it.
 
+**The set is enforced, not decorative.** Steering runs through the character, so a character with no
+`action/walk` does not move however hard its controller pushes — the player's stick and an NPC's
+pathing hit the same gate. (It may still turn: being unable to walk is not being unable to look.)
+
 **Asking and doing.** `can(actor, action)` answers whether the vocabulary contains it; `perform(actor,
 request)` does it and reports what happened. Both take the acting character — the player's button and
 an NPC's decision reach the identical call (P9). Performing an action a character does not have fails

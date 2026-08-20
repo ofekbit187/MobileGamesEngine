@@ -270,12 +270,16 @@ int main(int argc, char** argv) {
     guardProfile.patrolPoints[0] = {3.0f, 0, -2.0f};
     guardProfile.patrolPoints[1] = {-3.5f, 0, -7.0f};
     ai.attach(guard, guardProfile);
+    // Humanoids, so they carry the humanoid vocabulary — and walking is
+    // enforced by it (task 12.2): an NPC that never declares walk stays put.
+    grantHumanoidActions(characters, guard);
 
     const EntityId villager = spawnCharacter({-4.0f, 0, -3.0f}, 0, 3);
     AiProfile villagerProfile;
     villagerProfile.canWander = true;
     villagerProfile.homeRadius = 4.0f;
     ai.attach(villager, villagerProfile);
+    grantHumanoidActions(characters, villager);
 
     // --- Humanoid visuals: one template, three variant files, three outfits.
     HumanoidVariant playerVariant;

@@ -80,14 +80,15 @@ void AiSystem::moveToward(EntityId entity, const Vec3& target, float speed) {
     Vec3 delta = target - transform->position;
     delta.y = 0;
     const float distance = delta.length();
-    // Same intent contract the player controller uses (task 8.2, P9).
+    // Same intent contract the player controller uses (task 8.2, P9), and
+    // the same gate: an agent that has no walk action stays put (task 12.2).
     CharacterIntent intent;
     if (distance >= 0.05f) {
         intent.move = delta * (1.0f / distance);
         intent.speed = speed;
         intent.faceMove = true;
     }
-    applyIntent(world_, entity, intent);
+    characters_.steer(entity, intent);
 }
 
 void AiSystem::stop(EntityId entity) {

@@ -137,7 +137,13 @@ void Engine::simulateStep(double stepSeconds) {
             intent.move = yawRight(yaw) * intents.moveX + yawForward(yaw) * intents.moveY;
             intent.speed = m->maxSpeed;
             intent.faceMove = false;  // the player faces where the camera looks
-            applyIntent(*world_, player_, intent);
+            // Same vocabulary gate as the AI when the game wired its
+            // characters in; the raw intent contract still works without.
+            if (characters_ != nullptr) {
+                characters_->steer(player_, intent);
+            } else {
+                applyIntent(*world_, player_, intent);
+            }
         }
     }
 

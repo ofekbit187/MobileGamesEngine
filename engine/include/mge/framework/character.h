@@ -215,6 +215,12 @@ public:
     // on the character. Both take the acting character: the player's button
     // and an NPC's decision are the same call (P9).
     bool can(EntityId actor, ActionId action) const;
+    // Steering, gated by the vocabulary: a character that has no walk action
+    // does not move, however hard its controller pushes. This is the enforced
+    // form of "a humanoid can also walk" — the entry in the set is not
+    // decoration. Turning is always allowed; being unable to walk is not
+    // being unable to look.
+    bool steer(EntityId actor, const CharacterIntent& intent);
     bool grant(EntityId actor, ActionId action);
     void revoke(EntityId actor, ActionId action);
     ActionResult perform(EntityId actor, const ActionRequest& request);
