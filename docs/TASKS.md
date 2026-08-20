@@ -221,7 +221,26 @@ Status legend: `[ ]` not started · `[~]` in progress · `[x]` done
 
 **Exit criteria:** on the phone, the player jumps, and the same "use" button does something different depending on what is in hand — while every one of those actions is reachable by any character that has it. — *Built and headlessly verified (`jump: rose 0.55 m, refused in mid-air yes, landed yes` / `use held: sword struck, apple eaten, torch lit`); the on-device confirmation is the owner's next device test.*
 
-## Phase 13 and beyond — held for further dictation
+## Phase 13 — Wearables on an artist body (ADR 0008)
+
+*Goal: the fitting guarantee survives artist-made meshes. Garments are modelled in a DCC against the published template and simply work — every variant, every pose, hair included — because fitting is baked at import, never computed per frame.*
+
+*Sequencing: the pipeline (13.1–13.5) is wearables-session work and can start now. The body deliverables (13.6–13.9) are body-session work and gate the first authored garment, not the pipeline. 13.10 is the proof.*
+
+- [ ] **13.1** Import-time skin-weight transfer: confidence-gated nearest-surface copy (position + normal agreement) with weight inpainting across rejected vertices; clamp to ≤4 influences; accept authored weights when present
+- [ ] **13.2** Surface binding bake: per garment vertex, body triangle + barycentric + offset, constrained to the region's permitted vertex group so a sleeve cannot bind to the torso
+- [ ] **13.3** Contract hash: bindings record the body asset's content hash; the pipeline REFUSES a binding whose body hash does not match (ADR 0008 — the committed `.mgeskin` is canonical, not the generator)
+- [ ] **13.4** Morph re-fit at spawn/equip on job lanes, cached per (garment, morph-set); bone-scale variants continue to ride the palette. Nothing per frame
+- [ ] **13.5** Layer chaining: layer *k* binds against layer *k−1*'s outer surface offset by its thickness, resolved offline/at equip. No runtime cages, no runtime RBF
+- [ ] **13.6** `BodyRegion` extension for the accepted elbow/knee cut lines (D-3) + ear sub-shell (D-1), with the masking tests that go with them
+- [ ] **13.7** Body: real `Face` shell — closes the B-8 debt ADR 0008 records against v3, where the imported head is a single shell and the region is empty. Blocks the first mask/visor/face-covering helm
+- [ ] **13.8** Body: hem-loop table (B-11) and per-region vertex groups (B-25) — what a garment artist terminates openings on and what constrains binding
+- [ ] **13.9** Body: published glTF authoring reference (B-29) at template proportions in bind pose, with rig, region groups, hem loops and attachment points, versioned by the same content hash
+- [ ] **13.10** The seven acceptance gates as tests (BODY_CONTRACT.md §9): mask integrity, +35 mm offset shell, hem-loop table, scalp-cap fallback, deterministic hash, groups & anchors, plus the existing gates — and the first authored garment set proving the contract end to end
+
+**Exit criteria:** a garment authored in a DCC against the published reference, imported, and rendered correctly on the template and both variant extremes, posed — with masking leaving no hole and no clipping, and zero fitting work on the frame path.
+
+## Phase 14 and beyond — held for further dictation
 
 Deliberately not planned yet; known candidates awaiting direction:
 

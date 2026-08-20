@@ -104,6 +104,7 @@ incompatible.
 | **Rig** — `Joint` enum, `Skeleton`, bind offsets, 17-joint palette | Body ⇄ Wearables, Renderer | Joint identity and count are the body's to define and everyone else's to obey. Adding or renaming a joint breaks garments AND the skinning shader: architect ruling required. |
 | **Proportions** — `HumanoidVariant` fields | Body ⇄ Wearables | Garments are generated from the *same* proportions as the body, which is why "authored once, fits every variant" holds. A new proportion field is useless until wearables respond to it — land both together. |
 | **Fitting & masking** — `RigPart`, covered regions, layer thickness | Body ⇄ Wearables | Covered body parts are *not emitted* rather than hidden. Whoever changes the emission rule changes both sides. |
+| **Body contract** — topology, vertex order, UV chart, region set, hem loops, anchors | Body ⇄ Wearables | `docs/BODY_CONTRACT.md` + ADR 0008. Garment bindings and morph deltas address the body **by index**, so re-exporting with different triangulation or vertex order invalidates every garment in existence — even for a visually identical shape. Topology, vertex-order and UV changes are **contract-version events**: announced, versioned, hash-recorded, paired with a re-bake of all wearables. The committed `.mgeskin` is canonical, not the generator that produced it. |
 | **Skinned draw** — vertex format, palette slots, `SkinnedDrawItem` | Body ⇄ Renderer | The CPU `skinMesh()` is the definition GPU skinning must match; `mge_skin_test` proves it every push. Changing one without the other is a silent visual regression. |
 | **Character component** — `CharacterComponent` fields, save schema | Gameplay ⇄ People ⇄ Body | Adding a field means a save-schema bump and a migration. Never widen it casually. |
 | **Item use** — `ItemUse`, `ItemUseRegistry` | Gameplay ⇄ UI ⇄ People | One action, meaning defined by data. New built-in use kinds are an architect decision; games extend via `Custom`. |
@@ -216,7 +217,7 @@ far lived in platform glue that headless tests could not reach — closing that 
   | 0005 | Family-tree format (`.mgetree`) | in use |
   | 0006 | Audio architecture | in use |
   | 0007 | Humanoid template body | in use — **not 0005**, whatever older comments say |
-  | 0008 | Wearable fitting pipeline | **reserved** for the wearables area, pending §10.1 |
+  | 0008 | Wearable fitting pipeline | in use — ruled, see §10.1 |
   | 0009+ | — | available on request |
 - **CMake source lists**: one file per line, alphabetical. Both-added lines are the most
   common merge conflict in this repo.
@@ -291,56 +292,30 @@ Live cross-session questions the architect is holding. Each names the sessions i
 the decision that unblocks them. These are the coordination the owner asked for, made
 concrete — not a backlog.
 
-### 10.1 How wearables fit an imported body — **RESEARCHED, awaiting the owner's verdict**
+### 10.1 How wearables fit an imported body — **RULED (ADR 0008)**
 
-*Status: the premise this item was written against has changed twice. The imported body has
-landed, and the owner commissioned the wearables session to research the fitting question
-rather than have the architect rule on it. That research is now in the repo:
-`docs/research/wearables.md`.*
+*Closed. The owner sent the question to the wearables session rather than have the architect
+rule from first principles; that research came back, and the mechanism is now settled in
+`docs/adr/0008-wearable-fitting-pipeline.md`, with `docs/BODY_CONTRACT.md` as the operative
+handoff to the body session and Phase 13 as the work.*
 
-**What changed on the ground.** The template body is v3: Blender Studio's CC0 human base
-mesh, imported unmodified, with the canonical 17-joint rig fitted to its anatomy. It is in
-the mainline and it is a real artist mesh, not a generator. That ends the trick that made
-fitting free — today's garments are *generated from the same code profiles as the body*, so
-"fits by construction" was an artifact of both sides being generated. An imported body means
-the fitting guarantee has to survive on **imported meshes**.
+**Settled:** the runtime architecture does not change — one rig, one palette, one skinning
+path, closed-shell masking, layered slots. Fitting is baked at **import** (confidence-gated
+weight transfer with inpainting, plus surface binding), re-fit for morphs at spawn/equip on
+job lanes, and **never computed per frame**. Ears get geometry with their own maskable
+sub-shell at LOD0; fingers stay palm+thumb; elbow and knee cut lines are accepted; the bind
+pose is frozen at v3's A-pose.
 
-**What the research found.** Every shipped system falls into four families: texture
-compositing, part replacement/geosets, shared-skeleton layered skinning (what this engine
-does today), and surface binding/cages. The recommendation is not "pick one" — it is that
-**the runtime architecture we already have is correct and stays** (one rig, one palette, a
-single skinning path, region masking, layered slots), and what must be added is an
-**import-time fitting pipeline**: skin weights transferred from the body with confidence
-gating and inpainting where transfer fails, plus MakeHuman-style surface binding (body
-triangle + barycentric + offset per garment vertex) so morph-driven variants re-fit at
-spawn/equip on job lanes and **never per frame**. Layering chains offline: layer *k* binds
-against layer *k−1*'s outer surface offset by its thickness. Runtime cloth simulation and
-runtime cage/RBF solves are explicitly rejected on P1 grounds.
+**Still with the owner:** which wearables ship first (D-4) — a content-priority call that
+decides what the acceptance gates run against. Default if no ruling arrives: tunic,
+trousers, boots, short hair.
 
-**Architect position: accept it.** It satisfies P1 in the way this engine means it — the
-frame path stays fitting-free, and cost per garment stays "its vertices in the existing skin
-pass". It keeps every dictated property (authored once, fits every variant, masks what it
-covers, animates through the same path, layers, hair is a wearable) while moving the
-guarantee from *generation* to *baked data*, which is the only form that survives artist
-meshes. Two findings are worth the owner's attention because they are expensive to retrofit
-and cheap to honour now:
-
-- **Hair must be segmented into sub-regions from day one.** WoW's hair is one geoset per
-  style, so a helmet can only hide *all* of it; fixing that was quoted at ~4,900 items ×
-  races × genders. We would pay the same price later.
-- **Ship the fitting guarantee with the first wearable.** Second Life shipped rigged
-  clothing without a fitting mechanism; clothes ignored the avatar's shape sliders, the
-  promised fix never shipped, and the content ecosystem fractured into per-brand body
-  standards permanently.
-
-**Blocks:** the wearables area cannot sensibly author garments against the v3 body until
-this is ruled on — the answer decides whether garments are modelled in a DCC (accepted) or
-kept generated (rejected). It also hands the body session six concrete requirements
-(§5 of the research: region shells including a real face region, the canonical rig binding,
-a frozen topology/vertex-order contract, morph deltas on the template mesh, a published
-glTF authoring reference, and per-region vertex groups) — none of which the current body
-fully provides yet. `BodyRegion::Face` is empty today, which the body session has recorded
-honestly and which the research says will matter the moment a mask or visor exists.
+**Contract debt against the shipped body**, logged so nobody discovers it under deadline:
+the delivered v3 body has an **empty `Face` region** (the imported head is one shell, and
+the body-mesh test skips Face explicitly). Harmless until the first mask, visor or
+face-covering helm — then it blocks that item outright. Hem loops, region vertex groups and
+the published authoring reference are likewise undelivered, and they gate the first
+*authored garment* rather than the body itself. Tracked as tasks 13.7–13.9.
 
 ### 10.2 Facial expressions need geometry AND renderer support — **Body ⇄ Renderer**
 
