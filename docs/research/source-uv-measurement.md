@@ -110,19 +110,24 @@ a content-policy call with consequences on the textures and wearables sides.
 is the kind of judgment that got the previous session retired.
 
 **The good news is that it is not a budget crisis.** I expected it to be, and it
-is not — measured against the standard's 512 px/m target for skin:
+is not. Rather than argue it from arithmetic, I ran both packs into a throwaway
+scene and measured the result — ● real output, nothing written, nothing
+committed:
 
-| Option | Unique surface | Sheet | Utilisation | Achieved density |
+| Option | Unique surface | Achieved utilisation | Outside tile | Density at 1024² |
 |---|---|---|---|---|
-| **Disjoint** (halves keep separate texels) | 1.902 m² | 1024² | 55 % | **551 px/m** ✅ |
-| Disjoint | 1.902 m² | 1024² | 75 % | 643 px/m |
-| Mirrored (halves share texels) | 0.951 m² | 1024² | 55 % | 779 px/m |
-| Mirrored | 0.951 m² | 1024² | 75 % | 909 px/m |
+| **Disjoint** (halves keep separate texels) | 1.902 m² | **66.7 %** | 0 | **607 px/m** ✅ |
+| Mirrored (halves share texels) | 0.951 m² | 78.8 % | 0 | 932 px/m |
 
-**Disjoint already clears the 512 px/m target at the minimum permitted
-utilisation, on the 1024² sheet, with room to spare.** Mirroring buys ~1.41×
-more density that the standard does not ask for, and it costs two things the
-project has already said it wants:
+*(Blender island packer, `rotate=True, margin=0.003`; islands translated,
+rotated and scaled as units — never split.)*
+
+Both pack cleanly into the tile with nothing left outside. **Disjoint clears the
+standard's 512 px/m skin target with 19 % headroom, and its 66.7 % utilisation
+clears the `chart_min_utilisation` floor of 55 %.** So the density argument for
+mirroring does not bite: mirroring buys ~1.54× more density that the standard
+does not ask for, and it costs two things the project has already said it
+wants:
 
 - **Asymmetry becomes impossible.** Left and right share texels, so a scar, a
   tattoo, a sunburn or any per-side detail paints onto both sides at once.
@@ -136,10 +141,10 @@ SEAM: Body contract (UV chart) ⇄ textures standard
 NEED: The source is a 24-tile mirrored UDIM layout, so a repack into the 0-1
       tile is mandatory before the body can be imported at all. The repack must
       choose whether the mirrored halves stay DISJOINT (each side its own
-      texels) or are OVERLAPPED (halves share texels). Measured: disjoint gives
-      551 px/m at 1024²/55 % utilisation, which already meets the standard's
-      512 px/m skin target — so the density argument for mirroring does not
-      bite.
+      texels) or are OVERLAPPED (halves share texels). Measured on a real pack,
+      not estimated: disjoint reaches 66.7 % utilisation and 607 px/m at 1024²,
+      already over the standard's 512 px/m skin target and over its 55 %
+      utilisation floor — so the density argument for mirroring does not bite.
 BREAKS: Mirroring would break asymmetric skin detail and per-region texture-space
       masking (ADR 0008 §3.3), and contradicts `chart_islands_disjoint` in
       `assets/standards/skin_texture.mgestd`. Disjoint costs nothing measurable.
@@ -174,6 +179,12 @@ These are other sessions' files, so they are listed, not edited:
 3. **`docs/MODELING.md` §7** should record the bundle version actually measured
    (v1.4.1, already named there) and that the vendored source is UDIM, so the
    next session does not rediscover this.
+4. **Task 13.6 has two owners.** ADR 0008 D-3 ends "`BodyRegion` extends to
+   match — **wearables-session work**", but the Phase 13 sequencing note and my
+   brief both put 13.6–13.9 on this session. Minor, but `BodyRegion` is a seam
+   and AGENTS.md §10.3 requires any segmentation change to extend `CoverBits`
+   in the same ruling — so it is worth saying once who cuts it, rather than
+   both of us waiting for the other.
 
 ---
 
