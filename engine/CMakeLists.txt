@@ -14,6 +14,8 @@ add_library(mge_core STATIC
     src/framework/save.cpp
     src/framework/virtual_models.cpp
     src/framework/character.cpp
+    src/framework/collision.cpp
+    src/framework/interaction.cpp
     src/framework/ai.cpp
     src/character/humanoid.cpp
     src/character/body_mesh.cpp

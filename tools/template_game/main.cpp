@@ -22,6 +22,8 @@
 #include "mge/framework/asset_registry.h"
 #include "mge/framework/camera_controller.h"
 #include "mge/framework/character.h"
+#include "mge/framework/collision.h"
+#include "mge/framework/interaction.h"
 #include "mge/framework/engine.h"
 #include "mge/framework/save.h"
 #include "mge/graphics/mesh_io.h"
@@ -212,11 +214,22 @@ int main(int argc, char** argv) {
         world.setModel(e, m);
         return e;
     };
+    // Phase 11: the same placement call registers a collider, so the world
+    // the player sees is the world the player collides with.
+    CollisionWorld collision;
+    const auto solid = [&](EntityId entity, Vec3 center, Vec3 halfExtents) {
+        collision.addBox(Aabb::fromCenterExtents(center, halfExtents), entity);
+        return entity;
+    };
     place(groundId, {0, 0, 0}, 0, 0.42f, 0.47f, 0.36f);
-    place(houseId, {-6.0f, 1.3f, -6.0f}, 0.3f, 0.62f, 0.55f, 0.45f);
-    place(houseId, {6.0f, 1.3f, -8.0f}, -0.4f, 0.58f, 0.50f, 0.42f);
-    place(houseId, {4.0f, 1.3f, -17.5f}, 1.2f, 0.55f, 0.52f, 0.47f);
-    place(towerId, {10.0f, 3.5f, -14.0f}, 0, 0.52f, 0.50f, 0.55f);
+    solid(place(houseId, {-6.0f, 1.3f, -6.0f}, 0.3f, 0.62f, 0.55f, 0.45f),
+          {-6.0f, 1.3f, -6.0f}, {1.9f, 1.3f, 1.7f});
+    solid(place(houseId, {6.0f, 1.3f, -8.0f}, -0.4f, 0.58f, 0.50f, 0.42f),
+          {6.0f, 1.3f, -8.0f}, {1.9f, 1.3f, 1.7f});
+    solid(place(houseId, {4.0f, 1.3f, -17.5f}, 1.2f, 0.55f, 0.52f, 0.47f),
+          {4.0f, 1.3f, -17.5f}, {1.9f, 1.3f, 1.7f});
+    solid(place(towerId, {10.0f, 3.5f, -14.0f}, 0, 0.52f, 0.50f, 0.55f),
+          {10.0f, 3.5f, -14.0f}, {1.2f, 3.5f, 1.2f});
     place(stallId, {-2.5f, 1.05f, -9.0f}, 0.4f, 0.85f, 0.55f, 0.18f);
     place(wellId, {3.0f, 0.7f, -4.5f}, 0, 0.85f, 0.55f, 0.18f);
     place(crateId, {-1.0f, 0.5f, -5.0f}, 0.2f, 0.85f, 0.55f, 0.18f);
@@ -353,7 +366,14 @@ int main(int argc, char** argv) {
             ++scriptCursor;
         }
         ai.step(static_cast<float>(dt));  // NPC intents; player intents come from touch
+        const Vec3 beforeStep =
+            world.transform(player) != nullptr ? world.transform(player)->position : Vec3{};
         engine.tick(dt);
+        if (TransformComponent* pt = world.transform(player)) {
+            CharacterShape shape;
+            pt->position =
+                collision.moveCharacter(beforeStep, shape, pt->position - beforeStep).position;
+        }
         for (Actor& actor : actors) {
             const MovementComponent* m = world.movement(actor.entity);
             actor.anim.update(static_cast<float>(dt),
@@ -430,6 +450,58 @@ int main(int argc, char** argv) {
            static_cast<unsigned long long>(engine.stats().simStepCount),
            static_cast<unsigned long long>(engine.stats().inputEventCount));
 
+    // --- Phase 11 mechanisms: the world is solid, and a tap acts on it ---
+    // Walk the player straight at a house for two seconds and confirm the
+    // wall stops them; then face an apple and tap to take it.
+    InteractionSystem interactions(world, characters);
+    interactions.setCollisionWorld(&collision);
+    bool mechanismsOk = false;
+    {
+        TransformComponent* pt = world.transform(player);
+        pt->position = {-6.0f, 0.0f, -2.6f};   // north of the first house
+        pt->yaw = 0.0f;                        // facing -Z, into its wall
+        pt->prevPosition = pt->position;
+        MovementComponent* pm = world.movement(player);
+        CharacterShape shape;
+        const Vec3 startedAt = pt->position;
+        for (int step = 0; step < 120; ++step) {
+            pm->velocity = yawForward(pt->yaw) * pm->maxSpeed;
+            const Vec3 before = pt->position;
+            world.step(dt);
+            pt->position = collision.moveCharacter(before, shape, pt->position - before).position;
+        }
+        const float traveledIntoHouse = startedAt.z - pt->position.z;
+        const bool stoppedByWall =
+            pt->position.z > -4.0f &&
+            !collision.overlaps(CollisionWorld::characterBounds(pt->position, shape));
+        printf("walked into the house: advanced %.2f m in 2 s, stopped clear of the wall: %s\n",
+               traveledIntoHouse, stoppedByWall ? "yes" : "NO");
+
+        // Turn away from the house and drop an apple a pace ahead — where
+        // the player is now actually looking.
+        pt->yaw = kPi;  // facing +Z
+        const Vec3 ahead = pt->position + yawForward(pt->yaw) * 1.0f;
+        const EntityId apple = place(crateId, {ahead.x, 0.2f, ahead.z}, 0, 0.85f, 0.25f, 0.20f);
+        InteractableComponent pick;
+        pick.kind = InteractionKind::PickUp;
+        pick.promptKey = "prompt.take";
+        pick.range = 2.0f;
+        pick.item = {assetIdFromName("item/apple"), "item.apple", 1, {0.8f, 0.22f, 0.16f, 1}};
+        interactions.attach(apple, pick);
+        pm->velocity = {0, 0, 0};
+
+        const bool focusedApple = interactions.focus(player) == apple;
+        CharacterComponent* playerCharacter = characters.get(player);
+        const uint32_t carriedBefore = playerCharacter->inventory.size();
+        const InteractionSystem::Result took = interactions.interact(player);
+        const bool carried = playerCharacter->inventory.size() == carriedBefore + 1;
+        printf("apple: focused %s, taken %s, gone from the world %s\n",
+               focusedApple ? "yes" : "no", took.handled ? "yes" : "no",
+               !world.entities().isAlive(apple) ? "yes" : "no");
+        mechanismsOk = stoppedByWall && focusedApple && took.handled && carried &&
+                       !world.entities().isAlive(apple);
+    }
+
     // --- Character persistence (8.9): the walkabout's state rides a real
     //     save file — wound the guard, save, load, verify it came back. ---
     characters.damage(guard, 0.25f);
@@ -468,10 +540,12 @@ int main(int argc, char** argv) {
     engine.shutdown();
 
     const bool ok = captures == 3 && traveled > 15.0f && finalT->yaw > 0.5f &&
-                    guardTraveled > 0.5f && persistenceOk && gpuResidual == 0;
+                    guardTraveled > 0.5f && persistenceOk && mechanismsOk && gpuResidual == 0;
     if (!ok) {
-        fprintf(stderr, "FAIL: captures=%d traveled=%.1f yaw=%.2f guard=%.1f persist=%d gpuResidual=%zu\n",
-                captures, traveled, finalT->yaw, guardTraveled, persistenceOk, gpuResidual);
+        fprintf(stderr,
+                "FAIL: captures=%d traveled=%.1f yaw=%.2f guard=%.1f persist=%d mechanisms=%d gpuResidual=%zu\n",
+                captures, traveled, finalT->yaw, guardTraveled, persistenceOk, mechanismsOk,
+                gpuResidual);
         return 1;
     }
     printf("OK\n");

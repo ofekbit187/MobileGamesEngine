@@ -16,6 +16,8 @@
 #include "mge/framework/asset_registry.h"
 #include "mge/framework/camera_controller.h"
 #include "mge/framework/character.h"
+#include "mge/framework/collision.h"
+#include "mge/framework/interaction.h"
 #include "mge/graphics/primitives.h"
 #include "mge/graphics/renderer.h"
 #include "mge/graphics/swapchain.h"
@@ -174,6 +176,15 @@ struct DeviceGame::Impl {
     Actor player, guard, villager;
     CharacterSystem* characters = nullptr;
     AiSystem* ai = nullptr;
+    CollisionWorld collision;
+    InteractionSystem* interactions = nullptr;
+    CharacterShape playerShape;
+    ItemCollection chestContents;
+    CollectionRegistry collections;
+    EntityId focused = kInvalidEntity;
+    uint64_t openCollectionId = 0;
+    double promptFlash = 0;   // "picked up X" / "the chest holds..." feedback
+    std::string flashText;
     ThirdPersonCamera cameraController;
     Camera camera;
 
@@ -192,6 +203,7 @@ struct DeviceGame::Impl {
     double subtitleTimer = 0;
 
     ~Impl() {
+        delete interactions;
         delete ai;
         delete characters;
     }
@@ -284,6 +296,10 @@ bool DeviceGame::start(Engine& engine, AudioMixer& mixer, ANativeWindow* window,
     stallDesc.proportions = {2.4f, 2.1f, 1.8f};
     stallDesc.description = "wooden market stall, striped canvas roof, worn planks";
     const AssetId stallId = s.assets.registerVirtualModel("prop/market_stall", stallDesc);
+    VirtualModelDesc crateDesc;
+    crateDesc.proportions = {1.2f, 0.4f, 1.2f};
+    crateDesc.description = "low wooden crate, planks and iron banding";
+    const AssetId crateId = s.assets.registerVirtualModel("prop/crate", crateDesc);
     VirtualModelDesc wellDesc;
     wellDesc.proportions = {1.8f, 1.4f, 1.8f};
     wellDesc.shape = PlaceholderShape::Cylinder;
@@ -304,13 +320,28 @@ bool DeviceGame::start(Engine& engine, AudioMixer& mixer, ANativeWindow* window,
         world.setModel(e, m);
         return e;
     };
+    // Props are placed AND made solid: the same call registers a collider,
+    // so the hamlet you see is the hamlet you bump into (task 11.4 — a
+    // streaming world does this per chunk instead).
+    const auto solid = [&](EntityId entity, Vec3 center, Vec3 halfExtents) {
+        s.collision.addBox(Aabb::fromCenterExtents(center, halfExtents), entity);
+    };
     place(groundId, {0, 0, 0}, 0, 0.42f, 0.47f, 0.36f);
-    place(houseId, {-6.0f, 1.3f, -6.0f}, 0.3f, 0.62f, 0.55f, 0.45f);
-    place(houseId, {6.0f, 1.3f, -8.0f}, -0.4f, 0.58f, 0.50f, 0.42f);
-    place(houseId, {4.0f, 1.3f, -17.5f}, 1.2f, 0.55f, 0.52f, 0.47f);
-    place(towerId, {10.0f, 3.5f, -14.0f}, 0, 0.52f, 0.50f, 0.55f);
-    place(stallId, {-2.5f, 1.05f, -9.0f}, 0.4f, 0.85f, 0.55f, 0.18f);
-    place(wellId, {3.0f, 0.7f, -4.5f}, 0, 0.85f, 0.55f, 0.18f);
+    solid(place(houseId, {-6.0f, 1.3f, -6.0f}, 0.3f, 0.62f, 0.55f, 0.45f),
+          {-6.0f, 1.3f, -6.0f}, {1.9f, 1.3f, 1.7f});
+    solid(place(houseId, {6.0f, 1.3f, -8.0f}, -0.4f, 0.58f, 0.50f, 0.42f),
+          {6.0f, 1.3f, -8.0f}, {1.9f, 1.3f, 1.7f});
+    solid(place(houseId, {4.0f, 1.3f, -17.5f}, 1.2f, 0.55f, 0.52f, 0.47f),
+          {4.0f, 1.3f, -17.5f}, {1.9f, 1.3f, 1.7f});
+    solid(place(towerId, {10.0f, 3.5f, -14.0f}, 0, 0.52f, 0.50f, 0.55f),
+          {10.0f, 3.5f, -14.0f}, {1.2f, 3.5f, 1.2f});
+    solid(place(stallId, {-2.5f, 1.05f, -9.0f}, 0.4f, 0.85f, 0.55f, 0.18f),
+          {-2.5f, 1.05f, -9.0f}, {1.2f, 1.05f, 0.9f});
+    solid(place(wellId, {3.0f, 0.7f, -4.5f}, 0, 0.85f, 0.55f, 0.18f),
+          {3.0f, 0.7f, -4.5f}, {0.9f, 0.7f, 0.9f});
+    // A low crate you can step onto, proving step-up on real hardware.
+    solid(place(crateId, {-1.6f, 0.2f, -3.2f}, 0.3f, 0.55f, 0.42f, 0.26f),
+          {-1.6f, 0.2f, -3.2f}, {0.6f, 0.2f, 0.6f});
 
     // --- Characters: player + NPCs, same humanoid, different controllers ---
     s.characters = new CharacterSystem(world);
@@ -349,8 +380,52 @@ bool DeviceGame::start(Engine& engine, AudioMixer& mixer, ANativeWindow* window,
     villagerProfile.homeRadius = 4.0f;
     s.ai->attach(s.villager.entity, villagerProfile);
 
+    // --- Things to act on (Phase 11): an apple to take, a chest to open,
+    //     and a villager to talk to. All three are ordinary world entities
+    //     with an InteractableComponent — nothing here is special-cased.
+    s.interactions = new InteractionSystem(world, *s.characters);
+    s.interactions->setCollisionWorld(&s.collision);
+
+    const auto apple = [&](Vec3 position) {
+        const EntityId entity = place(crateId, position, 0.0f, 0.85f, 0.25f, 0.20f);
+        InteractableComponent pick;
+        pick.kind = InteractionKind::PickUp;
+        pick.promptKey = "prompt.take";
+        pick.range = 2.0f;
+        pick.item = {assetIdFromName("item/apple"), "item.apple", 1, {0.80f, 0.22f, 0.16f, 1}};
+        s.interactions->attach(entity, pick);
+        return entity;
+    };
+    apple({1.2f, 0.2f, 1.0f});
+    apple({-2.6f, 0.2f, -1.4f});
+
+    // The chest binds a registered collection — the UI shows whatever the
+    // game put in it (the Phase 5 data binding, now reachable in play).
+    s.chestContents.add({assetIdFromName("item/rope"), "item.rope", 2, {0.72f, 0.62f, 0.42f, 1}});
+    s.chestContents.add({assetIdFromName("item/coin"), "item.coin", 17, {0.85f, 0.72f, 0.28f, 1}});
+    s.chestContents.add({assetIdFromName("item/bread"), "item.bread", 3, {0.76f, 0.58f, 0.32f, 1}});
+    s.collections.add("chest.hamlet", &s.chestContents);
+    {
+        const EntityId chest = place(crateId, {2.2f, 0.2f, -2.6f}, 0.2f, 0.45f, 0.34f, 0.20f);
+        s.collision.addBox(Aabb::fromCenterExtents({2.2f, 0.2f, -2.6f}, {0.6f, 0.2f, 0.6f}),
+                           chest);
+        InteractableComponent container;
+        container.kind = InteractionKind::Container;
+        container.promptKey = "prompt.open";
+        container.range = 2.2f;
+        container.collectionId = assetIdFromName("chest.hamlet");
+        s.interactions->attach(chest, container);
+    }
+    {
+        InteractableComponent talk;
+        talk.kind = InteractionKind::Talk;
+        talk.promptKey = "prompt.talk";
+        talk.range = 2.6f;
+        s.interactions->attach(s.villager.entity, talk);
+    }
+
     if (s.vulkanOk) {
-        for (AssetId id : {groundId, houseId, towerId, stallId, wellId}) {
+        for (AssetId id : {groundId, houseId, towerId, stallId, wellId, crateId}) {
             const AssetRecord* record = s.assets.find(id);
             GpuLodMesh mesh;
             if (record == nullptr || !s.renderer.uploadLodMesh(record->mesh, mesh)) {
@@ -465,6 +540,13 @@ bool DeviceGame::start(Engine& engine, AudioMixer& mixer, ANativeWindow* window,
     if (s.vulkanOk) {
         s.uiOk = s.font.bakeEmbedded(30.0f) && s.renderer.setUiFont(s.font);
         if (s.uiOk) {
+            s.strings.set(Language::English, "prompt.take", "Take");
+            s.strings.set(Language::Hebrew, "prompt.take", "\xd7\x9c\xd7\xa7\xd7\x97\xd7\xaa");
+            s.strings.set(Language::English, "prompt.open", "Open");
+            s.strings.set(Language::Hebrew, "prompt.open", "\xd7\x9c\xd7\xa4\xd7\xaa\xd7\x95\xd7\x97");
+            s.strings.set(Language::English, "prompt.talk", "Speak");
+            s.strings.set(Language::Hebrew, "prompt.talk", "\xd7\x9c\xd7\x93\xd7\x91\xd7\xa8");
+            s.strings.set(Language::English, "hud.flash", "");
             s.strings.set(Language::English, "hud.subtitle",
                           "Fine morning, friend. Mind the bell tower.");
             s.strings.set(Language::Hebrew, "hud.subtitle",
@@ -523,14 +605,77 @@ void DeviceGame::frame(double dtSeconds, ANativeWindow* window) {
     if (dt <= 0.0 || dt > 0.05) dt = 1.0 / 60.0;
 
     // --- Simulation: AI intents, then the engine's fixed-step tick ---
+    World& world = s.engine->world();
+    Vec3 before[3] = {};
+    Impl::Actor* actors[3] = {&s.player, &s.guard, &s.villager};
+    for (int i = 0; i < 3; ++i) {
+        if (const TransformComponent* t = world.transform(actors[i]->entity)) {
+            before[i] = t->position;
+        }
+    }
     s.ai->step(static_cast<float>(dt));
     s.engine->tick(dt);
-    World& world = s.engine->world();
+
+    // The world is solid (Phase 11): whatever the controls and the AI asked
+    // for, the collision world decides where bodies actually end up — for
+    // the player and the NPCs alike, through the same call.
+    for (int i = 0; i < 3; ++i) {
+        TransformComponent* t = world.transform(actors[i]->entity);
+        if (t == nullptr) continue;
+        const MoveResult resolved =
+            s.collision.moveCharacter(before[i], s.playerShape, t->position - before[i]);
+        t->position = resolved.position;
+    }
     for (Impl::Actor* actor : {&s.player, &s.guard, &s.villager}) {
         const MovementComponent* m = world.movement(actor->entity);
         actor->anim.update(static_cast<float>(dt),
                            m != nullptr ? m->velocity.length() : 0.0f);
     }
+
+    // --- What the player is about to act on, and what a tap does to it ---
+    s.focused = s.interactions->focus(s.player.entity);
+    s.promptFlash -= dt;
+    if (s.engine->lastIntents().action) {
+        if (s.openCollectionId != 0) {
+            s.openCollectionId = 0;  // a tap closes the open container
+        } else {
+            const InteractionSystem::Result acted = s.interactions->interact(s.player.entity);
+            switch (acted.kind) {
+                case InteractionKind::PickUp:
+                    if (acted.handled) {
+                        s.strings.set(Language::English, "hud.flash", "Took an apple");
+                        s.strings.set(Language::Hebrew, "hud.flash",
+                                      "\xd7\x9c\xd7\xa7\xd7\x97\xd7\xaa \xd7\xaa\xd7\xa4\xd7\x95\xd7\x97");
+                    } else {
+                        s.strings.set(Language::English, "hud.flash", "Your pack is full");
+                    }
+                    s.promptFlash = 2.0;
+                    break;
+                case InteractionKind::Container:
+                    s.openCollectionId = acted.collectionId;
+                    break;
+                case InteractionKind::Talk: {
+                    const TransformComponent* speaker = world.transform(acted.target);
+                    if (s.speech.loaded() && speaker != nullptr) {
+                        AudioPlayParams line;
+                        line.bus = AudioBus::Voice;
+                        line.positional = true;
+                        line.position = speaker->position + Vec3{0, 1.5f, 0};
+                        line.refDistance = 2.0f;
+                        line.maxDistance = 20.0f;
+                        s.mixer->play(s.speech, line);
+                        s.subtitleTimer = 3.2;
+                        s.speechCooldown = 14.0;  // don't repeat it unprompted
+                    }
+                    break;
+                }
+                default:
+                    break;
+            }
+        }
+    }
+    // Walking away closes the container panel — no modal traps.
+    if (s.openCollectionId != 0 && s.focused == kInvalidEntity) s.openCollectionId = 0;
 
     // --- Audio: listener at the player; bell from the tower; the villager
     //     greets you up close (music ducks under speech, live) ---
@@ -673,6 +818,30 @@ void DeviceGame::frame(double dtSeconds, ANativeWindow* window) {
             } else {
                 // Resting stick hint in the left control zone.
                 s.ui.virtualControls(false, w * 0.14f, h * 0.78f, w * 0.14f, h * 0.78f);
+            }
+            // What you are about to act on (Phase 11): the prompt is the
+            // interactable's own localized key, so a Hebrew game reads
+            // right-to-left with no extra work (P11).
+            if (s.focused != kInvalidEntity && s.openCollectionId == 0) {
+                const InteractableComponent* target = s.interactions->get(s.focused);
+                if (target != nullptr && target->promptKey[0] != '\0') {
+                    s.ui.panel({w * 0.5f - 90, h * 0.62f, 180, 44});
+                    s.ui.label({w * 0.5f - 80, h * 0.62f + 8, 160, 28}, target->promptKey, 0.72f,
+                               TextAlign::Center);
+                }
+            }
+            if (s.promptFlash > 0) {
+                s.ui.label({w * 0.5f - w * 0.3f, h * 0.54f, w * 0.6f, 28}, "hud.flash", 0.66f,
+                           TextAlign::Center);
+            }
+            // An opened container shows its BOUND collection — the Phase 5
+            // data binding, now reachable in play.
+            if (s.openCollectionId != 0) {
+                if (ItemCollection* contents = s.collections.find(s.openCollectionId)) {
+                    static int selected = -1;
+                    s.ui.collectionView(900, {w * 0.5f - 190, h * 0.16f, 380, h * 0.6f},
+                                        "inv.chest", *contents, 4, selected);
+                }
             }
             if (s.subtitleTimer > 0) {
                 s.ui.label({w * 0.5f - w * 0.35f, h - 54, w * 0.7f, 30}, "hud.subtitle",

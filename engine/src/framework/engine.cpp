@@ -123,6 +123,7 @@ void Engine::simulateStep(double stepSeconds) {
     // Order per architecture: input intents -> player control -> world step.
     // (Streaming tick and UI update join this sequence in their phases.)
     const GameplayIntents intents = controls_.consume();
+    lastIntents_ = intents;
 
     if (world_->entities().isAlive(player_)) {
         const TransformComponent* t = world_->transform(player_);

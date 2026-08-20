@@ -190,14 +190,30 @@ Status legend: `[ ]` not started · `[~]` in progress · `[x]` done
 - [x] **10.8** Audio showcase: `tools/audio_demo` walks a listener past a bell tower (pan sweeps right→center→left), wind + music beds, a Phase 9 voice take spoken mid-walk with audible ducking — mixed by the engine into a wav, verified on the samples, listenable on the review board; runs in CI/verify
 - Later (deliberately deferred): disk-streamed music on job lanes, reverb/occlusion, HRTF, lock-free command ring
 
-## Phase 11 and beyond — held for further dictation
+## Phase 11 — Basic gameplay mechanisms
+
+*Goal: the two things whose absence stops the engine from being usable for a game — you cannot walk through walls, and you can act on the world. Everything here is engine machinery a game defines in data; the game-logic authoring model itself awaits dictation.*
+
+- [x] **11.1** Collider representation + `CollisionWorld`: fixed-capacity static boxes with owning entity ids, refuse-at-cap, release-by-owner (P1)
+- [x] **11.2** Character movement resolution: per-axis slide against blockers, step-up over low ledges, feet following the supporting surface — the world is solid *(v1 characters are walkers: there is no airborne state; gravity, jumping and falling arrive with dynamics, and `moveCharacter` is the seam they replace)*
+- [x] **11.3** Queries: raycast (nearest hit, surface normal, owning entity) and box overlap
+- [x] **11.4** World integration: the player AND the NPCs resolve their movement through the same call every step; placement registers a collider so what you see is what you bump into. *Chunk-scoped registration for streamed worlds is the remaining half — the API (`removeByEntity`) is the hook*
+- [x] **11.5** `InteractableComponent` + `InteractionSystem`: kind, localized prompt key, range, facing cone; fixed capacity
+- [x] **11.6** Focus selection: in range, inside the facing cone, and not behind a wall (raycast line of sight) — one answer shared by the HUD prompt and the tap
+- [~] **11.7** Interaction verbs v1: pick up (engine moves the item into the inventory and despawns it; a full pack refuses and leaves it in the world), open container (reports the bound collection; the device build opens it as a real panel), talk (reports the line; the device build plays the voice take with its subtitle) — doors/interior transitions land with the streaming interiors wiring
+- [x] **11.8** Prompt in the HUD (localized keys, so Hebrew reads RTL for free) + the tap wired to interact; 7 unit tests, and `template_game` runs the same loop headlessly in CI — walks into a house and is stopped, then focuses and takes an apple
+
+**Exit criteria:** on the phone, the world is solid, a prompt appears when you face something usable, and a tap picks up an item, opens a chest's contents, or makes a villager speak. — *Built and headlessly verified; the on-device confirmation is the owner's next device test.*
+
+## Phase 12 and beyond — held for further dictation
 
 Deliberately not planned yet; known candidates awaiting direction:
 
-- On-device bring-up: Android surface/swapchain, textures/materials, template game on real glass
+- Textures & materials (everything renders flat-shaded today)
+- UI screen flow: screen stack, pause menu, inventory reachable in-game
 - AI expansion (behavior model beyond the v1 state machine, schedules, group behavior) — v1 landed in 8.8
 - Advanced facial animation (lip-sync, emotes, gaze) — basic set specified in 8.20
-- Physics & collision beyond basic queries
+- Physics beyond the v1 collision (dynamics, ragdolls, projectiles)
 - World-authoring/editor tooling
 - Scripting / game-logic authoring model
 - Networking / multiplayer

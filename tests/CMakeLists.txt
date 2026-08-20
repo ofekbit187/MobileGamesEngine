@@ -18,6 +18,7 @@ add_executable(mge_tests
     test_humanoid.cpp
     test_people.cpp
     test_audio.cpp
+    test_gameplay.cpp
     test_body_mesh.cpp
     test_engine.cpp
 )

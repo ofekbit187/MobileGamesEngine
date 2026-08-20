@@ -80,6 +80,10 @@ public:
     void setPlayerEntity(EntityId id) { player_ = id; }
     EntityId playerEntity() const { return player_; }
     TouchControlScheme& controls() { return controls_; }
+    // The intents the last simulation step consumed. The game layer reads
+    // the action flag here (the engine steers movement itself; what a tap
+    // MEANS is the game's business — Phase 11 interaction).
+    const GameplayIntents& lastIntents() const { return lastIntents_; }
     // Interpolation factor for rendering between the last two sim states.
     float renderAlpha() const { return static_cast<float>(clock_.alpha()); }
 
@@ -100,6 +104,7 @@ private:
     std::unique_ptr<AsyncIO> io_;
     std::unique_ptr<World> world_;
     TouchControlScheme controls_;
+    GameplayIntents lastIntents_{};
     EntityId player_ = kInvalidEntity;
     InputQueue inputQueue_;
     TouchEvent lastTouch_;
