@@ -1,4 +1,5 @@
 #include "mge/character/body_mesh.h"
+#include "mge/character/garment_binding.h"
 
 #include <cmath>
 #include <cstring>
@@ -41,6 +42,15 @@ bool loadAsset(const char* name, SkinnedMeshData& out) {
     const std::string path = assetDir() + "/" + name + ".mgeskin";
     if (!readSkinnedMeshFile(path.c_str(), out)) {
         MGE_LOGE("body", "missing character asset: %s", path.c_str());
+        out.clear();
+        return false;
+    }
+    return true;
+}
+
+bool loadBinding(const char* name, GarmentBinding& out) {
+    const std::string path = assetDir() + "/" + name + ".mgefit";
+    if (!readBindingFile(path.c_str(), out)) {
         out.clear();
         return false;
     }
@@ -148,6 +158,22 @@ const SkinnedMeshData& sharedGarment(WearableKind kind) {
     }();
     const size_t k = static_cast<size_t>(kind);
     return garments[k < garments.size() ? k : 0];
+}
+
+// The baked surface binding for a garment (ADR 0008, task 13.2). Absent when
+// the garment has not been through `mge_garment_fit` — the character still
+// renders, it just cannot follow morph-driven shape.
+const GarmentBinding& sharedGarmentBinding(WearableKind kind) {
+    static const std::vector<GarmentBinding> bindings = [] {
+        std::vector<GarmentBinding> loaded(8);
+        for (size_t k = 0; k < loaded.size(); ++k) {
+            const char* name = garmentAsset(static_cast<WearableKind>(k));
+            if (name != nullptr) loadBinding(name, loaded[k]);
+        }
+        return loaded;
+    }();
+    const size_t k = static_cast<size_t>(kind);
+    return bindings[k < bindings.size() ? k : 0];
 }
 
 void buildTemplateBody(const BodyBuildDesc& desc, SkinnedMeshData& out) {
@@ -472,16 +498,51 @@ void buildPosedCharacter(const HumanoidVariant& variant, const WearableInstance*
         for (int c = 0; c < 4; ++c) out.back().color[c] = variant.skin[c];
     }
 
+    // Does this character have any morph-driven shape at all? Bone-scale
+    // variants (height, bulk, shoulders) ride the palette and need no re-fit;
+    // only a morph moves the surface a garment is bound to.
+    bool anyShape = false;
+    for (size_t t = 0; t < kMorphCount && !anyShape; ++t) {
+        anyShape = shape[t] < -1e-4f || shape[t] > 1e-4f;
+    }
+
     for (size_t i = 0; i < wearableCount; ++i) {
         const SkinnedMeshData& garment = sharedGarment(wearables[i].kind);
         if (garment.vertices.empty()) continue;  // held items are not garments
         if (wearableHidden(wearables, wearableCount, i)) continue;
+
         // Garments follow the variant's PROPORTIONS through the same palette.
-        // Following its SHAPE as well needs the morph deltas of the regions a
-        // garment covers, baked into the garment (CHARACTERS.md §5) — not yet
-        // authored, so a heavy belly does not yet push out a tunic.
+        // Following its SHAPE is the surface binding's job (ADR 0008): the
+        // garment's vertices are re-derived from the morphed body before
+        // skinning, so a heavy belly pushes the tunic out instead of coming
+        // through it. Bindings are baked against the UNMASKED LOD0 body —
+        // that is the surface they were baked against, and the hash check
+        // refuses anything else.
+        const SkinnedMeshData* posed = &garment;
+        SkinnedMeshData* refitted = nullptr;
+        if (anyShape) {
+            const GarmentBinding& binding = sharedGarmentBinding(wearables[i].kind);
+            const std::vector<SkinnedMeshData>& lods = sharedTemplateLods();
+            if (!binding.empty() && !lods.empty()) {
+                static GarmentFitCache cache;
+                static thread_local SkinnedMeshData scratch;
+                const std::vector<SkinVertex>* vertices = nullptr;
+                if (cache.request(static_cast<uint32_t>(wearables[i].kind), binding, lods[0],
+                                  garment, shape, &vertices) == GarmentFitCache::Status::Ready &&
+                    vertices != nullptr && vertices->size() == garment.vertices.size()) {
+                    scratch = garment;
+                    scratch.vertices = *vertices;
+                    refitted = &scratch;
+                    posed = refitted;
+                }
+                // Pending or Refused: draw the garment unrefitted rather than
+                // stall or drop it. A slightly loose tunic for a moment beats a
+                // missing one, and a refusal has already logged its reason.
+            }
+        }
+
         out.emplace_back();
-        skinMesh(garment, palette, out.back().mesh);
+        skinMesh(*posed, palette, out.back().mesh);
         for (int c = 0; c < 4; ++c) out.back().color[c] = wearables[i].color[c];
     }
 }

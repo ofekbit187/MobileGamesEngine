@@ -144,3 +144,26 @@ archetype. Specified in CHARACTERS.md §6.2, and it needs one enabling capabilit
 animation system does not have yet: **layered poses with masks**, so an upper-body action
 plays over locomotion and a character can swing while walking. `ItemUse::animKey` from the
 Phase 12 action model is the placeholder this replaces.
+
+## Addendum (architect ruling, post-implementation): outfit chaining is deferred
+
+The pipeline landed (tasks 13.1–13.4; 13.5's offline half). Implementation surfaced a real
+design fact the ADR had not stated: **which garments share a slot is a property of an
+outfit, not of a garment** — a tunic worn with and without armour cannot carry one binding
+baked against a fixed under-layer. Closing 13.5 end-to-end therefore means re-fitting the
+stack at *equip time* (inner → offset → outer) on the job lanes and cache.
+
+**Ruling: build it after the body deliverables (13.6–13.9) and the UV repack land — not
+now.** Three reasons. The shipped catalogue does not need it (no two morph-following layers
+share a region, verified). Deferral accrues no content debt — bindings already carry
+`rootBodyHash` and the offline chaining half exists and is tested, so nothing is being
+authored against a wrong assumption; this is the safe kind of deferral, unlike the WoW/hair
+kind. And a new runtime contract should land against a settled body, not one in the middle
+of a contract-version event.
+
+Also ratified from implementation findings: weight diffusion runs over the position-welded
+mesh (coincident vertices must share weights or seams tear at the first bend); the ~50%
+inpainted fraction on closed garments is *correct by construction* (inner walls face the
+body and must fail the orientation gate — removing the gate reintroduces the
+ribcage-under-a-sleeve bug); and the content hash deliberately excludes morph targets, so
+adding a shape parameter never invalidates the catalogue while moving a vertex always does.

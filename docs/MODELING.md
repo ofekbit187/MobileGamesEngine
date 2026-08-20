@@ -12,6 +12,16 @@ ones that follow.
 
 ---
 
+## 0. Where models come from (owner ruling)
+
+**Models are sourced, not originated.** No session sculpts a mesh, lays out a UV chart by
+eye, or hand-authors an animation curve — a session cannot see, and the experiment of
+having one model the body proved it (slow, expensive, and the chart shipped broken).
+Content arrives from outside: CC0/appropriately-licensed libraries, the P5 fulfillment
+pipeline, or a commissioned artist. Sessions do the measurable half — validation against
+this document's gates, mechanical processing, rigging, retargeting, export. The aesthetic
+verdict belongs to the owner, on renders, via the review board.
+
 ## 0. Where geometry comes from
 
 **Look for a good base mesh before modelling one.** Two revisions of the

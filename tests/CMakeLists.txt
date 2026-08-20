@@ -22,13 +22,14 @@ add_executable(mge_tests
     test_gameplay.cpp
     test_actions.cpp
     test_body_mesh.cpp
+    test_garment_binding.cpp
     test_engine.cpp
 )
 
 target_link_libraries(mge_tests PRIVATE mge_core)
 
 if(TARGET mge_import)
-    target_sources(mge_tests PRIVATE test_import.cpp)
+    target_sources(mge_tests PRIVATE test_import.cpp test_garment_fit.cpp)
     target_link_libraries(mge_tests PRIVATE mge_import)
     target_compile_definitions(mge_tests PRIVATE
         MGE_TEST_DATA_DIR="${CMAKE_CURRENT_SOURCE_DIR}/data")
