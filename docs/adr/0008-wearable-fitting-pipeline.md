@@ -69,7 +69,7 @@ owner.
 | **D-1** | Ears: geometry or texture-only | **Geometry, with their own maskable sub-shell** — at LOD0 only; LOD1/2 may merge them into the head. A medieval game will have helmets, and a helmet that cannot hide ears is the WoW lesson repeating on a smaller part. The LOD restriction keeps the crowd budget honest (P1). |
 | **D-2** | Fingers: articulate or keep palm+thumb | **Keep palm+thumb.** Articulating is a rig-version event (B-1/B-17) that invalidates every weight and animation, costs joints in a 17-joint palette sized for crowds, and buys nothing the wearables system needs — gloves work on mitten topology. Revisit only if the owner dictates first-person hands or fine manipulation. |
 | **D-3** | Elbow/knee cut lines (B-10) | **Accepted.** One duplicated vertex ring per cut, now, versus a catalog in which every tunic must cover the whole arm forever. This is the WoW retrofit lesson applied to limbs, and it is the cheapest insurance in the document. `BodyRegion` extends to match — wearables-session work. |
-| **D-4** | Which wearables ship first | **Escalated to the owner.** This is a content-priority call, not an engineering one: it decides which regions and loops get validated hardest and what the acceptance gates run against. Default if no ruling arrives: tunic, trousers, boots, short hair — the set that exercises torso, arms, legs, feet and scalp masking together. |
+| **D-4** | Which wearables ship first | **Ruled: tunic, trousers, boots, short hair — chosen to stress the mechanism, not to look good.** The owner granted decision authority and, in the same breath, the standard to decide by (P12): the first set exists to prove the *template*, so it is picked for coverage of hard cases, not for a nice screenshot. Together these four exercise every masking region (torso, arms, legs, feet, scalp), both hem classes (a boot cuff meeting a trouser leg, a sleeve ending mid-arm), all three layers, and the one interaction that has sunk other engines — hair under headwear. A cloak or a full plate suit would look more impressive and prove less. |
 | **D-5** | Bind pose | **Frozen at the v3 A-pose.** The imported body's authored stance is the bind pose and the rig was fitted to it. Changing it is a rig-version event invalidating every weight, garment binding and animation in existence; v3 has just landed and the owner's verdict on it was favourable. No change without an explicit architect ruling. |
 
 ## Two additional rulings from architect review
@@ -112,3 +112,35 @@ a garment needs them.
   than silently.
 - Hair ships segmented into sub-regions from the first hairstyle. This is not optional and
   it is not deferrable.
+
+## Amendment — P12: the hundredth wearable is the one that matters
+
+*Owner, Dictation 7: "we would want to make a lot of wearables very easily so we would
+rather work hard on a mechanism that works as a template but in the future each wearable
+would be easy to make."*
+
+This does not change the mechanism chosen above — it is the same conclusion the research
+reached, now stated as law and with the priorities sharpened. What it changes is **what
+counts as done**:
+
+1. **The import tool is the deliverable, not the first garment.** Effort goes into weight
+   transfer, binding, and layer chaining being *reliable without supervision*. A pipeline
+   that needs an engineer to babysit each import has not shipped, however good the first
+   garment looks.
+2. **The acceptance gates are self-serve.** An artist imports and gets pass/fail with a
+   reason — enclosure failed at max bulk, coverage leaves a gap at the boot line, over
+   budget at LOD1. Gates that only an engineer can interpret put an engineer in the content
+   loop, which P12 forbids.
+3. **Garment archetypes, not one-off assets.** Tunic, trousers, boots, hair are *kinds*
+   with shared coverage, hem and layer conventions. A new tunic inherits the kind and
+   changes the shape.
+4. **Zero code per garment, and the build proves it.** The end state: adding a wearable
+   touches no `.cpp` and no `CMakeLists`. Anything that does is a defect in the mechanism.
+
+**The same law now governs held items** — a new weapon must not mean new animation work.
+Items declare a *use archetype* (`swing`, `thrust`, `chop`, `work`, `draw`, `aim`, `raise`,
+`consume`, `gesture`) parameterized by grip, reach and weight; the engine animates the
+archetype. Specified in CHARACTERS.md §6.2, and it needs one enabling capability the
+animation system does not have yet: **layered poses with masks**, so an upper-body action
+plays over locomotion and a character can swing while walking. `ItemUse::animKey` from the
+Phase 12 action model is the placeholder this replaces.

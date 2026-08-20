@@ -236,11 +236,26 @@ Status legend: `[ ]` not started · `[~]` in progress · `[x]` done
 - [ ] **13.7** Body: real `Face` shell — closes the B-8 debt ADR 0008 records against v3, where the imported head is a single shell and the region is empty. Blocks the first mask/visor/face-covering helm
 - [ ] **13.8** Body: hem-loop table (B-11) and per-region vertex groups (B-25) — what a garment artist terminates openings on and what constrains binding
 - [ ] **13.9** Body: published glTF authoring reference (B-29) at template proportions in bind pose, with rig, region groups, hem loops and attachment points, versioned by the same content hash
-- [ ] **13.10** The seven acceptance gates as tests (BODY_CONTRACT.md §9): mask integrity, +35 mm offset shell, hem-loop table, scalp-cap fallback, deterministic hash, groups & anchors, plus the existing gates — and the first authored garment set proving the contract end to end
+- [ ] **13.10** The seven acceptance gates as tests (BODY_CONTRACT.md §9): mask integrity, +35 mm offset shell, hem-loop table, scalp-cap fallback, deterministic hash, groups & anchors, plus the existing gates — and the first authored garment set proving the contract end to end. **Gates are self-serve (P12): an artist imports and gets pass/fail with a reason — no engineer in the content loop**
+- [ ] **13.11** First catalog (D-4 ruled): tunic, trousers, boots, short hair — chosen to stress the mechanism (every masking region, both hem classes, all three layers, hair-under-headwear). Authored as garment *archetypes* whose conventions the next tunic inherits (P12)
+- [ ] **13.12** Zero-code-per-garment proof: adding a wearable touches no `.cpp` and no `CMakeLists` — the build demonstrates it (P12)
 
 **Exit criteria:** a garment authored in a DCC against the published reference, imported, and rendered correctly on the template and both variant extremes, posed — with masking leaving no hole and no clipping, and zero fitting work on the frame path.
 
-## Phase 14 and beyond — held for further dictation
+## Phase 14 — Use-animation archetypes (P12, held for sequencing)
+
+*Goal: a new weapon or tool never means new animation work (CHARACTERS.md §6.2). Items declare a use archetype (`swing`, `thrust`, `chop`, `work`, `draw`, `aim`, `raise`, `consume`, `gesture`); the engine animates the archetype parameterized by the item's grip, reach and weight. Bespoke clips become an opt-in for hero items.*
+
+*Sequenced after Phase 13's fitting pipeline — same area (body & animation) and the layering work below is also what facial expressions and future overlays ride on.*
+
+- [ ] **14.1** Layered poses with masks: locomotion drives the lower body while an action archetype drives the upper body — the enabling capability everything else depends on (a character swings *while walking*)
+- [ ] **14.2** Archetype library v1: the nine archetypes as parameterized procedural motions (grip selects arms/torso involvement; reach sets arc radius and lean; weight sets wind-up/strike/recovery timing)
+- [ ] **14.3** Phase-addressable timeline: wind-up / strike / recovery exposed as fractions, and the Phase 12 action model's damage moment hung on `strike` instead of a tuned delay
+- [ ] **14.4** Interruption: hit/stagger/death blend out mid-action, never snap
+- [ ] **14.5** Item data: archetype + reach + weight on `ItemUse`; `animKey` narrows to the bespoke-clip escape hatch
+- [ ] **14.6** Proof by catalog: sword, spear, axe, hammer, torch, apple — six items, zero per-item animation authoring, visibly distinct motion
+
+## Phase 15 and beyond — held for further dictation
 
 Deliberately not planned yet; known candidates awaiting direction:
 

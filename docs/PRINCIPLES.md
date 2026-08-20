@@ -103,6 +103,37 @@ Localization is foundational, and Hebrew is a first-class language.
 - Every built-in widget and screen must render correctly in RTL: reading order, alignment, and layout mirroring are theme-level behavior the game creator gets for free.
 - Game-facing text is referenced through localization keys by default, so shipping another language never means touching UI layouts.
 
+## P12 — Pay once in the mechanism, so every piece of content after it is cheap
+
+*"we would want to make a lot of wearables very easily so we would rather work hard on a
+mechanism that works as a template but in the future each wearable would be easy to make,
+same principle should go to equipped tools and weapons animation."* (owner, Dictation 7)
+
+The engine is judged not by how hard the **first** wearable is, but by how easy the
+**hundredth** is. Where content will be produced in quantity, the engine invests heavily in
+the mechanism *once* and drives the marginal cost of each new piece toward zero.
+
+- **The unit of design is the template, not the instance.** A garment, a weapon, a tool is
+  authored against a template and declares *what kind of thing it is*; the engine supplies
+  everything that follows from that kind. Anything an artist must hand-tune per item is a
+  defect in the mechanism, not a fact of life.
+- **No engineer in the content loop.** Adding content is a *data* change — model it, declare
+  it, import it. If shipping a new sword needs a code change, the mechanism is unfinished.
+- **The pipeline validates, so the artist doesn't need an engineer to review.** Automated
+  gates return a pass/fail with a reason (fit, coverage, budget, enclosure), because a
+  mechanism nobody can self-serve is a mechanism that will not be used at scale.
+- **Animation follows the same rule.** A new weapon must not mean new animation work: items
+  declare a *use archetype* and the engine animates the archetype, parameterized by the
+  item's own numbers (reach, weight, grip). Bespoke animation is an opt-in luxury for
+  hero items, never the price of admission.
+- **Where this collides with P1, P1 still wins** — but the collision is usually false. Doing
+  the expensive work at import/bake time rather than per frame satisfies both: the artist
+  gets a template, the phone gets baked data.
+
+This principle is about *where the effort goes*, not how much. It licenses a hard, slow,
+carefully-built mechanism — and refuses shortcuts that make the first item fast and the
+next hundred expensive.
+
 ---
 
 *These principles are the foundation. Further principles will be added as more of the engine's direction is dictated; existing ones are refined, not silently changed.*
