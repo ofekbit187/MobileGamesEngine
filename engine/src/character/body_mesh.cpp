@@ -82,6 +82,9 @@ void copyMasked(const SkinnedMeshData& src, uint32_t regions, SkinnedMeshData& o
             out.parts.push_back(kept);
         }
     }
+    // Morph targets index the VERTEX buffer, which masking never touches —
+    // only triangle ranges are dropped — so they carry over unchanged.
+    out.morphs = src.morphs;
     out.bounds = src.bounds;
 }
 
@@ -179,6 +182,48 @@ uint32_t garmentCoverage(WearableKind kind) {
         case WearableKind::Sword: return 0;
     }
     return 0;
+}
+
+// ------------------------------------------------------------- morphs ------
+
+const char* morphName(Morph morph) {
+    switch (morph) {
+        case Morph::BodyChest: return "body.chest";
+        case Morph::BodyBelly: return "body.belly";
+        case Morph::BodySeat: return "body.seat";
+        case Morph::BodyMuscle: return "body.muscle";
+        case Morph::BodyNeck: return "body.neck";
+        case Morph::FaceSkull: return "face.skull";
+        case Morph::FaceBrow: return "face.brow";
+        case Morph::FaceCheeks: return "face.cheeks";
+        case Morph::FaceJawWidth: return "face.jawWidth";
+        case Morph::FaceChin: return "face.chin";
+        case Morph::FaceNoseLength: return "face.noseLength";
+        case Morph::FaceNoseWidth: return "face.noseWidth";
+        case Morph::FaceMouth: return "face.mouth";
+        case Morph::FaceEyes: return "face.eyes";
+        case Morph::FaceEars: return "face.ears";
+        default: return "";
+    }
+}
+
+void morphWeights(const HumanoidVariant& requested, float out[kMorphCount]) {
+    const HumanoidVariant v = clampToScope(requested);
+    out[static_cast<size_t>(Morph::BodyChest)] = v.chest;
+    out[static_cast<size_t>(Morph::BodyBelly)] = v.belly;
+    out[static_cast<size_t>(Morph::BodySeat)] = v.seat;
+    out[static_cast<size_t>(Morph::BodyMuscle)] = v.muscle;
+    out[static_cast<size_t>(Morph::BodyNeck)] = v.neck;
+    out[static_cast<size_t>(Morph::FaceSkull)] = v.face.skull;
+    out[static_cast<size_t>(Morph::FaceBrow)] = v.face.brow;
+    out[static_cast<size_t>(Morph::FaceCheeks)] = v.face.cheeks;
+    out[static_cast<size_t>(Morph::FaceJawWidth)] = v.face.jawWidth;
+    out[static_cast<size_t>(Morph::FaceChin)] = v.face.chin;
+    out[static_cast<size_t>(Morph::FaceNoseLength)] = v.face.noseLength;
+    out[static_cast<size_t>(Morph::FaceNoseWidth)] = v.face.noseWidth;
+    out[static_cast<size_t>(Morph::FaceMouth)] = v.face.mouth;
+    out[static_cast<size_t>(Morph::FaceEyes)] = v.face.eyes;
+    out[static_cast<size_t>(Morph::FaceEars)] = v.face.ears;
 }
 
 // ------------------------------------------------- variants via the rig ----
@@ -323,20 +368,63 @@ void buildSkinPalette(const HumanoidVariant& variant, const Pose& pose,
 }
 
 void skinMesh(const SkinnedMeshData& mesh, const Mat4 palette[kJointCount], MeshData& out) {
+    float none[kMorphCount] = {0};
+    skinMesh(mesh, palette, none, out);
+}
+
+void skinMesh(const SkinnedMeshData& mesh, const Mat4 palette[kJointCount],
+              const float weights[kMorphCount], MeshData& out) {
     out.vertices.resize(mesh.vertices.size());
     out.indices = mesh.indices;
+
+    // The shape pass, in bind space, before any bone touches the vertex —
+    // the order the shader will use, so this stays the reference (ADR 0006).
+    // Only the vertices a target actually moves are visited, so a face
+    // parameter costs a few dozen adds on a 1640-vertex body.
+    static thread_local std::vector<Vec3> morphedPosition;
+    static thread_local std::vector<Vec3> morphedNormal;
+    bool anyMorph = false;
+    for (size_t t = 0; t < kMorphCount && !anyMorph; ++t) {
+        anyMorph = weights[t] < -1e-4f || weights[t] > 1e-4f;
+    }
+    if (anyMorph) {
+        morphedPosition.assign(mesh.vertices.size(), Vec3{0, 0, 0});
+        morphedNormal.assign(mesh.vertices.size(), Vec3{0, 0, 0});
+        for (const MorphTarget& target : mesh.morphs) {
+            const float w = weights[static_cast<size_t>(target.morph)];
+            if (w > -1e-4f && w < 1e-4f) continue;
+            const float positionScale = w * target.scale * (1.0f / 32767.0f);
+            const float normalScale = w * (1.0f / 127.0f);
+            for (const MorphDelta& d : target.deltas) {
+                if (d.vertex >= mesh.vertices.size()) continue;
+                Vec3& p = morphedPosition[d.vertex];
+                p.x += static_cast<float>(d.position[0]) * positionScale;
+                p.y += static_cast<float>(d.position[1]) * positionScale;
+                p.z += static_cast<float>(d.position[2]) * positionScale;
+                Vec3& n = morphedNormal[d.vertex];
+                n.x += static_cast<float>(d.normal[0]) * normalScale;
+                n.y += static_cast<float>(d.normal[1]) * normalScale;
+                n.z += static_cast<float>(d.normal[2]) * normalScale;
+            }
+        }
+    }
+
     for (size_t i = 0; i < mesh.vertices.size(); ++i) {
         const SkinVertex& sv = mesh.vertices[i];
+        const Vec3 bindPosition =
+            anyMorph ? sv.position + morphedPosition[i] : sv.position;
+        const Vec3 bindNormal =
+            anyMorph ? (sv.normal + morphedNormal[i]).normalized() : sv.normal;
         Vec3 position{0, 0, 0};
         Vec3 normal{0, 0, 0};
         for (int k = 0; k < 4; ++k) {
             const float w = static_cast<float>(sv.weights[k]) * (1.0f / 255.0f);
             if (w <= 0.0f) continue;
             const Mat4& m = palette[sv.joints[k]];
-            position += m.transformPoint(sv.position) * w;
-            const Vec3 n{m.m[0] * sv.normal.x + m.m[4] * sv.normal.y + m.m[8] * sv.normal.z,
-                         m.m[1] * sv.normal.x + m.m[5] * sv.normal.y + m.m[9] * sv.normal.z,
-                         m.m[2] * sv.normal.x + m.m[6] * sv.normal.y + m.m[10] * sv.normal.z};
+            position += m.transformPoint(bindPosition) * w;
+            const Vec3 n{m.m[0] * bindNormal.x + m.m[4] * bindNormal.y + m.m[8] * bindNormal.z,
+                         m.m[1] * bindNormal.x + m.m[5] * bindNormal.y + m.m[9] * bindNormal.z,
+                         m.m[2] * bindNormal.x + m.m[6] * bindNormal.y + m.m[10] * bindNormal.z};
             normal += n * w;
         }
         out.vertices[i].position = position;
@@ -367,6 +455,8 @@ void buildPosedCharacter(const HumanoidVariant& variant, const WearableInstance*
     out.clear();
     Mat4 palette[kJointCount];
     buildSkinPalette(variant, pose, palette);
+    float shape[kMorphCount];
+    morphWeights(variant, shape);
 
     uint32_t regions = kAllRegions;
     for (size_t i = 0; i < wearableCount; ++i) regions &= ~garmentCoverage(wearables[i].kind);
@@ -378,7 +468,7 @@ void buildPosedCharacter(const HumanoidVariant& variant, const WearableInstance*
     buildTemplateBody(desc, body);
     if (!body.vertices.empty()) {
         out.emplace_back();
-        skinMesh(body, palette, out.back().mesh);
+        skinMesh(body, palette, shape, out.back().mesh);
         for (int c = 0; c < 4; ++c) out.back().color[c] = variant.skin[c];
     }
 
@@ -386,6 +476,10 @@ void buildPosedCharacter(const HumanoidVariant& variant, const WearableInstance*
         const SkinnedMeshData& garment = sharedGarment(wearables[i].kind);
         if (garment.vertices.empty()) continue;  // held items are not garments
         if (wearableHidden(wearables, wearableCount, i)) continue;
+        // Garments follow the variant's PROPORTIONS through the same palette.
+        // Following its SHAPE as well needs the morph deltas of the regions a
+        // garment covers, baked into the garment (CHARACTERS.md §5) — not yet
+        // authored, so a heavy belly does not yet push out a tunic.
         out.emplace_back();
         skinMesh(garment, palette, out.back().mesh);
         for (int c = 0; c < 4; ++c) out.back().color[c] = wearables[i].color[c];

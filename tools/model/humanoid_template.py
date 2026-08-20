@@ -17,7 +17,9 @@ male base mesh. THE GEOMETRY IS NOT MODIFIED. This script only:
   4. derives LOD1/LOD2 by decimation
   5. cuts the shipped garments out of the body's OWN surface, so every layer
      encloses the one beneath it by construction (CHARACTERS.md 5.4)
-  6. exports glTF for the engine's import path (P5)
+  6. authors the variation scope's morph targets on each LOD (shape keys,
+     which glTF carries natively) — see humanoid_morphs.py
+  7. exports glTF for the engine's import path (P5)
 
 The bundle is a build-time input, not a runtime dependency: the baked
 `.mgeskin` assets are committed, so the engine builds and runs without it.
@@ -38,6 +40,9 @@ import bpy
 import bmesh
 from mathutils import Vector
 from mathutils.bvhtree import BVHTree
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import humanoid_morphs
 
 HEIGHT = 1.75
 LOD_TRIANGLES = (2200, 1200, 560)
@@ -209,6 +214,32 @@ def reduce_to(obj, target):
     bpy.ops.object.modifier_apply(modifier="decimate")
 
 
+_JOINT_POS = None
+_JOINT_CHILD = None
+
+
+def _joint_tables():
+    """Joint positions and each joint's first child, in ENGINE coordinates —
+    what a bone segment is."""
+    global _JOINT_POS, _JOINT_CHILD
+    if _JOINT_POS is None:
+        _JOINT_POS = {n: p for n, _parent, p in JOINTS}
+        _JOINT_CHILD = {}
+        for n, parent, _p in JOINTS:
+            if parent and parent not in _JOINT_CHILD:
+                _JOINT_CHILD[parent] = n
+    return _JOINT_POS, _JOINT_CHILD
+
+
+def _bone_head(name):
+    return _joint_tables()[0][name]
+
+
+def _bone_tail(name):
+    pos, child = _joint_tables()
+    return pos[child[name]] if name in child else pos[name]
+
+
 def duplicate_reduced(obj, arm, name, target):
     dup = obj.copy()
     dup.data = obj.data.copy()
@@ -222,6 +253,11 @@ def duplicate_reduced(obj, arm, name, target):
     prune_far_influences(dup, arm)
     activate(dup)
     bpy.ops.object.shade_smooth()
+    # After the reduction, never before: Blender refuses to apply a decimate
+    # modifier to a mesh that already carries shape keys.
+    humanoid_morphs.add_shape_keys(
+        dup, bones={name: (Vector(_bone_head(name)), Vector(_bone_tail(name)))
+                    for name in humanoid_morphs.LIMB_BONES})
     return dup
 
 
@@ -919,7 +955,8 @@ def export(obj, arm, path):
     bpy.ops.export_scene.gltf(
         filepath=path, export_format='GLB', use_selection=True, export_yup=True,
         export_apply=False, export_skins=True, export_animations=False,
-        export_materials='NONE', export_normals=True, export_texcoords=True)
+        export_materials='NONE', export_normals=True, export_texcoords=True,
+        export_morph=True, export_morph_normal=True, export_morph_tangent=False)
 
 
 def health(obj, tag):

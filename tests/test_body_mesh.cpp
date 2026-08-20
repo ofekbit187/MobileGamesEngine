@@ -40,12 +40,16 @@ int64_t weldKey(const Vec3& p) {
     return (q(p.x) << 42) | (q(p.y) << 21) | q(p.z);
 }
 
+// The bind pose of one variant: BOTH halves of the scope applied — the
+// palette for proportions, the morph weights for shape.
 MeshData restPose(const HumanoidVariant& variant, const SkinnedMeshData& mesh) {
     Pose pose;
     Mat4 palette[kJointCount];
     buildSkinPalette(variant, pose, palette);
+    float shape[kMorphCount];
+    morphWeights(variant, shape);
     MeshData out;
-    skinMesh(mesh, palette, out);
+    skinMesh(mesh, palette, shape, out);
     return out;
 }
 
@@ -497,6 +501,176 @@ MGE_TEST(body_mesh_survives_joint_bending) {
     for (const Vertex& v : bentMesh.vertices) {
         MGE_CHECK(v.position.length() < 3.0f);
     }
+}
+
+// ------------------------------------------------------- variation scope ---
+
+namespace {
+
+// Every shape parameter, and how to set it — so the tests below can sweep the
+// whole scope instead of naming five of the fifteen and hoping.
+struct ShapeAxis {
+    const char* name;
+    void (*set)(HumanoidVariant&, float);
+};
+
+const ShapeAxis kShapeAxes[] = {
+    {"chest", [](HumanoidVariant& v, float x) { v.chest = x; }},
+    {"belly", [](HumanoidVariant& v, float x) { v.belly = x; }},
+    {"seat", [](HumanoidVariant& v, float x) { v.seat = x; }},
+    {"muscle", [](HumanoidVariant& v, float x) { v.muscle = x; }},
+    {"neck", [](HumanoidVariant& v, float x) { v.neck = x; }},
+    {"face.skull", [](HumanoidVariant& v, float x) { v.face.skull = x; }},
+    {"face.brow", [](HumanoidVariant& v, float x) { v.face.brow = x; }},
+    {"face.cheeks", [](HumanoidVariant& v, float x) { v.face.cheeks = x; }},
+    {"face.jawWidth", [](HumanoidVariant& v, float x) { v.face.jawWidth = x; }},
+    {"face.chin", [](HumanoidVariant& v, float x) { v.face.chin = x; }},
+    {"face.noseLength", [](HumanoidVariant& v, float x) { v.face.noseLength = x; }},
+    {"face.noseWidth", [](HumanoidVariant& v, float x) { v.face.noseWidth = x; }},
+    {"face.mouth", [](HumanoidVariant& v, float x) { v.face.mouth = x; }},
+    {"face.eyes", [](HumanoidVariant& v, float x) { v.face.eyes = x; }},
+    {"face.ears", [](HumanoidVariant& v, float x) { v.face.ears = x; }},
+};
+constexpr size_t kShapeAxisCount = sizeof kShapeAxes / sizeof kShapeAxes[0];
+
+}  // namespace
+
+MGE_TEST(every_shape_parameter_is_authored_and_moves_the_body) {
+    // The scope is only real if every parameter in the schema has geometry
+    // behind it. A parameter that silently does nothing is worse than one
+    // that does not exist: a variant file would set it and see no change.
+    const SkinnedMeshData mesh = body();
+    MGE_CHECK(mesh.morphs.size() == kMorphCount);
+    MGE_CHECK(kShapeAxisCount == kMorphCount);
+    for (size_t i = 0; i < kMorphCount; ++i) {
+        const MorphTarget* target = mesh.morph(static_cast<Morph>(i));
+        MGE_CHECK(target != nullptr);
+        if (target == nullptr) continue;
+        MGE_CHECK(!target->deltas.empty());
+        MGE_CHECK(target->scale > 0.0f);
+    }
+
+    const MeshData rest = restPose(HumanoidVariant{}, mesh);
+    for (const ShapeAxis& axis : kShapeAxes) {
+        HumanoidVariant plus, minus;
+        axis.set(plus, 1.0f);
+        axis.set(minus, -1.0f);
+        const MeshData high = restPose(plus, mesh);
+        const MeshData low = restPose(minus, mesh);
+        float worstHigh = 0, worstLow = 0, opposite = 0;
+        for (size_t i = 0; i < rest.vertices.size(); ++i) {
+            const Vec3 up = high.vertices[i].position - rest.vertices[i].position;
+            const Vec3 down = low.vertices[i].position - rest.vertices[i].position;
+            worstHigh = std::fmax(worstHigh, up.length());
+            worstLow = std::fmax(worstLow, down.length());
+            opposite = std::fmax(opposite, (up + down).length());
+        }
+        printf("  %-16s +1 moves %5.1f mm, -1 moves %5.1f mm\n", axis.name, worstHigh * 1000.0f,
+               worstLow * 1000.0f);
+        // Visible at arm's length, but still a human being: a parameter that
+        // moves 1 mm is decoration, one that moves 10 cm is a different body.
+        MGE_CHECK(worstHigh > 0.004f && worstHigh < 0.090f);
+        // One authored delta, both directions: -1 must be exactly the mirror
+        // of +1, or the file is storing twice what it needs to (P1).
+        MGE_CHECK_NEAR(worstLow, worstHigh, 1e-4f);
+        MGE_CHECK(opposite < 1e-4f);
+    }
+}
+
+MGE_TEST(shape_parameters_do_not_break_the_body) {
+    // A variant file is content, and content will eventually contain every
+    // combination. Each extreme, and all of them at once, must still be a
+    // closed, human-sized body with its feet on the ground.
+    const SkinnedMeshData mesh = body();
+    const auto inspect = [&](const char* what, const HumanoidVariant& v) {
+        const MeshData posed = restPose(v, mesh);
+        double volume = 0;
+        for (size_t i = 0; i + 2 < posed.indices.size(); i += 3) {
+            const Vec3& a = posed.vertices[posed.indices[i]].position;
+            const Vec3& b = posed.vertices[posed.indices[i + 1]].position;
+            const Vec3& c = posed.vertices[posed.indices[i + 2]].position;
+            volume += a.dot(b.cross(c));
+        }
+        volume /= 6.0;
+        MGE_CHECK_NEAR(posed.bounds.min.y, 0.0f, 0.03f);
+        MGE_CHECK_NEAR(posed.bounds.max.y, v.height, v.height * 0.03f);
+        MGE_CHECK(volume > 0.045 && volume < 0.180);
+        (void)what;
+    };
+    for (const ShapeAxis& axis : kShapeAxes) {
+        for (float value : {-1.0f, 1.0f}) {
+            HumanoidVariant v;
+            axis.set(v, value);
+            inspect(axis.name, v);
+        }
+    }
+    HumanoidVariant everything;
+    for (const ShapeAxis& axis : kShapeAxes) axis.set(everything, 1.0f);
+    inspect("all +1", everything);
+    HumanoidVariant nothing;
+    for (const ShapeAxis& axis : kShapeAxes) axis.set(nothing, -1.0f);
+    inspect("all -1", nothing);
+}
+
+MGE_TEST(shape_and_proportions_compose) {
+    // The two halves of the scope are independent by construction — shape is
+    // a bind-space delta, proportions are the palette — so a heavy belly on a
+    // tall body is a tall body with a heavy belly, not a surprise.
+    const SkinnedMeshData mesh = body();
+    for (float height : {kHeightRange.min, 1.75f, kHeightRange.max}) {
+        HumanoidVariant lean, heavy;
+        lean.height = heavy.height = height;
+        heavy.belly = 1.0f;
+        const MeshData leanPosed = restPose(lean, mesh);
+        const MeshData heavyPosed = restPose(heavy, mesh);
+        // Height still means sole to crown, whatever the shape is doing.
+        MGE_CHECK_NEAR(leanPosed.bounds.max.y, height, height * 0.02f);
+        MGE_CHECK_NEAR(heavyPosed.bounds.max.y, height, height * 0.02f);
+        // ...and the belly is deeper on the taller body, in proportion.
+        const float leanDepth = depthOf(mesh, leanPosed.vertices, BodyRegion::Torso);
+        const float heavyDepth = depthOf(mesh, heavyPosed.vertices, BodyRegion::Torso);
+        printf("  height %.2f m: torso depth lean %.3f m, heavy %.3f m\n", height, leanDepth,
+               heavyDepth);
+        MGE_CHECK(heavyDepth > leanDepth * 1.05f);
+    }
+}
+
+MGE_TEST(the_face_is_its_own_sub_schema) {
+    // A facial parameter touches the head and nothing else. If it leaked into
+    // the body a hat would fit and a shirt would not, and nobody would know
+    // which parameter did it.
+    const SkinnedMeshData mesh = body();
+    const MeshData rest = restPose(HumanoidVariant{}, mesh);
+    for (size_t i = static_cast<size_t>(Morph::FaceSkull); i < kMorphCount; ++i) {
+        HumanoidVariant v;
+        kShapeAxes[i].set(v, 1.0f);
+        const MeshData posed = restPose(v, mesh);
+        float lowest = 9.0f;
+        for (size_t k = 0; k < rest.vertices.size(); ++k) {
+            if ((posed.vertices[k].position - rest.vertices[k].position).length() < 1e-5f) continue;
+            lowest = std::fmin(lowest, rest.vertices[k].position.y);
+        }
+        printf("  %-16s reaches down to y = %.3f m\n", kShapeAxes[i].name, lowest);
+        MGE_CHECK(lowest > 1.44f);  // the jaw line; nothing facial goes below it
+    }
+}
+
+MGE_TEST(the_variation_scope_costs_almost_nothing_per_character) {
+    // The P1 claim for the whole scope: the shared cost is paid once and the
+    // per-character cost is a handful of floats.
+    const SkinnedMeshData mesh = body();
+    size_t deltas = 0;
+    for (const MorphTarget& t : mesh.morphs) deltas += t.deltas.size();
+    const size_t sharedBytes = deltas * sizeof(MorphDelta);
+    const size_t perCharacter = kMorphCount * sizeof(float) + kJointCount * sizeof(Mat4);
+    printf("  variation: %zu deltas = %zu B shared, %zu B per character\n", deltas, sharedBytes,
+           perCharacter);
+    MGE_CHECK(sharedBytes < 96 * 1024);
+    MGE_CHECK(perCharacter < 1200);
+    // Sparse, or it is not worth the machinery: a facial parameter must not
+    // carry a delta for most of the body.
+    const MorphTarget* jaw = mesh.morph(Morph::FaceJawWidth);
+    MGE_CHECK(jaw != nullptr && jaw->deltas.size() * 4 < mesh.vertices.size());
 }
 
 // ------------------------------------------------------------------ cost ---

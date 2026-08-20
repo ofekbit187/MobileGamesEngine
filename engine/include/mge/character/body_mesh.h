@@ -84,6 +84,55 @@ struct SkinVertex {
 };
 static_assert(sizeof(SkinVertex) == 36, "skinned vertex layout is a pipeline contract");
 
+// ------------------------------------------------------------- morphs ------
+
+// A morph target is a SPARSE list of per-vertex displacements: the vertices a
+// shape parameter moves, and by how much. Sparse because a facial parameter
+// touches a few dozen vertices out of 1640, and storing zeroes for the rest
+// would cost more than the mesh.
+//
+// Positions are quantized to int16 against the target's own scale, normals to
+// int8 — 12 bytes per moved vertex. The whole set of 15 targets costs a few
+// tens of KB ONCE, process-wide; a character costs 15 floats (P1).
+struct MorphDelta {
+    uint16_t vertex = 0;
+    int16_t position[3] = {0, 0, 0};  // * scale / 32767, in metres
+    int8_t normal[3] = {0, 0, 0};     // / 127
+    uint8_t pad = 0;
+};
+static_assert(sizeof(MorphDelta) == 12, "morph delta layout is a file-format contract");
+
+// Which shape parameter a target belongs to. The order is the file order and
+// the weight order — appending is safe, reordering is not.
+enum class Morph : uint8_t {
+    BodyChest = 0,
+    BodyBelly,
+    BodySeat,
+    BodyMuscle,
+    BodyNeck,
+    FaceSkull,
+    FaceBrow,
+    FaceCheeks,
+    FaceJawWidth,
+    FaceChin,
+    FaceNoseLength,
+    FaceNoseWidth,
+    FaceMouth,
+    FaceEyes,
+    FaceEars,
+    Count,
+};
+constexpr size_t kMorphCount = static_cast<size_t>(Morph::Count);
+
+// The name a target carries in the authored glTF, and in the baked asset.
+const char* morphName(Morph morph);
+
+struct MorphTarget {
+    Morph morph = Morph::BodyChest;
+    float scale = 0;  // metres that int16 32767 stands for
+    std::vector<MorphDelta> deltas;
+};
+
 // One region's triangles inside the shared index buffer. Masking is a draw-
 // range decision (skip the part), not a mesh rebuild.
 struct MeshPart {
@@ -96,14 +145,22 @@ struct SkinnedMeshData {
     std::vector<SkinVertex> vertices;
     std::vector<uint32_t> indices;
     std::vector<MeshPart> parts;
+    std::vector<MorphTarget> morphs;
     Aabb bounds{};
 
     void computeBounds();
     size_t triangleCount() const { return indices.size() / 3; }
+    const MorphTarget* morph(Morph which) const {
+        for (const MorphTarget& t : morphs) {
+            if (t.morph == which) return &t;
+        }
+        return nullptr;
+    }
     void clear() {
         vertices.clear();
         indices.clear();
         parts.clear();
+        morphs.clear();
         bounds = Aabb{};
     }
 };
@@ -161,9 +218,19 @@ void buildSkinPalette(const HumanoidVariant& variant, const Pose& pose,
 // Bind-pose joint positions of the template body — what the mesh is bound to.
 void templateBindPositions(Vec3 out[kJointCount]);
 
+// The shape half of the variant, as one weight per morph target in [-1, +1].
+// A negative weight applies the stored delta negated, so one authored target
+// serves both directions of a parameter.
+void morphWeights(const HumanoidVariant& variant, float out[kMorphCount]);
+
 // CPU reference skinning: the definition GPU skinning must match, and the
 // path tools and tests use. Load-time/offline only — never the frame path.
+//
+// The morph pass runs first, on the bind-pose vertex, then the skinning
+// palette — the same order the shader will use, so this stays the reference.
 void skinMesh(const SkinnedMeshData& mesh, const Mat4 palette[kJointCount], MeshData& out);
+void skinMesh(const SkinnedMeshData& mesh, const Mat4 palette[kJointCount],
+              const float weights[kMorphCount], MeshData& out);
 
 // --------------------------------------------------------- wearables -------
 

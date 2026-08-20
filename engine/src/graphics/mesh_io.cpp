@@ -145,7 +145,7 @@ bool readMeshFile(const char* path, LodMesh& out) {
 namespace {
 
 constexpr uint32_t kSkinMagic = 0x4B534D47;  // 'GMSK'
-constexpr uint32_t kSkinVersion = 1;
+constexpr uint32_t kSkinVersion = 2;  // v2 adds morph targets
 
 template <typename T>
 void put(std::vector<uint8_t>& out, const T& value) {
@@ -178,6 +178,13 @@ void serializeSkinnedMesh(const SkinnedMeshData& mesh, std::vector<uint8_t>& out
         put(out, p.firstIndex);
         put(out, p.indexCount);
     }
+    put(out, static_cast<uint32_t>(mesh.morphs.size()));
+    for (const MorphTarget& t : mesh.morphs) {
+        put(out, static_cast<uint8_t>(t.morph));
+        put(out, t.scale);
+        put(out, static_cast<uint32_t>(t.deltas.size()));
+        for (const MorphDelta& d : t.deltas) put(out, d);
+    }
 }
 
 bool deserializeSkinnedMesh(const uint8_t* data, size_t size, SkinnedMeshData& out) {
@@ -186,7 +193,8 @@ bool deserializeSkinnedMesh(const uint8_t* data, size_t size, SkinnedMeshData& o
     const uint8_t* end = data + size;
     uint32_t magic = 0, version = 0, vertexCount = 0, indexCount = 0, partCount = 0;
     if (!take(cursor, end, magic) || magic != kSkinMagic) return false;
-    if (!take(cursor, end, version) || version != kSkinVersion) return false;
+    // v1 assets have no morph block; everything before it is byte-identical.
+    if (!take(cursor, end, version) || version < 1 || version > kSkinVersion) return false;
     if (!take(cursor, end, vertexCount) || !take(cursor, end, indexCount) ||
         !take(cursor, end, partCount)) {
         return false;
@@ -214,6 +222,29 @@ bool deserializeSkinnedMesh(const uint8_t* data, size_t size, SkinnedMeshData& o
     }
     for (uint32_t i : out.indices) {
         if (i >= out.vertices.size()) return false;
+    }
+
+    if (version >= 2) {
+        uint32_t morphCount = 0;
+        if (!take(cursor, end, morphCount)) return false;
+        if (morphCount > kMorphCount) return false;  // refuse, never grow (P1)
+        out.morphs.resize(morphCount);
+        for (MorphTarget& t : out.morphs) {
+            uint8_t morph = 0;
+            uint32_t deltaCount = 0;
+            if (!take(cursor, end, morph) || !take(cursor, end, t.scale) ||
+                !take(cursor, end, deltaCount)) {
+                return false;
+            }
+            if (morph >= kMorphCount) return false;
+            if (static_cast<size_t>(end - cursor) < deltaCount * sizeof(MorphDelta)) return false;
+            t.morph = static_cast<Morph>(morph);
+            t.deltas.resize(deltaCount);
+            for (MorphDelta& d : t.deltas) {
+                take(cursor, end, d);
+                if (d.vertex >= out.vertices.size()) return false;
+            }
+        }
     }
     return true;
 }

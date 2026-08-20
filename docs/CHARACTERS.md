@@ -71,6 +71,7 @@ Humanoid variety comes from **variant data files**, not from new models.
   - **Feet** — size
   - **Face** — head shape plus **further facial features** (a nested parameter group: eyes, nose, mouth, jaw, ears, brow… — the face is its own sub-schema designed to grow)
 - Implementation stance: variants are realized as a combination of **skeleton-proportion scaling** (bone lengths/offsets for height, legs, shoulders…) and **morph deltas** on the template mesh (chest, face, fine features). Both representations are compact data (P1) and both must be visible to the wearable fitting mechanism (§5) so clothes follow the body.
+- **Realized** — the concrete scope, its ranges and its storage are [ADR 0006](adr/0006-humanoid-variation-scope.md): 8 proportion parameters (clamped, not rejected) and 15 shape parameters in [-1, +1], of which 10 are the face sub-schema. Proportions cost a 17-matrix palette per character; shape costs 15 floats, against 42 KB of morph deltas shared by every humanoid in the game. `height` means sole-to-crown for every combination of the rest.
 - Variants compose: a game can define a base variant ("villager build") and layer instance tweaks on top (this villager is taller).
 
 ### 4.2 Skeleton & default animations
