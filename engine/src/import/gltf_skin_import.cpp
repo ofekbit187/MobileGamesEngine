@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstdio>
 #include <cstring>
 #include <unordered_map>
 #include <vector>
@@ -85,6 +86,81 @@ bool morphFromName(const char* name, Morph& out) {
     return false;
 }
 
+// --- the UV tile is a hard limit, not a preference -------------------------
+//
+// `SkinVertex` stores UVs as normalized uint16 (B-3), so a coordinate outside
+// [0,1] has no representation. This importer used to clamp silently, and that
+// silence is the whole reason a fixable export setting became committed,
+// damaged content: 89.7 % of the template body's triangles collapsed to zero
+// UV area across three LODs and six garments and nothing reported it
+// (docs/research/uv-audit.md). Architect ruling on the textures session's seam
+// request (AGENTS.md §4, "body contract"): the import REFUSES what it cannot
+// represent, with the measured extent in the message, so the failure names the
+// export setting that has to change. No silent clamp, no partial success.
+
+// Half a quantization step. Inside it the authored value and the clamped one
+// encode to the same uint16, so nothing is lost and float noise on an
+// otherwise-clean chart is not a refusal. Outside it, real chart is destroyed.
+constexpr float kUvTileTolerance = 0.5f / 65535.0f;
+
+struct UvExtent {
+    bool measured = false;
+    float minU = 0.0f, maxU = 0.0f, minV = 0.0f, maxV = 0.0f;
+    size_t outside = 0;
+    size_t total = 0;
+
+    bool insideTile() const {
+        return !measured || (minU >= -kUvTileTolerance && maxU <= 1.0f + kUvTileTolerance &&
+                             minV >= -kUvTileTolerance && maxV <= 1.0f + kUvTileTolerance);
+    }
+};
+
+// Measured over EVERY primitive before a single vertex is built, so the
+// refusal reports the chart's true extent rather than the first vertex that
+// happens to break the rule.
+UvExtent measureUvExtent(const cgltf_mesh& mesh) {
+    UvExtent e;
+    for (cgltf_size p = 0; p < mesh.primitives_count; ++p) {
+        const cgltf_primitive& prim = mesh.primitives[p];
+        if (prim.type != cgltf_primitive_type_triangles) continue;
+        const cgltf_accessor* uvs = findAttribute(prim, cgltf_attribute_type_texcoord);
+        if (uvs == nullptr) continue;
+        for (cgltf_size v = 0; v < uvs->count; ++v) {
+            float uv[2] = {0.0f, 0.0f};
+            cgltf_accessor_read_float(uvs, v, uv, 2);
+            if (!e.measured) {
+                e.measured = true;
+                e.minU = e.maxU = uv[0];
+                e.minV = e.maxV = uv[1];
+            } else {
+                e.minU = std::min(e.minU, uv[0]);
+                e.maxU = std::max(e.maxU, uv[0]);
+                e.minV = std::min(e.minV, uv[1]);
+                e.maxV = std::max(e.maxV, uv[1]);
+            }
+            ++e.total;
+            if (uv[0] < -kUvTileTolerance || uv[0] > 1.0f + kUvTileTolerance ||
+                uv[1] < -kUvTileTolerance || uv[1] > 1.0f + kUvTileTolerance) {
+                ++e.outside;
+            }
+        }
+    }
+    return e;
+}
+
+std::string uvRefusal(const UvExtent& e) {
+    char buf[512];
+    std::snprintf(buf, sizeof(buf),
+                  "UV coordinates fall outside the 0-1 tile, which the uint16 vertex format "
+                  "cannot represent (B-3): u spans %.4f..%.4f, v spans %.4f..%.4f — %zu of %zu "
+                  "vertices outside. Normalise the unwrap into the 0-1 tile before export. "
+                  "The import refuses rather than clamping, because clamping destroys the "
+                  "chart silently (docs/research/uv-audit.md).",
+                  static_cast<double>(e.minU), static_cast<double>(e.maxU),
+                  static_cast<double>(e.minV), static_cast<double>(e.maxV), e.outside, e.total);
+    return std::string(buf);
+}
+
 const cgltf_accessor* findTargetAttribute(const cgltf_morph_target& target,
                                           cgltf_attribute_type type) {
     for (cgltf_size a = 0; a < target.attributes_count; ++a) {
@@ -148,6 +224,14 @@ bool importSkinnedGltf(const char* path, SkinnedMeshData& out, std::string* erro
         return false;
     }
 
+    // --- refuse a chart the vertex format cannot represent, before any work ---
+    const UvExtent uvExtent = measureUvExtent(*skinnedNode->mesh);
+    if (!uvExtent.insideTile()) {
+        setError(error, uvRefusal(uvExtent));
+        cgltf_free(data);
+        return false;
+    }
+
     // --- vertices ---
     std::vector<BodyRegion> vertexRegion;
     for (cgltf_size p = 0; p < skinnedNode->mesh->primitives_count; ++p) {
@@ -182,6 +266,10 @@ bool importSkinnedGltf(const char* path, SkinnedMeshData& out, std::string* erro
                 float uv[2] = {0, 0};
                 cgltf_accessor_read_float(uvs, v, uv, 2);
                 for (int k = 0; k < 2; ++k) {
+                    // The gate above proved every coordinate is inside the tile
+                    // to within half a quantization step, so this clamp only
+                    // absorbs float noise — it can no longer move a coordinate
+                    // to a different uint16 than the one the artist authored.
                     const float t = uv[k] < 0.0f ? 0.0f : (uv[k] > 1.0f ? 1.0f : uv[k]);
                     vertex.uv[k] = static_cast<uint16_t>(t * 65535.0f + 0.5f);
                 }
