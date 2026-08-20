@@ -281,4 +281,10 @@ const std::vector<SkinnedMeshData>& sharedTemplateLods();
 // The cached authored garment for a wearable kind (empty for held items).
 const SkinnedMeshData& sharedGarment(WearableKind kind);
 
+// The cached surface binding for a wearable kind (ADR 0008) — empty when the
+// garment has no baked `.mgefit`, in which case it still renders but cannot
+// follow morph-driven shape. Baked by `tools/garment_fit`.
+struct GarmentBinding;
+const GarmentBinding& sharedGarmentBinding(WearableKind kind);
+
 }  // namespace mge

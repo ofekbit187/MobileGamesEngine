@@ -19,6 +19,7 @@ add_library(mge_core STATIC
     src/framework/ai.cpp
     src/character/humanoid.cpp
     src/character/body_mesh.cpp
+    src/character/garment_binding.cpp
     src/people/dna.cpp
     src/people/family_tree.cpp
     src/people/voice.cpp
@@ -56,6 +57,7 @@ if(NOT ANDROID)
     add_library(mge_import STATIC
         src/import/gltf_import.cpp
         src/import/gltf_skin_import.cpp
+        src/import/garment_fit.cpp
     )
     target_link_libraries(mge_import PUBLIC mge_core)
     target_include_directories(mge_import PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/../third_party/cgltf)
