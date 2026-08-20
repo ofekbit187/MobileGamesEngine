@@ -63,7 +63,7 @@ have several jobs run through it one after another.
 | Role | Owns | Charter |
 |---|---|---|
 | **Architect** | design, seams, coordination, the review board | §6.1 |
-| **Humanoid body & animation** | the template body, rig, variants, skinning, animation | §6.2 |
+| **Character asset pipeline** (was "body & animation") | sourcing/validating/processing the body, rig, variants, skinning, animation assets | §6.2 |
 | **Wearables & equipment** | garments, fitting, layering, held items, hair | §6.3 |
 | **Renderer** | Vulkan, materials/textures, frame structure, GPU budgets | §6.4 |
 | **World & streaming** | `.mgeworld`, residency, interiors, the giant-world guarantees | §6.5 |
@@ -82,14 +82,14 @@ request (§5), not a quick fix — even when the fix is one line and obviously r
 | `docs/PRINCIPLES.md`, `docs/ARCHITECTURE.md`, `docs/AGENTS.md`, `docs/adr/**` | Architect |
 | `docs/CHARACTERS.md`, `docs/PEOPLE.md`, `docs/MODELING.md` | Architect writes; domain owners propose |
 | `docs/TASKS.md` | Everyone, **own lines only** (§7) |
-| `engine/*/character/**` (body, rig, variants, skinning, animation) | Humanoid body |
+| `engine/*/character/**` (body, rig, variants, skinning, animation) | Character asset pipeline |
 | wearable/garment/held-item code inside `character/**` | Wearables |
 | `engine/*/graphics/**`, `engine/shaders/**`, `engine/generated/shaders/**` | Renderer |
 | `engine/*/streaming/**`, world format tools | World & streaming |
 | `engine/*/ui/**`, localization packs | UI |
 | `engine/*/framework/{collision,interaction,action,character,ai,items}.*` | Gameplay mechanics |
 | `engine/*/people/**`, `engine/*/audio/**` | People & audio |
-| `engine/*/import/**` — skinned-asset import (`gltf_skin_import.*`) | Humanoid body (it produces the `.mgeskin` the body contract governs) |
+| `engine/*/import/**` — skinned-asset import (`gltf_skin_import.*`) | Character asset pipeline (it produces the `.mgeskin` the body contract governs) |
 | `engine/*/import/**` — garment fitting bake (`garment_fit.*`) | Wearables (it is the ADR 0008 pipeline) |
 | `engine/*/import/**` — everything else (static mesh, future asset kinds) | Renderer |
 | `app/**`, `scripts/**`, `.github/**`, `tools/host_runner/**` | Platform |
@@ -155,12 +155,28 @@ board (§9). Review other sessions' merged work for scope drift, principle viola
 (especially P1), and dictation fidelity — and say so plainly when something has drifted.
 Build only what has no owner.
 
-### 6.2 Humanoid body & animation
-The template body, the rig, body variants, skinning, and the animation set. The body is
-*content imported through the engine's own path* (P5), not code — improving the model is
-your call; changing the rig is a seam. Authored clip import via glTF and facial expression
-morphs (task 8.20) are yours and are currently the largest gap in the character pillar.
-Read `docs/MODELING.md`; it is binding.
+### 6.2 Character asset pipeline (was "Humanoid body & animation")
+**Re-chartered by owner ruling after the modeling experiment.** The finding, recorded so it
+is never repeated: a session cannot see a mesh. Everything the old modeler session
+*originated* (parametric body, UV layout) was weak or broken; everything it *engineered*
+(import path, rig fit, deterministic export) held up. So this area's rule is:
+
+**Source content; never originate it.** Acquire → validate → process → integrate.
+
+- Base meshes, heads, and animation clips come from outside: CC0/appropriately-licensed
+  libraries (Blender base meshes, MakeHuman exports, CMU mocap, Mixamo per its license), the
+  P5 fulfillment pipeline, or a commissioned artist. This session **never sculpts, never
+  lays out a UV chart by eye, never hand-authors an animation curve**.
+- Its work is the measurable half: the import path (`gltf_skin_import.*` is yours, and it
+  refuses what it cannot represent), the contract gates run against every candidate asset,
+  mechanical processing (UV normalisation, region tagging, vertex groups, hem loops, LOD
+  generation, retargeting math), rig fitting, and the deterministic exports the body
+  contract demands.
+- **The aesthetic gate is the owner's eye**, through render evidence handed to the
+  architect for the board — never this session's judgment, never a number.
+
+The rig and everything in `docs/BODY_CONTRACT.md` remain seams. Clip import via glTF and
+mocap retargeting are this area's next capability. Read `docs/MODELING.md`; it is binding.
 
 ### 6.3 Wearables & equipment
 Garments, fitting to any variant, layering, masking, hair, held items and grips. Your
