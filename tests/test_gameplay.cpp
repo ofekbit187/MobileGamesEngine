@@ -5,6 +5,7 @@
 
 #include <cmath>
 
+#include "mge/framework/ai.h"
 #include "mge/framework/collision.h"
 #include "mge/framework/interaction.h"
 #include "test_framework.h"
@@ -251,4 +252,92 @@ MGE_TEST(interaction_verbs_pick_up_open_and_talk) {
     interactions2.attach(ground, apple);
     MGE_CHECK(!interactions2.interact(hoarder).handled);
     MGE_CHECK(world2.entities().isAlive(ground));  // still there to take later
+}
+
+// --- P9: every character can interact, not just the player ------------------
+
+MGE_TEST(interaction_is_not_player_only) {
+    // The owner's ruling: interaction is a universal character mechanism.
+    // An NPC takes an apple through the exact call a tap makes, and the
+    // PLAYER is a legal target for someone else's interaction.
+    World world(64);
+    CharacterSystem characters(world);
+    InteractionSystem interactions(world, characters);
+
+    const EntityId villager = spawnAt(world, {0, 0, 0});
+    CharacterComponent* villagerCharacter = characters.attach(villager);
+    villagerCharacter->controller = ControllerKind::Ai;   // NOT the player
+
+    InteractableComponent apple;
+    apple.kind = InteractionKind::PickUp;
+    apple.item = {assetIdFromName("item/apple"), "item.apple", 1, {1, 0, 0, 1}};
+    const EntityId onGround = spawnAt(world, {0, 0, -1.2f});
+    interactions.attach(onGround, apple);
+
+    MGE_CHECK(interactions.focus(villager) == onGround);
+    const InteractionSystem::Result took = interactions.interact(villager);
+    MGE_CHECK(took.handled);
+    MGE_CHECK(villagerCharacter->inventory.size() == 1);
+    MGE_CHECK(!world.entities().isAlive(onGround));
+
+    // The player can be the one acted upon.
+    const EntityId player = spawnAt(world, {0, 0, -1.0f});
+    CharacterComponent* playerCharacter = characters.attach(player);
+    playerCharacter->controller = ControllerKind::Player;
+    InteractableComponent talk;
+    talk.kind = InteractionKind::Talk;
+    talk.payload = 9;
+    interactions.attach(player, talk);
+    MGE_CHECK(interactions.focus(villager) == player);
+    const InteractionSystem::Result spoke = interactions.interact(villager);
+    MGE_CHECK(spoke.kind == InteractionKind::Talk);
+    MGE_CHECK(spoke.payload == 9);
+
+    // The dead act on nothing (mortality is universal too).
+    characters.damage(villager, 99.0f);
+    MGE_CHECK(!interactions.interact(villager).handled);
+}
+
+MGE_TEST(ai_gatherer_picks_up_what_it_finds) {
+    // The behaviour proof: a wandering villager notices an apple, walks to
+    // it, and takes it — no player involved anywhere in the loop.
+    World world(64);
+    CharacterSystem characters(world);
+    InteractionSystem interactions(world, characters);
+    AiSystem ai(world, characters);
+    ai.setInteractions(&interactions);
+
+    const EntityId villager = spawnAt(world, {0, 0, 0});
+    CharacterComponent* character = characters.attach(villager);
+    world.setMovement(villager, MovementComponent{{}, 4.0f});
+    AiProfile profile;
+    profile.canWander = true;
+    profile.homeRadius = 3.0f;
+    profile.gathers = true;
+    profile.gatherRange = 8.0f;
+    MGE_CHECK(ai.attach(villager, profile));
+
+    InteractableComponent apple;
+    apple.kind = InteractionKind::PickUp;
+    apple.range = 2.0f;
+    apple.item = {assetIdFromName("item/apple"), "item.apple", 1, {1, 0, 0, 1}};
+    const EntityId prize = spawnAt(world, {5.0f, 0, -3.0f});
+    interactions.attach(prize, apple);
+
+    bool sawGathering = false;
+    for (int i = 0; i < 60 * 20 && character->inventory.size() == 0; ++i) {
+        ai.step(1.0f / 60.0f);
+        world.step(1.0 / 60.0);
+        if (ai.stateOf(villager) == AiState::Gather) sawGathering = true;
+    }
+    MGE_CHECK(sawGathering);                       // it decided to go get it
+    MGE_CHECK(character->inventory.size() == 1);   // and it has the apple
+    MGE_CHECK(!world.entities().isAlive(prize));
+
+    // With nothing left to gather it goes back to its ordinary life.
+    for (int i = 0; i < 60 * 3; ++i) {
+        ai.step(1.0f / 60.0f);
+        world.step(1.0 / 60.0);
+    }
+    MGE_CHECK(ai.stateOf(villager) != AiState::Gather);
 }

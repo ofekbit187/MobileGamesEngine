@@ -274,6 +274,7 @@ int main(int argc, char** argv) {
     AiProfile villagerProfile;
     villagerProfile.canWander = true;
     villagerProfile.homeRadius = 4.0f;
+    villagerProfile.gathers = true;  // every character can interact (P9)
     ai.attach(villager, villagerProfile);
 
     // --- Humanoid visuals: one template, three variant files, three outfits.
@@ -502,6 +503,35 @@ int main(int argc, char** argv) {
                        !world.entities().isAlive(apple);
     }
 
+    // Every character can interact (owner ruling, P9): nobody taps for the
+    // villager, yet they walk to the fruit and take it — through the same
+    // InteractionSystem call the player's tap makes.
+    bool npcInteractionOk = false;
+    {
+        ai.setInteractions(&interactions);
+        const TransformComponent* vt = world.transform(villager);
+        const Vec3 drop = vt->position + Vec3{1.4f, 0.2f, 0.6f};
+        const EntityId fallen = place(crateId, drop, 0, 0.85f, 0.25f, 0.20f);
+        InteractableComponent pick;
+        pick.kind = InteractionKind::PickUp;
+        pick.promptKey = "prompt.take";
+        pick.range = 2.0f;
+        pick.item = {assetIdFromName("item/apple"), "item.apple", 1, {0.8f, 0.22f, 0.16f, 1}};
+        interactions.attach(fallen, pick);
+        const uint32_t carriedBefore = characters.get(villager)->inventory.size();
+        bool sawGather = false;
+        for (int step = 0; step < 600 && world.entities().isAlive(fallen); ++step) {
+            ai.step(static_cast<float>(dt));
+            world.step(dt);
+            if (ai.stateOf(villager) == AiState::Gather) sawGather = true;
+        }
+        const bool villagerCarries =
+            characters.get(villager)->inventory.size() == carriedBefore + 1;
+        npcInteractionOk = sawGather && villagerCarries && !world.entities().isAlive(fallen);
+        printf("villager (nobody tapped): noticed the fruit %s, took it %s\n",
+               sawGather ? "yes" : "no", villagerCarries ? "yes" : "no");
+    }
+
     // --- Character persistence (8.9): the walkabout's state rides a real
     //     save file — wound the guard, save, load, verify it came back. ---
     characters.damage(guard, 0.25f);
@@ -540,11 +570,14 @@ int main(int argc, char** argv) {
     engine.shutdown();
 
     const bool ok = captures == 3 && traveled > 15.0f && finalT->yaw > 0.5f &&
-                    guardTraveled > 0.5f && persistenceOk && mechanismsOk && gpuResidual == 0;
+                    guardTraveled > 0.5f && persistenceOk && mechanismsOk &&
+                    npcInteractionOk && gpuResidual == 0;
     if (!ok) {
         fprintf(stderr,
-                "FAIL: captures=%d traveled=%.1f yaw=%.2f guard=%.1f persist=%d mechanisms=%d gpuResidual=%zu\n",
+                "FAIL: captures=%d traveled=%.1f yaw=%.2f guard=%.1f persist=%d mechanisms=%d "
+                "npcInteract=%d gpuResidual=%zu\n",
                 captures, traveled, finalT->yaw, guardTraveled, persistenceOk, mechanismsOk,
+                npcInteractionOk,
                 gpuResidual);
         return 1;
     }

@@ -143,6 +143,20 @@ void AiSystem::stepAgent(Agent& agent, float dt) {
         }
     }
 
+    // Anything worth picking up nearby? (P9: NPCs use the interaction system,
+    // not a private copy of it.) Combat states are never interrupted for it.
+    if (profile.gathers && interactions_ != nullptr &&
+        (state.state == AiState::Idle || state.state == AiState::Wander ||
+         state.state == AiState::Patrol)) {
+        const EntityId prize = interactions_->nearestOfKind(position, profile.gatherRange,
+                                                            InteractionKind::PickUp);
+        if (prize != kInvalidEntity) {
+            state.state = AiState::Gather;
+            state.target = prize;
+            state.stateTime = 0;
+        }
+    }
+
     switch (state.state) {
         case AiState::Idle:
             stop(agent.entity);
@@ -232,6 +246,23 @@ void AiSystem::stepAgent(Agent& agent, float dt) {
             Vec3 away = position - threat->position;
             away.y = 0;
             moveToward(agent.entity, position + away.normalized() * 5.0f, profile.fleeSpeed);
+            break;
+        }
+
+        case AiState::Gather: {
+            const TransformComponent* prize = world_.transform(state.target);
+            if (prize == nullptr || interactions_ == nullptr || state.stateTime > 8.0f) {
+                state.state = AiState::Return;  // gone, taken by someone else
+                state.stateTime = 0;
+                break;
+            }
+            moveToward(agent.entity, prize->position, profile.wanderSpeed);
+            if ((prize->position - position).length() < 1.4f) {
+                // The same call the player's tap makes — actor, not "player".
+                interactions_->interactWith(agent.entity, state.target);
+                state.state = AiState::Wander;
+                state.stateTime = 0;
+            }
             break;
         }
 

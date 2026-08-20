@@ -48,6 +48,7 @@ These work identically for every character, humanoid or not:
 | **Inventory** | Container of item stacks with capacity rules. On every character (P9). |
 | **Equipment slots** | Named slots on the body: wearable slots plus the tool/weapon slot. The *slot set* is defined by the character's body definition — a humanoid has the humanoid slot set (§6), a game-defined creature declares its own (a horse can declare a saddle slot). |
 | **Perception hooks** | What AI senses (sight/hearing ranges) — universal so any creature can perceive. |
+| **Interaction** | Acting on the world — taking a thing, opening a container, speaking to someone. **Every character can interact** (owner ruling, Phase 11): `focus`/`interact` take the acting character, never "the player", so an NPC picks an apple off the ground through the exact call the player's tap uses. Characters are equally valid *targets*: the player can be spoken to. What differs is only who decides to act — a tap or a behaviour profile (P9). |
 | **Streaming & persistence behavior** | Characters live in world chunks, stream in/out (P2), and persist their state via the save delta system (P7) — inventory, equipment, health, faction overrides included. |
 
 **Humanoid-exclusive mechanisms** live on `HumanoidCharacter` only: the template body and its variant system, the humanoid skeleton and animation set, and the body-part wearable fitting mechanism (§4–§6). The split rule: *if a mechanism makes sense for a wolf, it belongs on `Character`; if it assumes a human-shaped body, it belongs on `HumanoidCharacter`.*

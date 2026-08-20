@@ -7,6 +7,11 @@
 // character about to act on?" — and performs the built-in verbs, reporting
 // what happened so the game layer can react. Focus needs the collision world
 // for line of sight: you cannot use a chest through a wall.
+//
+// EVERY CHARACTER CAN INTERACT (owner ruling, P9). Nothing here knows what a
+// player is: `focus` and `interact` take the acting character, so a villager
+// picking an apple off the ground runs the same code as your tap. Characters
+// are equally valid targets — the player can be the one spoken to.
 
 #include <cstdint>
 #include <vector>
@@ -57,6 +62,11 @@ public:
     // What `actor` is about to act on: in range, inside the facing cone, and
     // visible. Nearest-in-front wins. kInvalidEntity when nothing qualifies.
     EntityId focus(EntityId actor) const;
+
+    // "What of this kind is around me?" — position-based, no facing or line
+    // of sight, for characters deciding what to walk toward (AI gathering,
+    // quest markers, spawn placement).
+    EntityId nearestOfKind(const Vec3& from, float radius, InteractionKind kind) const;
 
     struct Result {
         bool handled = false;

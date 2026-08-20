@@ -378,6 +378,10 @@ bool DeviceGame::start(Engine& engine, AudioMixer& mixer, ANativeWindow* window,
     AiProfile villagerProfile;
     villagerProfile.canWander = true;
     villagerProfile.homeRadius = 4.0f;
+    // Every character can interact (owner ruling, P9) — the villager takes
+    // fruit off the ground through the same call the player's tap makes.
+    villagerProfile.gathers = true;
+    villagerProfile.gatherRange = 3.0f;  // only what falls near their own patch
     s.ai->attach(s.villager.entity, villagerProfile);
 
     // --- Things to act on (Phase 11): an apple to take, a chest to open,
@@ -385,6 +389,7 @@ bool DeviceGame::start(Engine& engine, AudioMixer& mixer, ANativeWindow* window,
     //     with an InteractableComponent — nothing here is special-cased.
     s.interactions = new InteractionSystem(world, *s.characters);
     s.interactions->setCollisionWorld(&s.collision);
+    s.ai->setInteractions(s.interactions);  // NPCs act through the same system
 
     const auto apple = [&](Vec3 position) {
         const EntityId entity = place(crateId, position, 0.0f, 0.85f, 0.25f, 0.20f);
@@ -398,6 +403,7 @@ bool DeviceGame::start(Engine& engine, AudioMixer& mixer, ANativeWindow* window,
     };
     apple({1.2f, 0.2f, 1.0f});
     apple({-2.6f, 0.2f, -1.4f});
+    apple({-3.4f, 0.2f, -3.4f});  // in the villager's reach: watch them take it
 
     // The chest binds a registered collection — the UI shows whatever the
     // game put in it (the Phase 5 data binding, now reachable in play).

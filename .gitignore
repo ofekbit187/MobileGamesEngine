@@ -15,3 +15,7 @@ app/.cxx/
 .idea/
 *.iml
 .vscode/
+
+# Demo captures written into the working tree by the headless tools
+*.ppm
+*.wav
