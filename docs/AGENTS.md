@@ -251,7 +251,9 @@ far lived in platform glue that headless tests could not reach — closing that 
   | 0007 | Humanoid template body | in use — **not 0005**, whatever older comments say |
   | 0008 | Wearable fitting pipeline | in use — ruled, see §10.1 |
   | 0009 | Humanoid variation scope | in use — renumbered from a third self-assigned 0006 |
-  | 0010+ | — | available on request |
+  | 0010 | Body UV chart policy — repack to one tile, halves disjoint | in use |
+  | 0011 | Inherited unwrap stretch; cut-line sequencing | in use |
+  | 0012+ | — | available on request |
 - **CMake source lists**: one file per line, alphabetical. Both-added lines are the most
   common merge conflict in this repo.
 - **Shared headers**: append at the documented seam point, don't reorganize. A tidy-up of
