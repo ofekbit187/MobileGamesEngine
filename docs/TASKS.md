@@ -259,15 +259,25 @@ Status legend: `[ ]` not started · `[~]` in progress · `[x]` done
 
 Deliberately not planned yet; known candidates awaiting direction:
 
-- Textures & materials (everything renders flat-shaded today) — the standard is
-  now written ahead of the work in [`TEXTURING.md`](TEXTURING.md): map set,
-  ASTC/ETC2 two-pack bake, `.mgetex` runtime container, per-class budgets and
-  texel density, mip/streaming rules, and a definition of done. It also
-  measures the template UV chart (`tools/uv_report`, in `ctest`) and reports
-  four defects that must be fixed before the first skin texture is authored.
-  Awaiting the owner's verdict; the engine-side prerequisites are listed in
-  TEXTURING.md §13 (UVs on the static vertex, samplers in the lit pipeline,
-  texture upload in 2.3, material refs in ADR 0002, per-mip ranges in ADR 0003)
+- Textures & materials (everything renders flat-shaded today). The **authoring
+  standard** is written ahead of the work — [`TEXTURING.md`](TEXTURING.md) for
+  the reasoning, `assets/standards/skin_texture.mgestd` for the operative,
+  machine-checked form (map set, colour spaces, ASTC/ETC2 two-pack bake,
+  per-class budgets, texel density, chart and mip rules, and an explicit refuse
+  list — P12: one line of data, not a code change, tightens a rule). The
+  texture **runtime** (sampling, GPU upload, materials, formats on the device)
+  belongs to the renderer area, not here. Engine-side prerequisites: TEXTURING
+  §13. Awaiting the owner's verdict on two proposals (textures as generators;
+  virtual textures on the P5 pattern)
+- **BLOCKED — the delivered v3 body has no usable UV chart.** `mge_uv_report`
+  (in `ctest`; `--gate` for pass/fail) measures 89.7 % of the body's triangles
+  with zero UV area and 91.1 % of its vertices pinned to a tile edge: the source
+  unwrap extends past `u = 1` and `gltf_skin_import.cpp` clamps rather than
+  refusing. Arms, hands, legs and feet have no texture space at all. No skin
+  texture can be authored until the chart is repacked into the 0–1 tile (a B-27
+  contract-version event). Handoff to the body session, with root cause, fix,
+  UV-vs-topology cost and a seam request on the importer:
+  [`research/uv-audit.md`](research/uv-audit.md)
 - UI screen flow: screen stack, pause menu, inventory reachable in-game
 - AI expansion (behavior model beyond the v1 state machine, schedules, group behavior) — v1 landed in 8.8; *when* a character chooses to perform an action belongs here, not in Phase 12
 - Advanced facial animation (lip-sync, emotes, gaze) — basic set specified in 8.20

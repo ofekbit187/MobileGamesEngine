@@ -19,10 +19,12 @@ texture standard set after the first hundred textures are authored is a rewrite
 of the first hundred textures. Part I is the standard; Part II is the study
 behind it — tools, technique, and what shipping engines did.
 
-Every proposal here is **○ awaiting the owner's verdict**. One thing is already
-**● real output**: §6 measures the template body's UV chart with a tool that
-ships in this repo and runs in CI, and it found four defects that must be fixed
-*before* any texture is authored against it.
+Every proposal here is **○ awaiting the owner's verdict**. Two things are
+already **● real output**: the standard exists as a machine-readable file the
+pipeline enforces (§4.1), and §6 measures the delivered body's UV chart with it
+— finding that **the body currently has no usable chart at all**, which blocks
+every texture until it is repaired
+([`research/uv-audit.md`](research/uv-audit.md)).
 
 ---
 
@@ -158,6 +160,41 @@ to an sRGB-typed format so the hardware linearises for free; every data map
 bakes linear. A roughness map sampled through sRGB is a bug that looks like an
 art problem, and it is the single most common texture defect in shipping games.
 
+### 4.1 The standard is a file, not this document
+
+Everything above is prose, and **prose cannot refuse a bad texture**. The
+operative form of this standard is data:
+
+**`assets/standards/skin_texture.mgestd`** — sheet tiers, density classes and
+tolerances, per-map colour space and channel order, chart rules, mip and padding
+rules, compression per map class, and an explicit `refuse` list. Line-oriented,
+commented, diffable, parsed in forty lines of C++ with no dependency. Where this
+document and that file disagree, **the file wins** — it is what the pipeline
+actually reads.
+
+This is P12 applied to textures. The alternative — rules living in a document
+and enforced by whoever reviews the work — makes the hundredth texture exactly
+as expensive as the first, and it makes every tolerance change a negotiation
+instead of a one-line edit. Concretely:
+
+- `mge_uv_report` reads it today and gates the **chart** (§6).
+- The baker reads it when it lands and gates the **images**: colour space, mip
+  chain, island padding at the smallest streamed mip, compression PSNR,
+  deterministic rebuild. Until then the report says those are *not checkable
+  yet* rather than passing them by default.
+- Adding a body region, retiering a sheet, or tightening the stretch limit is a
+  line in that file — **no engineer in the content loop**.
+
+Two rules in it are worth stating in prose too, because they are the ones a
+pipeline usually gets wrong by omission:
+
+- **The chart rules run before the density rules**, and the density verdict is
+  withheld unless ≥ 90 % of the body is measurable. A green light computed from
+  the 4 % that survived a defect is worse than a red one.
+- **Every refusal carries its reason.** `FAIL chart_islands_disjoint` teaches an
+  artist nothing; *"Scalp/Torso share texels — neither can be painted
+  differently from the other"* is actionable without an engineer translating.
+
 ## 5. Budgets
 
 Per-texture budgets, at the resolution that ships (LOD0 mip 0):
@@ -214,93 +251,64 @@ The rule that matters more than the number: **consistency**. A wall must not be
 four times sharper than the floor beside it, and a hand must not be sharper than
 a torso. Which brings us to the first real finding of this study.
 
-## 6. The template UV chart — measured
+## 6. The template UV chart — measured, and refused
 
-The chart is already fixed in code (`islandOf` in
-`engine/src/character/body_mesh.cpp`), and every skin texture ever made for this
-engine will live in it. Each island is a cylindrical unwrap: `u` runs around the
-shell, `v` along it.
+The chart is the base mesh's own unwrap, carried through import and fixed from
+then on (MODELING.md §5). Before painting a texel on it, measure it.
+`tools/uv_report` (`mge_uv_report`, in `ctest`) walks the delivered body, sums
+every triangle's area on the body and on the sheet, and returns **pass/fail per
+rule with a reason**, checked against `assets/standards/skin_texture.mgestd`
+(§4.1). `--gate` makes it exit non-zero, which is how the body session runs it
+as an acceptance gate.
 
-Before painting a single texel on it, measure it. `tools/uv_report`
-(`mge_uv_report`, runs in `ctest`) walks the template mesh, sums every
-triangle's area in the world and in the chart, and reports texel density and
-stretch per region. **● Real output, this environment, LOD0 at a 1024² sheet:**
+**● Real output, this environment, against the v3 imported body at LOD0:**
 
 ```
-region  shells   skin m2   island%     px/m  stretch  px/m min-max
-------- ------ --------- --------- -------- -------- -------------
-Scalp        1    0.1160      7.64      831     2.10    441-1921
-Face         -         -         -        -        -   no geometry
-Neck         1    0.0268      1.60      790     3.30    381-1683
-Torso        1    0.7177     21.60      562     1.41    347-1231
-ArmL         1    0.2053      5.50      530     3.16    232-2723
-ArmR         1    0.2053      5.50      530     3.16    232-2723
-HandL        2    0.0398      3.60     1377     1.54    535-4652
-HandR        2    0.0398      3.60     1377     1.54    535-4635
-LegL         1    0.4010      5.72      387     1.86    166-1059
-LegR         1    0.4010      5.72      387     1.86    166-1059
-FootL        1    0.0571      3.60      813     1.38    420-2447
-FootR        1    0.0571      3.60      813     1.38    420-2447
+whole body: 2200 triangles, 1973 with no UV area (89.7%), 1617 edge-locked
+            1494 of 1640 vertices sit exactly on a tile edge (91.1%)
 
-skin area          2.267 m2 over 11 regions
-sheet used         67.7% (islands), 74.9% (triangles, overlap counted twice)
-mean density       589 px/m at 1024^2  (=> 294 px/m at 512^2)
-region spread      387 .. 1377 px/m  (3.56x)
-worst deviation    HandR, 134% from the mean (tolerance 15%)
+VERDICTS (against assets/standards/skin_texture.mgestd)
+  FAIL  chart_in_unit_tile         1617 triangles (73.5%) have every vertex pinned
+                                   to a tile edge — islands that lay outside 0..1
+                                   and were clamped flat on import
+  FAIL  chart_max_degenerate_frac  1973 of 2200 triangles have zero UV area
+  FAIL  chart_regions_required     regions with no geometry: Face
+  FAIL  chart_islands_disjoint     regions sharing texels: Scalp/Neck, Scalp/Torso,
+                                   Neck/Torso
+  FAIL  density_outside_tolerance  not conclusive: only 4.5% of the body's surface
+                                   has usable UVs (need 90%)
+
+chart status: REFUSED
 ```
 
-The good news first: **the mean density is 589 px/m at 1024²** — within reach of
-the 512 px/m standard in §5.1, which means the sheet size is right and the
-budget in §5 holds. Everything else is a defect, and all four are cheap now and
-expensive later.
+**The engine's body currently has no usable UV chart.** Both arms, both hands,
+both legs and both feet have *zero* texture space: every triangle in them maps
+to a line. The cause is not the modelling — a real unwrap exists in the source —
+but the seam between it and the engine: the source unwrap extends past `u = 1`,
+the `SkinVertex` UV encoding is normalized `uint16` and cannot represent that
+(BODY_CONTRACT.md B-3), and the importer **clamps instead of refusing**. That
+silent clamp turned an export setting into committed damaged content across
+three LODs.
 
-**D1 — Regions are not evenly dense (3.56×).** Hands resolve at 1377 px/m, legs
-at 387. MODELING.md §5 forbids this in as many words: *"a texture must not be
-sharper on the hands than on the torso."* It is currently 2.5× sharper on the
-hands than on the torso, and 3.6× sharper than on the legs. Eight of eleven
-regions sit outside a ±15 % tolerance. A single skin texture painted at one
-weave frequency will read fine-grained on the hands and coarse on the legs, and
-no painting fixes that — it is the chart, not the paint.
+Full measurements, root cause, the fix, whether it costs UV coordinates or
+topology, and the seam request that stops it recurring:
+**[`research/uv-audit.md`](research/uv-audit.md)** — filed as a handoff to the
+body-modeling session, which owns the chart.
 
-**D2 — Islands stretch internally (up to 3.3×).** The unwrap maps every
-cross-section ring to the island's full width, so a narrow wrist and a broad
-bicep get the same number of texels around. On the arms and the neck a circle
-painted on the sheet lands on the body as an ellipse over 3× longer than it is
-wide. Rivets become ovals; a woven weave becomes a stripe.
+Two consequences that belong to this document rather than that one:
 
-**D3 — The hands have two shells on the same texels.** The palm (96 triangles)
-and the thumb (36) both unwrap across the *identical* rectangle
-`[0.50, 0.40]–[0.68, 0.60]`. Whatever is painted on the palm appears on the
-thumb. A palm crease, a callus, a glove seam — all doubled. This is the one
-defect that makes correct texturing outright impossible rather than merely
-uneven.
+- **No skin texture may be authored until the chart conforms.** Not "should
+  not" — the pipeline refuses it. Painting against a chart that is about to be
+  repacked wastes the work twice: once when it is painted, once when it is
+  invalidated (B-27 makes a UV change a contract-version event).
+- **The face needs more than an even share.** MODELING.md §1 gives the face no
+  eye, brow or mouth geometry *on purpose* — the texture carries all of it. A
+  region with no island cannot carry anything, so when the head is split, `Face`
+  is the one place the `near_field` density class (1024 px/m) is earned.
 
-**D4 — The face has an island but no geometry.** `BodyRegion::Face` reserves
-`[0.78, 0.72]–[1.00, 1.00]` — 6.2 % of the sheet — and the mesh emits nothing
-into it: the head is one shell tagged `Scalp`, with the face *sculpted* into it
-(`sculptFace`). So the face — the surface that per MODELING.md §1 must carry
-eyes, brows and mouth *entirely in texture*, and the surface a player looks at
-most — shares the scalp's island with the back of the head, while a sixth of a
-sheet sits empty beside it.
-
-### The fix, and its deadline
-
-1. **Rescale every island to equal texels-per-square-metre** and repack (D1).
-2. **Space `u` by arc length, not by ring index**, so a wrist gets fewer texels
-   around than a bicep (D2). This is a change in the unwrap, not the packing.
-3. **Give the thumb its own island** (D3).
-4. **Either give the face its own island and its own high-density budget, or
-   free the reserved space** (D4). Given §2's "texture carries the face", the
-   first is almost certainly right — and it wants *more* than an even share.
-5. **Turn `mge_uv_report` into a gate**: density within ±15 % of the mean, no
-   overlapping shells, no reserved-but-empty island — in `tests/`, next to the
-   topology gates that already guard the body.
-
-**All of this must land before the first skin texture exists.** MODELING.md §5
-is explicit that retro-fitting a chart invalidates every texture authored
-against the old one. That count is zero today. It will never be cheaper, and
-the chart is geometry's file, so the fix belongs to the modelling side — this
-document's job was to find it, measure it, and hand over the instrument.
+*An earlier revision of this section reported an uneven-but-usable chart (589
+px/m mean, 3.6× spread). Those numbers were measured against the previous
+code-generated body and are superseded; the audit records what changed.*
 
 ## 7. Mips, filtering, and streaming
 
