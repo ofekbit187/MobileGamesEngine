@@ -90,6 +90,7 @@ request (§5), not a quick fix — even when the fix is one line and obviously r
 | `engine/*/framework/{collision,interaction,action,character,ai,items}.*` | Gameplay mechanics |
 | `engine/*/people/**`, `engine/*/audio/**` | People & audio |
 | `engine/*/import/**` — skinned-asset import (`gltf_skin_import.*`) | Humanoid body (it produces the `.mgeskin` the body contract governs) |
+| `engine/*/import/**` — garment fitting bake (`garment_fit.*`) | Wearables (it is the ADR 0008 pipeline) |
 | `engine/*/import/**` — everything else (static mesh, future asset kinds) | Renderer |
 | `app/**`, `scripts/**`, `.github/**`, `tools/host_runner/**` | Platform |
 | `tools/<demo>/**` | whoever the demo demonstrates |
