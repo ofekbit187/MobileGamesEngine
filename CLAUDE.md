@@ -3,8 +3,10 @@
 Android-native 3D open-world game engine. Design is dictated top-down by the
 owner; read `docs/PRINCIPLES.md`, `docs/ARCHITECTURE.md`, `docs/CHARACTERS.md`,
 then `docs/TASKS.md` (live task status) before changing anything. 3D models
-(style, budgets, topology rules, definition of done) follow `docs/MODELING.md`. Principles
-are ranked — P1 (memory efficiency) wins conflicts.
+(style, budgets, topology rules, definition of done) follow `docs/MODELING.md`;
+textures (map set, formats, budgets, texel density, the UV chart) follow
+`docs/TEXTURING.md`. Principles are ranked — P1 (memory efficiency) wins
+conflicts.
 
 ## You are one session of several — read `docs/AGENTS.md` first
 

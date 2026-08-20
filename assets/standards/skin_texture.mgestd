@@ -1,0 +1,111 @@
+# The engine's skin-texture standard, as data.
+#
+# Prose cannot refuse a bad texture; this file can. Every rule here is machine
+# readable and checked by `tools/uv_report` (the chart rules, today) and by the
+# texture baker (the image rules, when it lands). P12: pay once here, and every
+# skin texture afterwards validates itself without an engineer in the loop.
+#
+# Companion prose: docs/TEXTURING.md. Where the two disagree, THIS FILE WINS —
+# it is what the pipeline actually reads.
+#
+# Format: one rule per line, `key value...`, `#` comments, blank lines ignored.
+# Deterministic and diffable, like every other content file in this repo.
+
+version 1
+
+# ---------------------------------------------------------------- sheets ----
+# The sheet a skin is authored and shipped at, per tier. Densities below are
+# quoted at the hero sheet and scale linearly: halving the sheet halves px/m.
+
+sheet_tier          hero      1024 1024
+sheet_tier          crowd      512  512
+sheet_tier          far        256  256
+sheet_default       hero
+
+# -------------------------------------------------------------- density ----
+# Texels per metre of body surface. The engine standard is 512 px/m — the
+# third-person figure the industry works to, and what a phone camera can show.
+
+density_class       near_field   1024
+density_class       standard      512
+density_class       distant       256
+skin_density_class  standard
+
+# How far a single region may sit from the chart's own mean before it refuses.
+# This is the numeric form of MODELING.md §5: "a texture must not be sharper on
+# the hands than on the torso."
+density_tolerance   0.15
+
+# Anisotropy inside one island: metres-per-texel along the most stretched
+# direction over the least. 1.0 is a perfect unwrap; above this a painted
+# circle reads as an ellipse on the body.
+stretch_max         1.50
+
+# --------------------------------------------------------------- charts ----
+# Rules the body's UV chart must satisfy before ANY texture is authored on it.
+# These are the acceptance gates for B-27/B-28 in docs/BODY_CONTRACT.md.
+
+# Every UV must lie inside the 0..1 tile. The engine's SkinVertex encodes UVs
+# as normalized uint16 (B-3), so a chart outside the tile cannot be represented
+# at all — it is clamped, and clamping silently destroys it.
+chart_in_unit_tile          required
+
+# A triangle with zero area in UV space has nowhere to put a texel. One is a
+# defect; the tolerance is zero.
+chart_max_degenerate_frac   0.0
+
+# Every region a wearable can mask must own texture space, or that region can
+# never be painted, and texture-space masking (ADR 0008 / research §3.3) cannot
+# address it.
+chart_regions_required      Scalp Face Neck Torso ArmL ArmR HandL HandR LegL LegR FootL FootR
+
+# Two shells on the same texels cannot be painted differently from each other.
+chart_islands_disjoint      required
+
+# Sheet space left unused is memory paid for and not received. Islands must
+# also not touch, or filtering bleeds one region into the next (see padding).
+chart_min_utilisation       0.55
+chart_min_island_gap_texels 4
+
+# ----------------------------------------------------------------- maps ----
+# name        colour_space  channels  requirement  contents
+map albedo    srgb          rgba      required     base_colour+alpha
+map packed    linear        rgb       optional     ao,roughness,mask
+map normal    linear        xy        optional     tangent_normal
+
+# Channel order is fixed engine-wide. Per-asset channel orders are how a
+# pipeline acquires a permanent tax on every artist who joins it.
+packed_channel_order        ao roughness mask
+
+# ------------------------------------------------------------ image bake ----
+# Checked by the baker, not by the chart report. Recorded here now so the
+# baker is written against a standard rather than inventing one.
+
+image_power_of_two          required
+mip_chain                   full
+mip_generation_space        linear
+mip_normal_renormalise      required
+mip_alpha_preserve_coverage required
+island_padding_texels       2
+island_padding_at_min_mip   2
+compression_astc_albedo     6x6
+compression_astc_packed     6x6
+compression_astc_normal     5x5 xxxy
+compression_etc2_normal     eac_rg
+compression_min_psnr_db     38.0
+deterministic_rebuild       required
+
+# ---------------------------------------------------------------- refuse ----
+# What the pipeline REFUSES rather than warns about. A warning in a content
+# pipeline is a defect that ships.
+
+refuse chart_outside_unit_tile
+refuse chart_degenerate_triangles
+refuse chart_overlapping_islands
+refuse chart_region_without_geometry
+refuse density_outside_tolerance
+refuse stretch_above_max
+refuse wrong_colour_space
+refuse missing_mip_chain
+refuse compression_below_min_psnr
+refuse nondeterministic_rebuild

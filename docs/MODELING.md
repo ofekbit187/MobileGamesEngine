@@ -151,6 +151,18 @@ Also budgeted:
   sharper on the hands than on the torso.
 - UVs ship before textures do. Retro-fitting a chart invalidates every texture
   authored against the old one.
+- **The current chart does not meet the rule above.** `tools/uv_report`
+  measures it: density runs 387–1377 px/m across regions (3.6×, hands 2.5×
+  sharper than the torso), arms and neck stretch over 3× inside their island,
+  the two hand shells overlap on identical texels, and the `Face` island holds
+  no geometry. The measurements, the consequences, and the fix are in
+  [TEXTURING.md §6](TEXTURING.md#6-the-template-uv-chart--measured). Because
+  no texture has been authored yet, this is the moment to fix it — the chart
+  belongs to the model, so the fix is modelling work.
+
+Everything downstream of the chart — the map set, colour spaces, compression,
+budgets, texel density, and what makes a texture *done* — is
+[TEXTURING.md](TEXTURING.md).
 
 ## 6. Definition of done
 
