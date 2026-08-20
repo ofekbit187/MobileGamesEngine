@@ -34,6 +34,21 @@ struct DrawPush {
 };
 static_assert(sizeof(DrawPush) == 96, "push constant layout is a shader contract");
 
+// One skinning slot as the shader sees it: `mat4 joints[17]` followed by
+// `vec4 morphWeights[4]`. The weights ride alongside the palette because they
+// are the same kind of thing — the small per-character data that turns the one
+// shared mesh into this character (ADR 0009).
+constexpr VkDeviceSize kSkinSlotBytes = sizeof(Mat4) * kJointCount + 16 * sizeof(float);
+constexpr VkDeviceSize kSkinSlotWeightOffset = sizeof(Mat4) * kJointCount;
+static_assert(kMorphCount <= 16, "morph weights are packed into four vec4s");
+
+// Morph delta buffer layout, mirrored word for word in skinned.vert.
+constexpr uint32_t kMorphEntryBaseWord = 0;  // first word of the entry table
+constexpr uint32_t kMorphVertexCountWord = 1;
+constexpr uint32_t kMorphScaleWord = 2;      // 16 per-target quantization scales
+constexpr uint32_t kMorphOffsetWord = 18;    // vertexCount + 1 prefix offsets
+constexpr uint32_t kMorphWordsPerDelta = 3;  // 12 bytes, as in the file
+
 }  // namespace
 
 Renderer::Renderer(VulkanDevice& device) : device_(device) {}
@@ -49,8 +64,7 @@ bool Renderer::init(const RendererConfig& config) {
     const VkDeviceSize align = properties.limits.minUniformBufferOffsetAlignment;
     uniformSlotStride_ = ((sizeof(FrameData) + align - 1) / align) * align;
     if (uniformSlotStride_ < align) uniformSlotStride_ = align;
-    const VkDeviceSize paletteBytes = sizeof(Mat4) * kJointCount;
-    paletteSlotStride_ = ((paletteBytes + align - 1) / align) * align;
+    paletteSlotStride_ = ((kSkinSlotBytes + align - 1) / align) * align;
 
     if (!createTarget() || !createDescriptors() || !createPipelines()) {
         shutdown();
@@ -136,6 +150,14 @@ void Renderer::shutdown() {
     if (pipelineLayout_ != VK_NULL_HANDLE) vkDestroyPipelineLayout(vk, pipelineLayout_, nullptr);
     litPipeline_ = placeholderPipeline_ = VK_NULL_HANDLE;
     pipelineLayout_ = VK_NULL_HANDLE;
+
+    destroyBuffer(emptyMorphBuffer_, emptyMorphMemory_, emptyMorphMemorySize_);
+    if (morphPool_ != VK_NULL_HANDLE) vkDestroyDescriptorPool(vk, morphPool_, nullptr);
+    if (morphSetLayout_ != VK_NULL_HANDLE)
+        vkDestroyDescriptorSetLayout(vk, morphSetLayout_, nullptr);
+    morphPool_ = VK_NULL_HANDLE;
+    morphSetLayout_ = VK_NULL_HANDLE;
+    emptyMorphSet_ = VK_NULL_HANDLE;
 
     if (descriptorPool_ != VK_NULL_HANDLE) vkDestroyDescriptorPool(vk, descriptorPool_, nullptr);
     if (setLayout_ != VK_NULL_HANDLE) vkDestroyDescriptorSetLayout(vk, setLayout_, nullptr);
@@ -303,7 +325,7 @@ bool Renderer::createDescriptors() {
     if (vkAllocateDescriptorSets(vk, &allocInfo, &descriptorSet_) != VK_SUCCESS) return false;
 
     VkDescriptorBufferInfo bufferInfo{uniformBuffer_, 0, sizeof(FrameData)};
-    VkDescriptorBufferInfo paletteInfo{paletteBuffer_, 0, sizeof(Mat4) * kJointCount};
+    VkDescriptorBufferInfo paletteInfo{paletteBuffer_, 0, kSkinSlotBytes};
     VkWriteDescriptorSet writes[2]{};
     writes[0].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
     writes[0].dstSet = descriptorSet_;
@@ -315,6 +337,66 @@ bool Renderer::createDescriptors() {
     writes[1].dstBinding = 1;
     writes[1].pBufferInfo = &paletteInfo;
     vkUpdateDescriptorSets(vk, 2, writes, 0, nullptr);
+
+    // Set 1: the per-mesh morph deltas (ADR 0009). One descriptor per skinned
+    // mesh, capped — over the cap an upload refuses rather than the pool
+    // growing (P1: caps refuse, never grow).
+    VkDescriptorSetLayoutBinding morphBinding{};
+    morphBinding.binding = 0;
+    morphBinding.descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+    morphBinding.descriptorCount = 1;
+    morphBinding.stageFlags = VK_SHADER_STAGE_VERTEX_BIT;
+    VkDescriptorSetLayoutCreateInfo morphLayoutInfo{};
+    morphLayoutInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
+    morphLayoutInfo.bindingCount = 1;
+    morphLayoutInfo.pBindings = &morphBinding;
+    if (vkCreateDescriptorSetLayout(vk, &morphLayoutInfo, nullptr, &morphSetLayout_) !=
+        VK_SUCCESS) {
+        return false;
+    }
+
+    VkDescriptorPoolSize morphPoolSize{VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, kMaxMorphMeshes + 1};
+    VkDescriptorPoolCreateInfo morphPoolInfo{};
+    morphPoolInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
+    // Meshes are uploaded and destroyed as content streams, so sets must come
+    // back to the pool rather than being spent once.
+    morphPoolInfo.flags = VK_DESCRIPTOR_POOL_CREATE_FREE_DESCRIPTOR_SET_BIT;
+    morphPoolInfo.maxSets = kMaxMorphMeshes + 1;  // + the empty set
+    morphPoolInfo.poolSizeCount = 1;
+    morphPoolInfo.pPoolSizes = &morphPoolSize;
+    if (vkCreateDescriptorPool(vk, &morphPoolInfo, nullptr, &morphPool_) != VK_SUCCESS)
+        return false;
+
+    // The empty set: what a mesh without morph targets binds. Its header says
+    // "no vertices, no entries", and the shape pass is switched off for such a
+    // draw anyway — this exists because Vulkan requires every statically-used
+    // descriptor to be bound, not because anything reads it.
+    const VkDeviceSize emptyBytes = kMorphOffsetWord * sizeof(uint32_t);
+    if (!createBuffer(emptyBytes, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, emptyMorphBuffer_,
+                      emptyMorphMemory_, emptyMorphMemorySize_)) {
+        return false;
+    }
+    void* emptyMapped = nullptr;
+    if (vkMapMemory(vk, emptyMorphMemory_, 0, emptyBytes, 0, &emptyMapped) != VK_SUCCESS)
+        return false;
+    memset(emptyMapped, 0, emptyBytes);
+    vkUnmapMemory(vk, emptyMorphMemory_);
+
+    VkDescriptorSetAllocateInfo emptyAlloc{};
+    emptyAlloc.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
+    emptyAlloc.descriptorPool = morphPool_;
+    emptyAlloc.descriptorSetCount = 1;
+    emptyAlloc.pSetLayouts = &morphSetLayout_;
+    if (vkAllocateDescriptorSets(vk, &emptyAlloc, &emptyMorphSet_) != VK_SUCCESS) return false;
+    VkDescriptorBufferInfo emptyInfo{emptyMorphBuffer_, 0, emptyBytes};
+    VkWriteDescriptorSet emptyWrite{};
+    emptyWrite.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+    emptyWrite.dstSet = emptyMorphSet_;
+    emptyWrite.dstBinding = 0;
+    emptyWrite.descriptorCount = 1;
+    emptyWrite.descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+    emptyWrite.pBufferInfo = &emptyInfo;
+    vkUpdateDescriptorSets(vk, 1, &emptyWrite, 0, nullptr);
     return true;
 }
 
@@ -334,10 +416,13 @@ bool Renderer::createPipelines() {
     VkPushConstantRange pushRange{};
     pushRange.stageFlags = VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT;
     pushRange.size = sizeof(DrawPush);
+    // Set 0 is per frame and per character; set 1 is per mesh (morph deltas).
+    // The unskinned pipelines share this layout and simply never use set 1.
+    const VkDescriptorSetLayout setLayouts[2] = {setLayout_, morphSetLayout_};
     VkPipelineLayoutCreateInfo layoutInfo{};
     layoutInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
-    layoutInfo.setLayoutCount = 1;
-    layoutInfo.pSetLayouts = &setLayout_;
+    layoutInfo.setLayoutCount = 2;
+    layoutInfo.pSetLayouts = setLayouts;
     layoutInfo.pushConstantRangeCount = 1;
     layoutInfo.pPushConstantRanges = &pushRange;
     if (vkCreatePipelineLayout(vk, &layoutInfo, nullptr, &pipelineLayout_) != VK_SUCCESS)
@@ -808,6 +893,112 @@ bool Renderer::uploadSkinnedMesh(const SkinnedMeshData& data, GpuSkinnedMesh& ou
 
     out.indexCount = static_cast<uint32_t>(data.indices.size());
     out.bounds = data.bounds;
+    if (!uploadMorphDeltas(data, out)) {
+        destroySkinnedMesh(out);
+        return false;
+    }
+    return true;
+}
+
+// Turns the file's per-TARGET delta lists into a per-VERTEX one, so the vertex
+// shader can read its own deltas in one contiguous slice instead of searching
+// 15 sparse lists. The deltas themselves keep their 12-byte packed form — the
+// GPU pays exactly what the file pays (42 KB for the shipped LOD0), once,
+// however many characters are drawn with the mesh.
+//
+// Entry order within a vertex follows the target order in the file, which is
+// the order the CPU reference accumulates in: same operands, same sequence,
+// same rounding, so the two paths agree bit for bit and `mge_skin_test` can
+// demand a 0.000 pixel difference.
+bool Renderer::uploadMorphDeltas(const SkinnedMeshData& data, GpuSkinnedMesh& out) {
+    const size_t vertexCount = data.vertices.size();
+    // A target outside the known set has no weight slot and no scale word, so
+    // it is dropped rather than trusted — the same refusal the loader makes.
+    auto usable = [vertexCount](const MorphTarget& target, const MorphDelta& delta) {
+        return delta.vertex < vertexCount && static_cast<size_t>(target.morph) < kMorphCount;
+    };
+    size_t deltaCount = 0;
+    for (const MorphTarget& target : data.morphs) {
+        for (const MorphDelta& delta : target.deltas) {
+            if (usable(target, delta)) ++deltaCount;
+        }
+    }
+    if (deltaCount == 0) return true;  // no targets: the empty set serves
+
+    // Prefix offsets, then a write cursor per vertex.
+    std::vector<uint32_t> words(kMorphOffsetWord + vertexCount + 1 +
+                                deltaCount * kMorphWordsPerDelta);
+    uint32_t* offsets = words.data() + kMorphOffsetWord;
+    for (const MorphTarget& target : data.morphs) {
+        for (const MorphDelta& delta : target.deltas) {
+            if (usable(target, delta)) ++offsets[delta.vertex + 1];
+        }
+    }
+    for (size_t v = 0; v < vertexCount; ++v) offsets[v + 1] += offsets[v];
+
+    const uint32_t entryBase =
+        static_cast<uint32_t>(kMorphOffsetWord + vertexCount + 1);
+    words[kMorphEntryBaseWord] = entryBase;
+    words[kMorphVertexCountWord] = static_cast<uint32_t>(vertexCount);
+    for (const MorphTarget& target : data.morphs) {
+        const size_t index = static_cast<size_t>(target.morph);
+        if (index < kMorphCount) {
+            memcpy(&words[kMorphScaleWord + index], &target.scale, sizeof(float));
+        }
+    }
+
+    std::vector<uint32_t> cursor(offsets, offsets + vertexCount);
+    for (const MorphTarget& target : data.morphs) {
+        const uint32_t morphIndex = static_cast<uint32_t>(target.morph);
+        for (const MorphDelta& delta : target.deltas) {
+            if (!usable(target, delta)) continue;
+            uint32_t* entry = &words[entryBase + cursor[delta.vertex]++ * kMorphWordsPerDelta];
+            const uint32_t px = static_cast<uint16_t>(delta.position[0]);
+            const uint32_t py = static_cast<uint16_t>(delta.position[1]);
+            const uint32_t pz = static_cast<uint16_t>(delta.position[2]);
+            const uint32_t nx = static_cast<uint8_t>(delta.normal[0]);
+            const uint32_t ny = static_cast<uint8_t>(delta.normal[1]);
+            const uint32_t nz = static_cast<uint8_t>(delta.normal[2]);
+            entry[0] = px | (py << 16);
+            entry[1] = pz | (nx << 16) | (ny << 24);
+            entry[2] = nz | (morphIndex << 8);
+        }
+    }
+
+    const VkDeviceSize bytes = words.size() * sizeof(uint32_t);
+    if (!createBuffer(bytes, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, out.morphBuffer,
+                      out.morphMemory, out.morphMemorySize)) {
+        return false;  // GPU budget refused — caller degrades
+    }
+    void* mapped = nullptr;
+    if (vkMapMemory(device_.device(), out.morphMemory, 0, bytes, 0, &mapped) != VK_SUCCESS)
+        return false;
+    memcpy(mapped, words.data(), bytes);
+    vkUnmapMemory(device_.device(), out.morphMemory);
+
+    VkDescriptorSetAllocateInfo allocInfo{};
+    allocInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
+    allocInfo.descriptorPool = morphPool_;
+    allocInfo.descriptorSetCount = 1;
+    allocInfo.pSetLayouts = &morphSetLayout_;
+    if (vkAllocateDescriptorSets(device_.device(), &allocInfo, &out.morphSet) != VK_SUCCESS) {
+        MGE_LOGW(kTag, "morph descriptor pool exhausted (cap %u meshes)", kMaxMorphMeshes);
+        out.morphSet = VK_NULL_HANDLE;
+        return false;
+    }
+    VkDescriptorBufferInfo bufferInfo{out.morphBuffer, 0, bytes};
+    VkWriteDescriptorSet write{};
+    write.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+    write.dstSet = out.morphSet;
+    write.dstBinding = 0;
+    write.descriptorCount = 1;
+    write.descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+    write.pBufferInfo = &bufferInfo;
+    vkUpdateDescriptorSets(device_.device(), 1, &write, 0, nullptr);
+
+    out.morphDeltaCount = static_cast<uint32_t>(deltaCount);
+    MGE_LOGI(kTag, "morph deltas: %zu across %zu targets, %zu KiB shared", deltaCount,
+             data.morphs.size(), static_cast<size_t>(bytes) / 1024);
     return true;
 }
 
@@ -820,6 +1011,15 @@ void Renderer::destroySkinnedMesh(GpuSkinnedMesh& mesh) {
     if (mesh.indexBuffer != VK_NULL_HANDLE) {
         vkDestroyBuffer(vk, mesh.indexBuffer, nullptr);
         device_.free(mesh.indexMemory, mesh.indexMemorySize);
+    }
+    // Only if the pool outlives the mesh: shutdown() destroys it, and that
+    // frees every set with it.
+    if (mesh.morphSet != VK_NULL_HANDLE && morphPool_ != VK_NULL_HANDLE) {
+        vkFreeDescriptorSets(vk, morphPool_, 1, &mesh.morphSet);
+    }
+    if (mesh.morphBuffer != VK_NULL_HANDLE) {
+        vkDestroyBuffer(vk, mesh.morphBuffer, nullptr);
+        device_.free(mesh.morphMemory, mesh.morphMemorySize);
     }
     mesh = GpuSkinnedMesh{};
 }
@@ -914,6 +1114,7 @@ void Renderer::recordSkinnedItems(const Camera& camera, const SkinnedDrawItem* i
     if (items == nullptr || count == 0 || skinnedPipeline_ == VK_NULL_HANDLE) return;
     const Frustum frustum = Frustum::fromViewProj(camera.viewProj());
     vkCmdBindPipeline(commandBuffer_, VK_PIPELINE_BIND_POINT_GRAPHICS, skinnedPipeline_);
+    VkDescriptorSet boundMorphSet = VK_NULL_HANDLE;
 
     for (size_t i = 0; i < count; ++i) {
         const SkinnedDrawItem& item = items[i];
@@ -923,15 +1124,26 @@ void Renderer::recordSkinnedItems(const Camera& camera, const SkinnedDrawItem* i
             if (stats != nullptr) ++stats->culled;
             continue;
         }
-        // This character's palette slot: the ONLY per-character GPU data.
+        // This character's skin slot — palette + shape weights — is the ONLY
+        // per-character GPU data.
         const uint32_t offsets[2] = {
             0, static_cast<uint32_t>(paletteSlotStride_ * skinnedSlots_[i])};
         vkCmdBindDescriptorSets(commandBuffer_, VK_PIPELINE_BIND_POINT_GRAPHICS,
                                 pipelineLayout_, 0, 1, &descriptorSet_, 2, offsets);
 
+        // The mesh's shared deltas. A crowd on one mesh binds this once.
+        const bool morphed = item.mesh->hasMorphs() && item.morphWeights != nullptr;
+        VkDescriptorSet morphSet = morphed ? item.mesh->morphSet : emptyMorphSet_;
+        if (morphSet != boundMorphSet) {
+            vkCmdBindDescriptorSets(commandBuffer_, VK_PIPELINE_BIND_POINT_GRAPHICS,
+                                    pipelineLayout_, 1, 1, &morphSet, 0, nullptr);
+            boundMorphSet = morphSet;
+        }
+
         DrawPush push{};
         memcpy(push.model, item.model.m, sizeof(push.model));
         memcpy(push.baseColor, item.baseColor, sizeof(push.baseColor));
+        push.params[0] = morphed ? 1.0f : 0.0f;  // run the shape pass
         vkCmdPushConstants(commandBuffer_, pipelineLayout_,
                            VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 0,
                            sizeof(push), &push);
@@ -989,14 +1201,23 @@ bool Renderer::renderFrame(const Camera& camera, const DrawItem* items, size_t c
             auto* bytes = static_cast<uint8_t*>(palettes);
             uint32_t slot = 0;
             for (size_t i = 0; i < skinnedCount; ++i) {
+                // A character's body regions and garments come through as
+                // consecutive draws carrying the same palette AND the same
+                // shape, so they cost one slot between them.
                 const bool sharesPrevious =
-                    i > 0 && skinned[i].palette == skinned[i - 1].palette;
+                    i > 0 && skinned[i].palette == skinned[i - 1].palette &&
+                    skinned[i].morphWeights == skinned[i - 1].morphWeights;
                 if (!sharesPrevious) {
                     slot = static_cast<uint32_t>(i == 0 ? 0 : slot + 1);
+                    uint8_t* dest = bytes + paletteSlotStride_ * slot;
                     if (skinned[i].palette != nullptr) {
-                        memcpy(bytes + paletteSlotStride_ * slot, skinned[i].palette,
-                               sizeof(Mat4) * kJointCount);
+                        memcpy(dest, skinned[i].palette, sizeof(Mat4) * kJointCount);
                     }
+                    float weights[16] = {0};
+                    if (skinned[i].morphWeights != nullptr) {
+                        memcpy(weights, skinned[i].morphWeights, sizeof(float) * kMorphCount);
+                    }
+                    memcpy(dest + kSkinSlotWeightOffset, weights, sizeof(weights));
                 }
                 skinnedSlots_[i] = slot;
             }

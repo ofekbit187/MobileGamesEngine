@@ -44,7 +44,12 @@ struct GpuLodMesh {
 
 // A skinned mesh on the GPU (task 8.10): the template body / a garment,
 // shared by every character that wears it. Deformation is per-draw palette
-// data, never a per-character copy of the geometry (P1).
+// data plus per-draw morph weights, never a per-character copy of the
+// geometry (P1).
+//
+// The mesh's morph deltas (ADR 0009) live here too — once, shared by every
+// character drawn with it, in the same sparse 12-bytes-per-moved-vertex form
+// the `.mgeskin` file stores. A character adds 15 floats, not a mesh.
 struct GpuSkinnedMesh {
     VkBuffer vertexBuffer = VK_NULL_HANDLE;
     VkBuffer indexBuffer = VK_NULL_HANDLE;
@@ -54,7 +59,18 @@ struct GpuSkinnedMesh {
     VkDeviceSize indexMemorySize = 0;
     uint32_t indexCount = 0;
     Aabb bounds{};
+
+    // Morph deltas. `morphSet` is null when the mesh carries no targets (every
+    // garment today) — such a draw binds the renderer's empty set and skips
+    // the shape pass entirely.
+    VkBuffer morphBuffer = VK_NULL_HANDLE;
+    VkDeviceMemory morphMemory = VK_NULL_HANDLE;
+    VkDeviceSize morphMemorySize = 0;
+    VkDescriptorSet morphSet = VK_NULL_HANDLE;
+    uint32_t morphDeltaCount = 0;
+
     bool valid() const { return vertexBuffer != VK_NULL_HANDLE; }
+    bool hasMorphs() const { return morphSet != VK_NULL_HANDLE; }
 };
 
 enum class MaterialKind : uint8_t {
@@ -72,12 +88,19 @@ struct DrawItem {
     MaterialKind material = MaterialKind::Lit;
 };
 
-// One skinned draw: a shared mesh + this character's joint palette.
+// One skinned draw: a shared mesh + this character's joint palette and shape.
 // `indexCount == 0` draws the whole mesh; a sub-range draws one region
 // (masking a covered body part is a draw-range decision).
+//
+// `palette` and `morphWeights` are the whole of a character's per-draw GPU
+// cost: 17 matrices and 15 floats. Consecutive draws that pass the SAME two
+// pointers (one character's body regions plus its garments) share one uniform
+// slot, so a dressed character still uploads its palette once.
 struct SkinnedDrawItem {
     const GpuSkinnedMesh* mesh = nullptr;
-    const Mat4* palette = nullptr;  // kJointCount matrices
+    const Mat4* palette = nullptr;         // kJointCount matrices
+    const float* morphWeights = nullptr;   // kMorphCount weights in [-1,+1];
+                                           // null = the template shape
     Mat4 model;
     Aabb worldBounds{};
     Vec3 lodReference{};
@@ -131,9 +154,11 @@ public:
     void destroyLodMesh(GpuLodMesh& mesh);
 
     // Skinned geometry (task 8.10): upload once, draw for every character.
+    // Morph targets on the mesh are uploaded with it and shared the same way.
     bool uploadSkinnedMesh(const SkinnedMeshData& data, GpuSkinnedMesh& out);
     void destroySkinnedMesh(GpuSkinnedMesh& mesh);
-    static constexpr uint32_t kMaxSkinnedDraws = 48;  // palettes per frame
+    static constexpr uint32_t kMaxSkinnedDraws = 48;   // palettes per frame
+    static constexpr uint32_t kMaxMorphMeshes = 32;    // distinct delta sets
 
     // Uploads the UI font atlas and enables the overlay pipeline (task 5.2).
     bool setUiFont(const FontAtlas& font);
@@ -193,11 +218,23 @@ private:
     VkPipeline placeholderPipeline_ = VK_NULL_HANDLE;
     VkPipeline skinnedPipeline_ = VK_NULL_HANDLE;
 
-    // Skinning palettes: one dynamic-offset slot per skinned draw.
+    // Skinning palettes: one dynamic-offset slot per skinned draw. A slot is
+    // the 17 matrices followed by this character's 15 morph weights.
     VkBuffer paletteBuffer_ = VK_NULL_HANDLE;
     VkDeviceMemory paletteMemory_ = VK_NULL_HANDLE;
     VkDeviceSize paletteMemorySize_ = 0;
     VkDeviceSize paletteSlotStride_ = 0;
+
+    // Morph deltas: set 1, one storage-buffer descriptor per skinned mesh.
+    // Meshes without targets bind `emptyMorphSet_` — the shader never reads
+    // it, but a statically-used descriptor must still be bound.
+    bool uploadMorphDeltas(const SkinnedMeshData& data, GpuSkinnedMesh& out);
+    VkDescriptorSetLayout morphSetLayout_ = VK_NULL_HANDLE;
+    VkDescriptorPool morphPool_ = VK_NULL_HANDLE;
+    VkDescriptorSet emptyMorphSet_ = VK_NULL_HANDLE;
+    VkBuffer emptyMorphBuffer_ = VK_NULL_HANDLE;
+    VkDeviceMemory emptyMorphMemory_ = VK_NULL_HANDLE;
+    VkDeviceSize emptyMorphMemorySize_ = 0;
     // Palette slot each skinned draw reads: consecutive draws sharing a
     // palette (one character's body regions + garments) share one slot.
     uint32_t skinnedSlots_[kMaxSkinnedDraws] = {};
