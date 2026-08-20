@@ -8,6 +8,7 @@
 #include <cstdint>
 #include <vector>
 
+#include "mge/character/body_mesh.h"
 #include "mge/graphics/mesh_data.h"
 
 namespace mge {
@@ -19,5 +20,15 @@ bool deserializeMesh(const uint8_t* data, size_t size, LodMesh& out);
 
 bool writeMeshFile(const char* path, const LodMesh& mesh);
 bool readMeshFile(const char* path, LodMesh& out);
+
+// Skinned runtime asset (`.mgeskin`, task 8.12): the baked form of an
+// authored, rigged model — vertices with their four bone influences, the
+// index buffer grouped by body region, and the region table. Written by the
+// import tool, read by the runtime; glTF never reaches a device (ADR 0005).
+void serializeSkinnedMesh(const SkinnedMeshData& mesh, std::vector<uint8_t>& out);
+bool deserializeSkinnedMesh(const uint8_t* data, size_t size, SkinnedMeshData& out);
+
+bool writeSkinnedMeshFile(const char* path, const SkinnedMeshData& mesh);
+bool readSkinnedMeshFile(const char* path, SkinnedMeshData& out);
 
 }  // namespace mge

@@ -8,6 +8,31 @@ textures (map set, formats, budgets, texel density, the UV chart) follow
 `docs/TEXTURING.md`. Principles are ranked — P1 (memory efficiency) wins
 conflicts.
 
+## You are one session of several — read `docs/AGENTS.md` first
+
+The work is split: **each session focuses on one area**, and one session — the
+**architect** — supervises the whole against the owner's dictations and coordinates
+between the rest. `docs/AGENTS.md` is the working agreement: the roster, who owns
+which files, the seams between areas, and the charters. The non-negotiables:
+
+- **Edit only what your area owns.** A needed change on the other side of a seam is a
+  *seam request* to the architect, not a quick fix — even a one-line obvious one.
+- **Seams change only by architect ruling**, written into `docs/` before either side
+  implements. The rig, body proportions, garment fitting/masking, the skinned draw
+  contract, `CharacterComponent`, intents, and the platform boundary are all seams.
+- **Build what was dictated, not the world around it.** A capability is not a behaviour;
+  a mechanism is not a policy. Propose adjacent work; don't ship it uninvited.
+- **Only the architect publishes the review board.** Hand it evidence — real output, real
+  captures, test names — not prose.
+- **ADR numbers are reserved by the architect**, never self-assigned. (0005 has now been
+  minted twice by two sessions; it cost a renumbering and then a second correction.)
+- **`claude/android-game-engine-design-blsmnw` is the integration branch.** Merge it into
+  your branch before you start and again before you finish; push your own branch and say
+  it is ready. The architect merges into integration, verifies, and pushes — nobody else
+  does, and nobody rewrites shared history.
+- Verify before pushing: `scripts/verify.sh` green, and the host runner still printing
+  `steady-state heap allocations: 0`.
+
 ## Build & verify (no device needed)
 
 ```sh

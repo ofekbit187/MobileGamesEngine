@@ -19,3 +19,9 @@ app/.cxx/
 # Demo captures written into the working tree by the headless tools
 *.ppm
 *.wav
+
+# Build-time modelling inputs: large third-party base meshes (CC0), downloaded
+# rather than committed — see docs/MODELING.md §7. The baked assets in
+# assets/models/ are what ships.
+tools/model/vendor/
+__pycache__/

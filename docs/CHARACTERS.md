@@ -137,6 +137,7 @@ Humanoid variety comes from **variant data files**, not from new models.
   - **Feet** — size
   - **Face** — head shape plus **further facial features** (a nested parameter group: eyes, nose, mouth, jaw, ears, brow… — the face is its own sub-schema designed to grow)
 - Implementation stance: variants are realized as a combination of **skeleton-proportion scaling** (bone lengths/offsets for height, legs, shoulders…) and **morph deltas** on the template mesh (chest, face, fine features). Both representations are compact data (P1) and both must be visible to the wearable fitting mechanism (§5) so clothes follow the body.
+- **Realized** — the concrete scope, its ranges and its storage are [ADR 0009](adr/0009-humanoid-variation-scope.md): 8 proportion parameters (clamped, not rejected) and 15 shape parameters in [-1, +1], of which 10 are the face sub-schema. Proportions cost a 17-matrix palette per character; shape costs 15 floats, against 42 KB of morph deltas shared by every humanoid in the game. `height` means sole-to-crown for every combination of the rest.
 - Variants compose: a game can define a base variant ("villager build") and layer instance tweaks on top (this villager is taller).
 
 ### 4.2 Skeleton & default animations
@@ -216,6 +217,60 @@ Held items (tools and weapons) attach rigidly to skeleton attachment points rath
 - **Grip points** — the item defines its own grip transform(s) (primary grip, second-hand grip for two-handers); the template skeleton provides hand attachment points. Item grip meets hand point — no per-item animation authoring.
 - **Sheathing** — items have a `drawn`/`sheathed` state. The body definition provides sheath attachment points (`hip_l`, `hip_r`, `back`, extensible); the item declares which it uses. Draw/sheath transitions come with default animations; a sheathed item remains visible on the body and streams/persists with the character.
 - Held items are ordinary assets: natively importable, streamable, virtual-model compatible (a placeholder sword of declared proportions works in hand and on the hip).
+
+### 6.2 Using a held item: archetypes, never per-item clips (P12)
+
+Grip is solved (§6.1) — the item meets the hand and nobody animates that. **Using** the item
+is the same problem one level up, and gets the same answer: *"same principle should go to
+equipped tools and weapons animation"* (owner, Dictation 7).
+
+**An item does not carry an animation. It declares what kind of use it is**, and the engine
+animates that kind, shaped by the item's own numbers.
+
+| Archetype | The motion | Typical items |
+|---|---|---|
+| `swing` | arcing horizontal/diagonal melee | sword, axe, club, staff |
+| `thrust` | straight-line stab | spear, dagger, rapier |
+| `chop` | overhead descending | axe, pick, maul |
+| `work` | repeated, sustained tool motion | hammer, saw, shovel, scythe |
+| `draw` | charge-and-release | bow, sling |
+| `aim` | raise, steady, release | crossbow |
+| `raise` | lift and hold a pose | torch, lantern, shield, banner |
+| `consume` | bring to the mouth | food, drink, potion |
+| `gesture` | free-hand motion, no object required | spellcasting, pointing, greeting |
+
+**Parameterized by the item, not authored per item.** The archetype is a shape; the item's
+data gives it dimensions:
+
+- **grip** (`one_handed` / `two_handed` / `versatile`, §6.1) decides which arms participate
+  and whether the torso counter-rotates.
+- **reach** — the item's length sets the arc radius and how far the body leans in.
+- **weight** — sets wind-up, strike and recovery timing. A war-hammer and a dagger are the
+  same `swing` archetype at different speeds, and read as completely different weapons.
+- **handedness and stance** — which side leads, mirrored for left-handed characters.
+
+So a new weapon is: *model it, declare `swing`, give it a reach and a weight, ship it.* No
+animation work, no engine change. A hero item may still opt into a bespoke clip — that is a
+luxury, never the price of admission (P12).
+
+**What this requires of the animation system** — and it is the "work hard once" half:
+
+1. **Layered poses with masks.** Locomotion drives the lower body while an archetype drives
+   the upper body, so a character can swing *while walking*. Today `LocomotionAnimator`
+   produces one whole-body pose; layering it with an upper-body overlay is the enabling
+   capability, and everything above depends on it.
+2. **Phase-addressable actions.** An archetype exposes wind-up / strike / recovery as
+   fractions of its own timeline, so gameplay can hang the damage moment on `strike`
+   instead of a hard-coded delay — and a slow weapon's damage lands late *because the
+   animation says so*, not because someone tuned two numbers to agree.
+3. **Interruption and blending.** Taking a hit, dying, or being staggered mid-swing must
+   blend out, not snap.
+
+**Seam note:** the archetype set and the layering system belong to the body & animation
+area; the per-item declarations (`grip`, `reach`, `weight`, archetype) are item data owned
+by gameplay. `ItemUse::animKey` in the Phase 12 action model is the placeholder this
+replaces — a free-form string the game presented itself. When archetypes land, the engine
+plays the motion and `animKey` narrows to the bespoke-clip escape hatch.
 
 ## 7. Basic AI (v1)
 

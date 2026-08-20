@@ -52,18 +52,62 @@ MGE_TEST(skeleton_matches_variant_proportions) {
     const Vec3 head = jointPosition(s, bind, Joint::Head);
     MGE_CHECK_NEAR(head.y + s.headSize, avg.height, 0.06f);
     const Vec3 footL = jointPosition(s, bind, Joint::FootL);
-    MGE_CHECK(footL.y > 0.0f && footL.y < 0.08f);  // ankle just above ground
+    // The ankle, where the template body's ankle actually is: ~6.6% of height
+    // above the sole. (The rig is fitted to the mesh, not the mesh to the rig.)
+    MGE_CHECK(footL.y > 0.04f * avg.height && footL.y < 0.10f * avg.height);
     MGE_CHECK_NEAR(jointPosition(s, bind, Joint::UpperArmL).x, avg.shoulderWidth * 0.5f, 1e-4f);
     MGE_CHECK_NEAR(jointPosition(s, bind, Joint::ThighR).x, -avg.hipWidth * 0.5f, 1e-4f);
 
-    // A giant variant scales the whole rig from the same data file fields.
+    // A giant variant scales the whole rig from the same data file fields —
+    // up to the edge of the scope, which is where a variant file's ambition
+    // stops (ADR 0009).
     HumanoidVariant giant;
-    giant.height = 2.30f;
-    giant.shoulderWidth = 0.60f;
+    giant.height = kHeightRange.max;
+    giant.shoulderWidth = kShoulderWidthRange.max;
     const Skeleton g = buildSkeleton(giant);
     const Vec3 giantHead = jointPosition(g, bind, Joint::Head);
     MGE_CHECK_NEAR(giantHead.y + g.headSize, giant.height, 0.08f);
     MGE_CHECK(jointPosition(g, bind, Joint::UpperArmL).x > jointPosition(s, bind, Joint::UpperArmL).x);
+}
+
+MGE_TEST(variants_are_clamped_into_the_scope) {
+    // Variant files are CONTENT. Content must never be able to ask for a body
+    // the animation or the wearables cannot cope with, so the scope clamps
+    // rather than rejects — a silly number produces the nearest sane body.
+    HumanoidVariant absurd;
+    absurd.height = 40.0f;
+    absurd.shoulderWidth = -3.0f;
+    absurd.bulk = 100.0f;
+    absurd.legRatio = 0.99f;
+    absurd.belly = 7.5f;
+    absurd.face.jawWidth = -9.0f;
+    const HumanoidVariant v = clampToScope(absurd);
+    MGE_CHECK_NEAR(v.height, kHeightRange.max, 1e-5f);
+    MGE_CHECK_NEAR(v.shoulderWidth, kShoulderWidthRange.min, 1e-5f);
+    MGE_CHECK_NEAR(v.bulk, kBulkRange.max, 1e-5f);
+    MGE_CHECK_NEAR(v.legRatio, kLegRatioRange.max, 1e-5f);
+    MGE_CHECK_NEAR(v.belly, 1.0f, 1e-5f);
+    MGE_CHECK_NEAR(v.face.jawWidth, -1.0f, 1e-5f);
+
+    // And the clamp is on the path, not just available to call: an absurd
+    // variant still produces a skeleton inside the scope.
+    const Skeleton clamped = buildSkeleton(absurd);
+    Pose bind;
+    MGE_CHECK(jointPosition(clamped, bind, Joint::Head).y + clamped.headSize <=
+              kHeightRange.max + 0.01f);
+
+    // Every default is the standard body, and every standard is inside its
+    // own range — a scope whose middle is outside itself is a broken scope.
+    const HumanoidVariant standard;
+    MGE_CHECK_NEAR(standard.height, kHeightRange.standard, 1e-5f);
+    MGE_CHECK_NEAR(standard.shoulderWidth, kShoulderWidthRange.standard, 1e-5f);
+    MGE_CHECK_NEAR(standard.hipWidth, kHipWidthRange.standard, 1e-5f);
+    const VariantRange* ranges[] = {&kHeightRange,   &kShoulderWidthRange, &kHipWidthRange,
+                                    &kLegRatioRange, &kArmRatioRange,      &kBulkRange,
+                                    &kHeadScaleRange, &kFootScaleRange};
+    for (const VariantRange* r : ranges) {
+        MGE_CHECK(r->min < r->standard && r->standard < r->max);
+    }
 }
 
 MGE_TEST(pose_evaluation_moves_the_chain) {

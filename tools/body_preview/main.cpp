@@ -8,6 +8,8 @@
 //   body_walk.ppm      — the shipped walk cycle deforming the template
 //   body_dressed.ppm   — garments fitted and layered on the same template
 //   body_lods.ppm      — LOD0/1/2 side by side (silhouette must hold)
+//   body_shape_scope   — every body shape parameter at both extremes
+//   body_face_scope_N  — two facial parameters per sheet, each at both extremes
 //
 // Usage: mge_body_preview [outputDir]
 
@@ -44,10 +46,10 @@ struct Piece {
 using PieceList = std::deque<Piece>;
 
 bool uploadSkinned(Renderer& renderer, const SkinnedMeshData& mesh,
-                   const Mat4 palette[kJointCount], const float color[4],
-                   PieceList& out) {
+                   const Mat4 palette[kJointCount], const float shape[kMorphCount],
+                   const float color[4], PieceList& out) {
     MeshData posed;
-    skinMesh(mesh, palette, posed);
+    skinMesh(mesh, palette, shape, posed);
     LodMesh lod;
     lod.lods.push_back(posed);
     lod.computeBounds();
@@ -145,9 +147,17 @@ bool addCharacter(Renderer& renderer, const SkinnedMeshData& bodyMesh,
     firstPiece = pieces.size();
     Mat4 palette[kJointCount];
     buildSkinPalette(variant, pose, palette);
-    if (!uploadSkinned(renderer, bodyMesh, palette, skin.color, pieces)) return false;
+    float shape[kMorphCount];
+    morphWeights(variant, shape);
+    if (!uploadSkinned(renderer, bodyMesh, palette, shape, skin.color, pieces)) return false;
+    // Garments follow the variant's proportions; following its SHAPE needs
+    // morph targets baked into the garment too (CHARACTERS.md §5), not yet
+    // authored — so they get the palette and no weights.
+    float none[kMorphCount] = {0};
     for (size_t i = 0; i < outfitCount; ++i) {
-        if (!uploadSkinned(renderer, garments[i], palette, outfits[i].color, pieces)) return false;
+        if (!uploadSkinned(renderer, garments[i], palette, none, outfits[i].color, pieces)) {
+            return false;
+        }
     }
     return true;
 }
@@ -191,6 +201,43 @@ int main(int argc, char** argv) {
 
     const Skin skin;
     bool ok = true;
+
+    // The variation scope, parameter by parameter. Each row is one parameter
+    // at its two extremes with the template between them, so what a number in
+    // the variant file actually does is visible rather than described.
+    struct ShapeAxis {
+        const char* name;
+        float FaceVariant::*face;   // one of these is null
+        float HumanoidVariant::*body;
+    };
+    const ShapeAxis kBodyAxes[] = {
+        {"chest", nullptr, &HumanoidVariant::chest},
+        {"belly", nullptr, &HumanoidVariant::belly},
+        {"seat", nullptr, &HumanoidVariant::seat},
+        {"muscle", nullptr, &HumanoidVariant::muscle},
+        {"neck", nullptr, &HumanoidVariant::neck},
+    };
+    const ShapeAxis kFaceAxes[] = {
+        {"skull", &FaceVariant::skull, nullptr},
+        {"brow", &FaceVariant::brow, nullptr},
+        {"cheeks", &FaceVariant::cheeks, nullptr},
+        {"jawWidth", &FaceVariant::jawWidth, nullptr},
+        {"chin", &FaceVariant::chin, nullptr},
+        {"noseLength", &FaceVariant::noseLength, nullptr},
+        {"noseWidth", &FaceVariant::noseWidth, nullptr},
+        {"mouth", &FaceVariant::mouth, nullptr},
+        {"eyes", &FaceVariant::eyes, nullptr},
+        {"ears", &FaceVariant::ears, nullptr},
+    };
+    const auto withAxis = [](const ShapeAxis& axis, float value) {
+        HumanoidVariant v;
+        if (axis.body != nullptr) {
+            v.*(axis.body) = value;
+        } else {
+            v.face.*(axis.face) = value;
+        }
+        return v;
+    };
 
     // ---- 1. Turntable sheet: the template body from four angles ------------
     {
@@ -263,9 +310,20 @@ int main(int argc, char** argv) {
         PieceList pieces;
         std::vector<DrawItem> items;
         items.push_back(prop(&ground, {0, 0, 0}, 0.44f, 0.48f, 0.37f));
+        // Walked on a SHAPED body, not the template: a stride that only holds
+        // together on the neutral mesh has not been tested. This one is short,
+        // heavy and thick-necked, and it is the same clip on the same rig.
+        HumanoidVariant walker;
+        walker.height = 1.62f;
+        walker.bulk = 1.25f;
+        walker.belly = 0.8f;
+        walker.seat = 0.5f;
+        walker.muscle = 0.4f;
+        walker.neck = 0.6f;
+        walker.face.jawWidth = 0.7f;
         for (int i = 0; i < 6; ++i) {
             size_t first = 0;
-            if (!addCharacter(renderer, lods[0], {}, nullptr, 0, templateVariant(),
+            if (!addCharacter(renderer, lods[0], {}, nullptr, 0, walker,
                               walkPose(static_cast<float>(i) / 6.0f), skin, pieces, first)) {
                 return 1;
             }
@@ -331,14 +389,24 @@ int main(int argc, char** argv) {
             // Masking: the body is built WITHOUT the regions the outfit covers.
             uint32_t regions = kAllRegions;
             std::vector<SkinnedMeshData> garments;
+            std::vector<Outfit> worn;
             if (!naked) {
+                std::vector<WearableInstance> stack(cast[c].count);
+                for (size_t i = 0; i < cast[c].count; ++i) {
+                    stack[i].kind = cast[c].outfits[i].kind;
+                    stack[i].layer = cast[c].outfits[i].layer;
+                }
                 for (size_t i = 0; i < cast[c].count; ++i) {
                     regions &= ~garmentCoverage(cast[c].outfits[i].kind);
+                    // A tunic sealed under armour is never seen: not skinned,
+                    // not drawn (CHARACTERS.md §5.4).
+                    if (wearableHidden(stack.data(), stack.size(), i)) continue;
                     GarmentBuildDesc desc;
                     desc.kind = cast[c].outfits[i].kind;
                     desc.layer = cast[c].outfits[i].layer;
                     garments.emplace_back();
                     buildGarmentMesh(desc, garments.back());
+                    worn.push_back(cast[c].outfits[i]);
                 }
             }
             BodyBuildDesc bodyDesc;
@@ -346,8 +414,8 @@ int main(int argc, char** argv) {
             SkinnedMeshData bodyMesh;
             buildTemplateBody(bodyDesc, bodyMesh);
             size_t first = 0;
-            if (!addCharacter(renderer, bodyMesh, garments, naked ? nullptr : cast[c].outfits,
-                              naked ? 0 : cast[c].count, cast[c].variant, pose, skin, pieces,
+            if (!addCharacter(renderer, bodyMesh, garments, worn.empty() ? nullptr : worn.data(),
+                              worn.size(), cast[c].variant, pose, skin, pieces,
                               first)) {
                 return 1;
             }
@@ -410,6 +478,69 @@ int main(int argc, char** argv) {
     }
 
     renderer.destroyLodMesh(ground);
+    // ---- 8. The shape scope: every body parameter at both extremes ---------
+    {
+        PieceList pieces;
+        std::vector<DrawItem> items;
+        items.push_back(prop(&ground, {0, 0, 0}, 0.44f, 0.48f, 0.37f));
+        const Pose pose = idlePose();
+        float x = -2.475f;
+        for (const ShapeAxis& axis : kBodyAxes) {
+            for (float value : {-1.0f, 1.0f}) {
+                size_t first = 0;
+                if (!addCharacter(renderer, lods[0], {}, nullptr, 0, withAxis(axis, value), pose,
+                                  skin, pieces, first)) {
+                    return 1;
+                }
+                // Turned well off front: belly, chest and seat are silhouette.
+                emit(items, pieces, first, {x, 0, 0}, kPi * 0.70f);
+                x += 0.55f;
+            }
+        }
+        Camera camera;
+        camera.eye = {0.0f, 1.00f, 5.60f};
+        camera.target = {0.0f, 0.92f, 0.0f};
+        camera.fovYRadians = 0.55f;
+        camera.aspect = static_cast<float>(config.width) / config.height;
+        ok = capture(renderer, camera, items, outDir + "/body_shape_scope.ppm", 0.10) && ok;
+        for (Piece& p : pieces) renderer.destroyLodMesh(p.gpu);
+        printf("  shape scope: %zu bodies from ONE mesh + %zu floats each\n",
+               sizeof kBodyAxes / sizeof kBodyAxes[0] * 2, kMorphCount);
+    }
+
+    // ---- 9. The face scope: two parameters per sheet, each at both extremes -
+    {
+        const size_t axisCount = sizeof kFaceAxes / sizeof kFaceAxes[0];
+        for (size_t sheet = 0; sheet * 2 < axisCount; ++sheet) {
+            PieceList pieces;
+            std::vector<DrawItem> items;
+            items.push_back(prop(&ground, {0, 0, 0}, 0.44f, 0.48f, 0.37f));
+            const Pose pose = idlePose();
+            float x = -0.63f;
+            for (size_t a = sheet * 2; a < axisCount && a < sheet * 2 + 2; ++a) {
+                for (float value : {-1.0f, 1.0f}) {
+                    size_t first = 0;
+                    if (!addCharacter(renderer, lods[0], {}, nullptr, 0,
+                                      withAxis(kFaceAxes[a], value), pose, skin, pieces, first)) {
+                        return 1;
+                    }
+                    emit(items, pieces, first, {x, 0, 0}, kPi * 0.86f);
+                    x += 0.42f;
+                }
+            }
+            Camera camera;   // close on the head: this is a face sheet
+            camera.eye = {0.0f, 1.67f, 1.66f};
+            camera.target = {0.0f, 1.63f, 0.0f};
+            camera.fovYRadians = 0.55f;
+            camera.aspect = static_cast<float>(config.width) / config.height;
+            char path[128];
+            std::snprintf(path, sizeof path, "%s/body_face_scope_%zu.ppm", outDir.c_str(),
+                          sheet + 1);
+            ok = capture(renderer, camera, items, path, 0.05) && ok;
+            for (Piece& p : pieces) renderer.destroyLodMesh(p.gpu);
+        }
+    }
+
     renderer.shutdown();
     device.shutdown();
     printf("%s\n", ok ? "body_preview: OK" : "body_preview: FAILED");

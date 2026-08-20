@@ -3,19 +3,22 @@
 // The humanoid template body (CHARACTERS.md §4, task 8.12) — the engine's
 // canonical human-shaped model. Every humanoid in every game is this one mesh.
 //
+// The model itself is CONTENT: Blender Studio's CC0 human base mesh, placed
+// and rigged (never re-shaped) by tools/model/humanoid_template.py, baked to
+// `.mgeskin` by the import tool, loaded here. Re-authoring the body never
+// touches engine code.
+//
 // Modelling contract (docs/adr/0007-humanoid-template-body.md):
 //   * ONE mesh serves every variant. Variety comes from the skinning palette
 //     (per-joint length/thickness scale), never from a per-character mesh —
 //     a crowd of 60 characters costs one mesh plus 60 small joint palettes
 //     instead of 60 meshes (P1).
-//   * Shaped by cross-section rings along each limb, so the silhouette is a
-//     real body profile (deltoid, calf, glute, jaw) rather than a stack of
-//     primitives, and so the same profile code generates garments that fit
-//     every variant by construction (CHARACTERS.md §5.1).
-//   * Built at three LODs from the same profiles: matching silhouettes, no
-//     decimation artifacts, budget known up front.
-//   * Segmented into body regions (§6): a region is what a wearable covers,
-//     what gets masked, and what a skin texture island belongs to.
+//   * Three authored LODs, so every level keeps the silhouette.
+//   * Segmented into body regions (§6) derived from the rig: a region is what
+//     a wearable covers and what gets masked. The body is ONE watertight
+//     shell, so regions are a partition of its triangles, not separate shells.
+//     Garments are cut out of that same surface, so they fit it exactly, share
+//     its skin weights, and cover exactly what masking removes (§5.1).
 //
 // Everything here is load-time work. The frame path sees GPU buffers and a
 // 17-joint palette per character, never this.
@@ -31,9 +34,16 @@ namespace mge {
 
 // ------------------------------------------------------------- regions -----
 
-// Body-part segmentation (CHARACTERS.md §6). Each region is one closed shell:
-// masking a region drops it whole, so a covered body part leaves no hole and
-// no exposed backface — clipping is impossible by construction.
+// Body-part segmentation (CHARACTERS.md §6), derived from each vertex's
+// dominant bone. Masking drops a region's whole triangle range; because the
+// garment that masks it was cut from those same triangles, a covered body part
+// leaves no hole and no exposed backface — clipping is impossible by
+// construction.
+//
+// Face is declared but currently EMPTY: the imported head is a single shell
+// and every vertex on it is dominated by the Head joint, so it all lands in
+// Scalp. Nothing masks Face yet (hair masks nothing). Splitting it is an
+// authoring change, not an engine one (ADR 0005).
 enum class BodyRegion : uint8_t {
     Scalp = 0,  // cranium — masked by hair/helmets
     Face,       // front of the head — masked by masks/visors
@@ -63,8 +73,8 @@ constexpr uint32_t kRegionsHead = regionBit(BodyRegion::Scalp) | regionBit(BodyR
 
 // 36 bytes: position, normal, UV (unit-normalized uint16), and four bone
 // influences with uint8 weights. Four is the hardware-skinning maximum every
-// mobile GPU agrees on; the template itself never needs more than two, which
-// keeps the skinning inner loop short.
+// mobile GPU agrees on; the shipped template averages 2.2, which keeps the
+// skinning inner loop short.
 struct SkinVertex {
     Vec3 position;
     Vec3 normal;
@@ -73,6 +83,55 @@ struct SkinVertex {
     uint8_t weights[4] = {255, 0, 0, 0};  // sum == 255
 };
 static_assert(sizeof(SkinVertex) == 36, "skinned vertex layout is a pipeline contract");
+
+// ------------------------------------------------------------- morphs ------
+
+// A morph target is a SPARSE list of per-vertex displacements: the vertices a
+// shape parameter moves, and by how much. Sparse because a facial parameter
+// touches a few dozen vertices out of 1640, and storing zeroes for the rest
+// would cost more than the mesh.
+//
+// Positions are quantized to int16 against the target's own scale, normals to
+// int8 — 12 bytes per moved vertex. The whole set of 15 targets costs a few
+// tens of KB ONCE, process-wide; a character costs 15 floats (P1).
+struct MorphDelta {
+    uint16_t vertex = 0;
+    int16_t position[3] = {0, 0, 0};  // * scale / 32767, in metres
+    int8_t normal[3] = {0, 0, 0};     // / 127
+    uint8_t pad = 0;
+};
+static_assert(sizeof(MorphDelta) == 12, "morph delta layout is a file-format contract");
+
+// Which shape parameter a target belongs to. The order is the file order and
+// the weight order — appending is safe, reordering is not.
+enum class Morph : uint8_t {
+    BodyChest = 0,
+    BodyBelly,
+    BodySeat,
+    BodyMuscle,
+    BodyNeck,
+    FaceSkull,
+    FaceBrow,
+    FaceCheeks,
+    FaceJawWidth,
+    FaceChin,
+    FaceNoseLength,
+    FaceNoseWidth,
+    FaceMouth,
+    FaceEyes,
+    FaceEars,
+    Count,
+};
+constexpr size_t kMorphCount = static_cast<size_t>(Morph::Count);
+
+// The name a target carries in the authored glTF, and in the baked asset.
+const char* morphName(Morph morph);
+
+struct MorphTarget {
+    Morph morph = Morph::BodyChest;
+    float scale = 0;  // metres that int16 32767 stands for
+    std::vector<MorphDelta> deltas;
+};
 
 // One region's triangles inside the shared index buffer. Masking is a draw-
 // range decision (skip the part), not a mesh rebuild.
@@ -86,14 +145,22 @@ struct SkinnedMeshData {
     std::vector<SkinVertex> vertices;
     std::vector<uint32_t> indices;
     std::vector<MeshPart> parts;
+    std::vector<MorphTarget> morphs;
     Aabb bounds{};
 
     void computeBounds();
     size_t triangleCount() const { return indices.size() / 3; }
+    const MorphTarget* morph(Morph which) const {
+        for (const MorphTarget& t : morphs) {
+            if (t.morph == which) return &t;
+        }
+        return nullptr;
+    }
     void clear() {
         vertices.clear();
         indices.clear();
         parts.clear();
+        morphs.clear();
         bounds = Aabb{};
     }
 };
@@ -103,11 +170,10 @@ Joint mirrored(Joint j);
 
 // ------------------------------------------------------------- building ----
 
-// Three levels built from the same profiles — the silhouette is preserved
-// because the rings are the same rings, just fewer of them.
-//   Lod0  close-up / player         1756 triangles
-//   Lod1  crowd distance             1012
-//   Lod2  far crowd, still animated   520
+// Three levels decimated from the same base mesh, so the silhouette survives.
+//   Lod0  close-up / player         2200 triangles / 1640 vertices
+//   Lod1  crowd distance            1200 / 1021
+//   Lod2  far crowd, still animated  560 /  573
 enum class BodyLod : uint8_t { Lod0 = 0, Lod1, Lod2, Count };
 constexpr size_t kBodyLodCount = static_cast<size_t>(BodyLod::Count);
 
@@ -116,8 +182,14 @@ struct BodyBuildDesc {
     uint32_t regions = kAllRegions;  // regions to emit (masking, §5.1)
 };
 
-// The canonical template body in bind pose, at the reference proportions.
-// Deterministic: same desc in, same vertices out.
+// Where the shipped character assets live (`.mgeskin` files). Host builds
+// default to the repository's assets/models; Android points this at the
+// extracted asset pack. Set it before the first character is built.
+void setCharacterAssetDir(const char* dir);
+const char* characterAssetDir();
+
+// The canonical template body in bind pose, at the reference proportions,
+// with the requested regions kept.
 void buildTemplateBody(const BodyBuildDesc& desc, SkinnedMeshData& out);
 
 // The full LOD chain, ready to upload as one asset.
@@ -130,7 +202,12 @@ const HumanoidVariant& templateVariant();
 // ------------------------------------------------- variants via the rig ----
 
 // Per-joint skinning matrices for one character:
-//     palette[j] = poseWorld[j] * scale[j] * translate(-templateBindPos[j])
+//     palette[j] = poseWorld[j] * R[j] * scale[j] * R[j]^T
+//                                        * translate(-templateBindPos[j])
+//
+// R[j] is the bone's own frame (+Y along the bone): the template's bind pose
+// is the base mesh's relaxed A-pose, so scaling in character axes would make a
+// bulky character's arms longer instead of thicker.
 // The scale term is what turns the one template mesh into this variant's
 // body — bone-length scaling for height/legs/arms, cross-section scaling for
 // bulk/shoulders/hips (CHARACTERS.md §4.1). Animation is unaffected: the pose
@@ -141,16 +218,27 @@ void buildSkinPalette(const HumanoidVariant& variant, const Pose& pose,
 // Bind-pose joint positions of the template body — what the mesh is bound to.
 void templateBindPositions(Vec3 out[kJointCount]);
 
+// The shape half of the variant, as one weight per morph target in [-1, +1].
+// A negative weight applies the stored delta negated, so one authored target
+// serves both directions of a parameter.
+void morphWeights(const HumanoidVariant& variant, float out[kMorphCount]);
+
 // CPU reference skinning: the definition GPU skinning must match, and the
 // path tools and tests use. Load-time/offline only — never the frame path.
+//
+// The morph pass runs first, on the bind-pose vertex, then the skinning
+// palette — the same order the shader will use, so this stays the reference.
 void skinMesh(const SkinnedMeshData& mesh, const Mat4 palette[kJointCount], MeshData& out);
+void skinMesh(const SkinnedMeshData& mesh, const Mat4 palette[kJointCount],
+              const float weights[kMorphCount], MeshData& out);
 
 // --------------------------------------------------------- wearables -------
 
-// A garment is the body's own profile pushed out by the layer's thickness, so
-// it fits every variant exactly as the body does and each layer encloses the
-// one beneath it (CHARACTERS.md §5.4). Authored once, here, against the
-// template — the same mesh rides every variant.
+// A garment is the body's own SURFACE, restricted to the regions it covers and
+// pushed out by the layer's thickness, so it fits every variant exactly as the
+// body does and each layer encloses the one beneath it (CHARACTERS.md §5.4).
+// Cut once in Blender against the template — the same mesh rides every
+// variant.
 struct GarmentBuildDesc {
     WearableKind kind = WearableKind::Tunic;
     uint8_t layer = 1;  // 0 base / 1 mid / 2 outer — sets the offset distance
@@ -161,6 +249,12 @@ void buildGarmentMesh(const GarmentBuildDesc& desc, SkinnedMeshData& out);
 
 // Which body regions a garment hides (the masking cascade of §5.4).
 uint32_t garmentCoverage(WearableKind kind);
+
+// True when wearables[index] is sealed under a strictly outer garment that
+// covers everything it covers — it can never be seen, so it is neither skinned
+// nor drawn (the "hidden inner geometry costs nothing" half of §5.4). Items
+// that cover nothing (hair, held things) are never hidden this way.
+bool wearableHidden(const WearableInstance* wearables, size_t count, size_t index);
 
 // --------------------------------------------------- one-call integration --
 
@@ -183,5 +277,8 @@ void buildPosedCharacter(const HumanoidVariant& variant, const WearableInstance*
 // The cached template LOD chain — one copy process-wide, shared by every
 // character (this is the P1 claim of the whole design).
 const std::vector<SkinnedMeshData>& sharedTemplateLods();
+
+// The cached authored garment for a wearable kind (empty for held items).
+const SkinnedMeshData& sharedGarment(WearableKind kind);
 
 }  // namespace mge
