@@ -331,14 +331,24 @@ int main(int argc, char** argv) {
             // Masking: the body is built WITHOUT the regions the outfit covers.
             uint32_t regions = kAllRegions;
             std::vector<SkinnedMeshData> garments;
+            std::vector<Outfit> worn;
             if (!naked) {
+                std::vector<WearableInstance> stack(cast[c].count);
+                for (size_t i = 0; i < cast[c].count; ++i) {
+                    stack[i].kind = cast[c].outfits[i].kind;
+                    stack[i].layer = cast[c].outfits[i].layer;
+                }
                 for (size_t i = 0; i < cast[c].count; ++i) {
                     regions &= ~garmentCoverage(cast[c].outfits[i].kind);
+                    // A tunic sealed under armour is never seen: not skinned,
+                    // not drawn (CHARACTERS.md §5.4).
+                    if (wearableHidden(stack.data(), stack.size(), i)) continue;
                     GarmentBuildDesc desc;
                     desc.kind = cast[c].outfits[i].kind;
                     desc.layer = cast[c].outfits[i].layer;
                     garments.emplace_back();
                     buildGarmentMesh(desc, garments.back());
+                    worn.push_back(cast[c].outfits[i]);
                 }
             }
             BodyBuildDesc bodyDesc;
@@ -346,8 +356,8 @@ int main(int argc, char** argv) {
             SkinnedMeshData bodyMesh;
             buildTemplateBody(bodyDesc, bodyMesh);
             size_t first = 0;
-            if (!addCharacter(renderer, bodyMesh, garments, naked ? nullptr : cast[c].outfits,
-                              naked ? 0 : cast[c].count, cast[c].variant, pose, skin, pieces,
+            if (!addCharacter(renderer, bodyMesh, garments, worn.empty() ? nullptr : worn.data(),
+                              worn.size(), cast[c].variant, pose, skin, pieces,
                               first)) {
                 return 1;
             }

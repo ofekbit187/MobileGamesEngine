@@ -183,6 +183,12 @@ void buildGarmentMesh(const GarmentBuildDesc& desc, SkinnedMeshData& out);
 // Which body regions a garment hides (the masking cascade of §5.4).
 uint32_t garmentCoverage(WearableKind kind);
 
+// True when wearables[index] is sealed under a strictly outer garment that
+// covers everything it covers — it can never be seen, so it is neither skinned
+// nor drawn (the "hidden inner geometry costs nothing" half of §5.4). Items
+// that cover nothing (hair, held things) are never hidden this way.
+bool wearableHidden(const WearableInstance* wearables, size_t count, size_t index);
+
 // --------------------------------------------------- one-call integration --
 
 // A drawable piece of one character: a posed mesh in character-local space

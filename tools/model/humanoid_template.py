@@ -37,6 +37,7 @@ import sys
 import bpy
 import bmesh
 from mathutils import Vector
+from mathutils.bvhtree import BVHTree
 
 HEIGHT = 1.75
 LOD_TRIANGLES = (2200, 1200, 560)
@@ -316,25 +317,123 @@ REGION_OF_BONE = {
     "ThighR": "LegR", "ShinR": "LegR", "FootR": "FootR",
 }
 
-# kind -> (layer, triangle budget, cut rules). A cut rule is a set of body
-# regions and the engine-Y band of them to take.
+def _joint(name):
+    return Vector(dict((n, p) for n, _p, p in JOINTS)[name])
+
+
+def above(y):
+    """Keep everything above the plane y = `y` (engine coordinates)."""
+    return ((0.0, y, 0.0), (0.0, 1.0, 0.0))
+
+
+def below(y):
+    return ((0.0, y, 0.0), (0.0, -1.0, 0.0))
+
+
+def behind(z):
+    return ((0.0, 0.0, z), (0.0, 0.0, 1.0))
+
+
+def along_arm(side, distance):
+    """A sleeve ends on a ring around the arm, so its cut plane is
+    PERPENDICULAR TO THE ARM BONE, `distance` down from the shoulder.
+
+    A horizontal plane cannot do this job. The template's arms hang about 21
+    degrees out, and the armpit sits below the shoulder joint: any horizontal
+    cut high enough to look like a short sleeve also slices the armpit in two
+    and leaves the sleeve hanging off the shoulder as a separate flap, with the
+    inside of the garment showing under it."""
+    shoulder = _joint("UpperArm" + side)
+    elbow = _joint("Forearm" + side)
+    axis = (elbow - shoulder).normalized()
+    point = shoulder + axis * distance
+    return (tuple(point), tuple(-axis))
+
+
+def inboard(side):
+    """Keep the part of an arm that is inboard of the shoulder joint.
+
+    The armpit floor belongs to the arm's bone, but it is 15 cm down the arm
+    from the shoulder JOINT, so a sleeve cut by distance-along-the-bone slices
+    it off and the tunic ends up open under the arm. Anything inboard of the
+    shoulder is body, not sleeve, and stays whatever the sleeve does."""
+    x = _joint("UpperArm" + side).x
+    return ((x, 0.0, 0.0), (-1.0 if side == "L" else 1.0, 0.0, 0.0))
+
+
+# kind -> (layer, triangle budget, cut rules, regions the ENGINE masks).
+# A cut rule is a set of body regions and the half-spaces to keep of them; a
+# face survives if it is in one of the rules' regions and on the inside of all
+# that rule's planes.
 #
-# A garment must cover EVERY region the engine masks for it (garmentCoverage),
-# or the masked body leaves a hole — so the torso garments take the whole torso
-# and the boots the whole foot. What the extra rules add is the part that only
-# has to look right: a short sleeve over the deltoid, so the tunic's boundary
-# falls on the smooth ring of the upper arm instead of the jagged shoulder
-# seam, and a shaft over the ankle so the boot ends on the calf.
+# Two rules govern the cuts, and both had to be learned the hard way:
+#
+# 1. A garment must contain EVERY region the engine masks for it
+#    (`garmentCoverage`), or the masked body leaves a hole. So the covered
+#    regions are taken WHOLE — never sliced by a plane.
+#
+# 2. Every boundary the eye can see must be a PLANE cut, never a region
+#    boundary. Region membership is decided per face by which bone owns it, so
+#    a region's outline is a zig-zag one face wide, and a hem cut along one
+#    looks like the character is dressed in rags. Each garment therefore
+#    extends past its covered regions into a neighbouring one and ends on a
+#    plane through the middle of it: the tunic's hem crosses the thighs, its
+#    sleeves cross the upper arms, its collar crosses the neck.
 GARMENTS = {
-    "tunic":      (1, 760, [(("Torso",), -9.0, 9.0), (("ArmL", "ArmR"), 1.33, 9.0)]),
-    "armour":     (2, 760, [(("Torso",), -9.0, 9.0), (("ArmL", "ArmR"), 1.30, 9.0)]),
-    "trousers":   (1, 720, [(("LegL", "LegR"), -9.0, 9.0)]),
-    "boots":      (1, 520, [(("FootL", "FootR"), -9.0, 9.0),
-                            (("LegL", "LegR"), -9.0, 0.26)]),
-    "hair_short": (2, 360, [(("Scalp",), 1.655, 9.0)]),
-    "hair_long":  (2, 480, [(("Scalp",), 1.645, 9.0), (("Neck",), 1.46, 9.0)]),
+    "tunic": (1, 900, [
+        (("Torso",),         []),
+        (("Neck",),          [below(1.53)]),                       # collar
+        (("ArmL",),          [along_arm("L", 0.13)]),              # short sleeve
+        (("ArmR",),          [along_arm("R", 0.13)]),
+        (("ArmL",),          [inboard("L")]),                      # close the armpit
+        (("ArmR",),          [inboard("R")]),
+        (("LegL", "LegR"),   [above(0.72)]),                       # hem, over the thighs
+    ], ("Torso",)),
+    "armour": (2, 900, [
+        (("Torso",),         []),
+        (("Neck",),          [below(1.55)]),
+        (("ArmL",),          [along_arm("L", 0.16)]),
+        (("ArmR",),          [along_arm("R", 0.16)]),
+        (("ArmL",),          [inboard("L")]),
+        (("ArmR",),          [inboard("R")]),
+        (("LegL", "LegR"),   [above(0.82)]),   # shorter than the tunic under it
+    ], ("Torso",)),
+    # Trousers are a BASE layer, not a mid one: the tunic's hem comes down over
+    # the thighs, and two garments at the same offset interpenetrate — the
+    # trousers were punching through the tunic all down the hips.
+    "trousers": (0, 800, [
+        (("LegL", "LegR"),   []),
+        (("Torso",),         [below(1.10)]),                       # waist
+        (("FootL", "FootR"), [above(0.115)]),                      # cuff over the ankle
+    ], ("LegL", "LegR")),
+    "boots": (1, 620, [
+        (("FootL", "FootR"), []),
+        (("LegL", "LegR"),   [below(0.26)]),                       # shaft
+    ], ("FootL", "FootR")),
+    "hair_short": (0, 340, [
+        (("Scalp",),         [above(1.655)]),
+    ], ()),
+    "hair_long": (0, 460, [
+        (("Scalp",),         [above(1.645)]),
+        (("Neck",),          [above(1.44), behind(-0.005)]),       # down the back only
+        (("Torso",),         [above(1.44), behind(0.010)]),
+    ], ()),
 }
-LAYER_OFFSET = (0.004, 0.009, 0.017)   # base / mid / outer, metres
+
+# base / mid / outer, metres. The gaps are wide because a garment is a
+# decimated shell: between its vertices it chords across the surface, so two
+# layers only a couple of millimetres apart will punch through each other
+# wherever the inner one bulges.
+LAYER_OFFSET = (0.011, 0.020, 0.028)
+
+# Where a garment's own build says more than its layer does. A boot is not a
+# shirt: it has a sole and a toe box, and it has to swallow the toes of a foot
+# the shell no longer has the triangles to follow.
+OFFSET_OVERRIDE = {
+    "boots": 0.019,        # a sole and a toe box, clear of the trousers' cuff
+    "hair_short": 0.008,   # hair overlaps nothing, so it is not on the ladder
+    "hair_long": 0.010,
+}
 
 
 def vertex_regions(obj):
@@ -349,14 +448,358 @@ def vertex_regions(obj):
     return out
 
 
-def build_garment(body, arm, name, layer, budget, rules):
-    """Cuts the garment out of the body's own surface and pushes it out by the
-    layer thickness. It therefore fits the body exactly, shares the body's
-    skin weights, and encloses whatever layer sits beneath it."""
-    dup = body.copy()
-    dup.data = body.data.copy()
+def body_bvh(obj):
+    me = obj.data
+    return BVHTree.FromPolygons([tuple(v.co) for v in me.vertices],
+                                [list(p.vertices) for p in me.polygons])
+
+
+def to_blender_dir(d):
+    """Engine direction (x, y up, z back) -> Blender (x, y front, z up)."""
+    return Vector((d[0], -d[2], d[1]))
+
+
+def bisect_at(bm, planes):
+    """Inserts a real edge loop at every cut plane the rules use.
+
+    Without this, a face straddling the plane has to be either in or out and
+    the boundary steps around it. After it, no face straddles a plane, so the
+    hem is a clean ring."""
+    for point, normal in planes:
+        bmesh.ops.bisect_plane(bm, geom=list(bm.verts) + list(bm.edges) + list(bm.faces),
+                               dist=1e-6, plane_co=to_blender(point),
+                               plane_no=to_blender_dir(normal))
+
+
+MIN_OFFSET = 0.0035         # metres — the thinnest a BASE layer may sit off the skin
+
+
+def min_offset(layer):
+    """Where a garment is squeezed, it still has to stack in the right order.
+
+    The armpit gap is about 15 mm. An outer layer wants 28 mm and cannot have
+    it, so it is backed off — and if every layer backs off to the same floor,
+    the armour ends up level with the tunic and shows through it. Each layer
+    therefore keeps its own floor, and the order survives the pinch even though
+    the thicknesses do not. (Down there the garments intersect the arm, which
+    is drawn over them and hides it.)"""
+    return MIN_OFFSET * (1 + 2 * layer)
+SHELL_THICKNESS = 0.003     # metres — solidify, grown inward from that surface
+ENCLOSE_STEP = 0.002        # metres pushed out per round where skin shows through
+ENCLOSE_RADIUS = 0.030      # metres — how far around a bare spot the push reaches
+
+
+def inside_body(bvh, point, direction=Vector((0.0, 0.0, 1.0))):
+    """Crossing parity against a closed mesh: odd means the point is inside."""
+    crossings, origin = 0, point.copy()
+    for _ in range(24):
+        location = bvh.ray_cast(origin + direction * 1e-5, direction, 8.0)[0]
+        if location is None:
+            break
+        crossings += 1
+        origin = location + direction * 1e-5
+    return crossings % 2 == 1
+
+
+def bridge_creases(obj, rounds=10, factor=0.5, limit=0.006):
+    """Cloth does not follow the body into a valley — it bridges it.
+
+    The armpit is a crease a centimetre deep. A shell cut from the body dives
+    into it and back out, and when every vertex is then pushed out along its
+    normal the two walls of the crease drive into each other: the sleeve
+    self-intersects and tears open. Relaxing only the CONCAVE vertices lifts
+    those valleys until the surface spans them, and leaves every convex vertex
+    — which is all of the silhouette — exactly where it was."""
+    bm = bmesh.new()
+    bm.from_mesh(obj.data)
+    origin = {v.index: v.co.copy() for v in bm.verts}
+    for _ in range(rounds):
+        bm.normal_update()
+        concave = []
+        for v in bm.verts:
+            if not v.link_edges or any(e.is_boundary for e in v.link_edges):
+                continue   # a hem is a designed edge; smoothing it makes it ragged
+            average = Vector((0.0, 0.0, 0.0))
+            for e in v.link_edges:
+                average += e.other_vert(v).co
+            average /= len(v.link_edges)
+            if (average - v.co).dot(v.normal) > 1e-5:
+                concave.append(v)
+        if not concave:
+            break
+        bmesh.ops.smooth_vert(bm, verts=concave, factor=factor,
+                              use_axis_x=True, use_axis_y=True, use_axis_z=True)
+        # Capped: the crotch is a valley several centimetres deep, and left
+        # uncapped this fills it in — the trousers balloon out there and come
+        # through the tunic over them. A crease only has to be bridged enough
+        # that offsetting it does not fold the surface.
+        for v in bm.verts:
+            delta = v.co - origin[v.index]
+            if delta.length > limit:
+                v.co = origin[v.index] + delta.normalized() * limit
+    bm.to_mesh(obj.data)
+    bm.free()
+
+
+def offset_shell(obj, bvh, offset, floor, under=None, clearance=0.008):
+    """Lifts the cut shell off the skin by `offset`, ALONG ITS OWN NORMALS.
+
+    The obvious implementation — for each vertex, find the nearest point on the
+    body and put the vertex that far outside it — tears the garment apart. At
+    the armpit the nearest point on the body for a vertex on the chest is the
+    ARM, a centimetre away across the gap, so the vertex is teleported to the
+    other side of the crease and the faces around it fold inside out. What
+    comes out has holes in it.
+
+    A garment is cut FROM the body, so each of its vertices is already on the
+    body and its own normal is the body's normal there. Moving along that
+    normal cannot cross a gap. Where the gap is too narrow for the full offset
+    — the armpit is about 15 mm, an outer layer wants 17 — the ray hits the
+    other wall first and the offset is backed off to fit."""
+    bm = bmesh.new()
+    bm.from_mesh(obj.data)
+    bm.normal_update()
+    pinched = 0
+    for v in bm.verts:
+        normal = v.normal.copy()
+        if normal.length < 1e-9:
+            continue
+        normal.normalize()
+        distance = offset
+        # Clear every layer already on the body. A fixed ladder of thicknesses
+        # is not enough on its own: a lower garment is a decimated shell that
+        # bulges between its vertices, and the trousers were coming through the
+        # tunic's belly wherever the waistband did.
+        if under is not None:
+            below = under.ray_cast(v.co + normal * 1e-4, normal, 0.10)
+            if below[0] is not None and below[3] is not None:
+                distance = max(distance, below[3] + clearance)
+        hit = bvh.ray_cast(v.co + normal * 1e-4, normal, distance)
+        if hit[0] is not None and hit[3] is not None:
+            distance = max(floor, hit[3] - 0.0015)
+            pinched += 1
+        v.co = v.co + normal * distance
+    bm.to_mesh(obj.data)
+    bm.free()
+    return pinched
+
+
+def bare_spots(garment, body, covers):
+    """Body vertices the engine will MASK that this garment does not actually
+    cover: fire the body's own outward normal and see whether it meets the
+    garment. These are the holes a dressed character would have."""
+    gbvh = body_bvh(garment)
+    per_vertex = vertex_regions(body)
+    keep = set(covers)
+    bare, checked = [], 0
+    for v in body.data.vertices:
+        if per_vertex[v.index] not in keep:
+            continue
+        checked += 1
+        if gbvh.ray_cast(v.co + v.normal * 1e-4, v.normal, 0.12)[0] is None:
+            bare.append((v.co.copy(), v.normal.copy()))
+    return bare, checked
+
+
+def enclose(garment, body, covers, rounds=14):
+    """A garment must ENCLOSE what the engine masks for it, or the dressed
+    character has a hole where the skin was removed.
+
+    Offsetting every vertex is not enough to guarantee that. A reduced shell is
+    a chord across the surface it came from, so a sharp convex feature — the
+    toes are the worst — pokes out between the garment's vertices even though
+    every one of those vertices is outside the body. Rather than paying for the
+    triangles that would resolve the toes, the garment is pushed out only where
+    skin still shows through, and relaxed afterwards so the bulge stays a bulge
+    instead of a fold."""
+    for _ in range(rounds):
+        bare, _checked = bare_spots(garment, body, covers)
+        if not bare:
+            return 0
+        bm = bmesh.new()
+        bm.from_mesh(garment.data)
+        moved = []
+        for v in bm.verts:
+            if any(e.is_boundary for e in v.link_edges):
+                continue      # a hem is a designed edge; moving it makes it ragged
+            # Along the SKIN's outward direction at the spot showing through —
+            # that is the direction the shell has to open in.
+            push = None
+            for spot, normal in bare:
+                if (v.co - spot).length < ENCLOSE_RADIUS:
+                    push = normal if push is None else push + normal
+            if push is not None and push.length > 1e-6:
+                v.co = v.co + push.normalized() * ENCLOSE_STEP
+                moved.append(v)
+        if moved:
+            bmesh.ops.smooth_vert(bm, verts=moved, factor=0.15,
+                                  use_axis_x=True, use_axis_y=True, use_axis_z=True)
+        bm.to_mesh(garment.data)
+        bm.free()
+    return len(bare_spots(garment, body, covers)[0])
+
+
+def check_layering(built, body):
+    """Every layer must enclose the one beneath it (CHARACTERS.md 5.4).
+
+    Measured from the skin outwards: fire the body's own normal and collect
+    where it meets each garment. The distances have to come out in layer
+    order, or an inner garment is showing through an outer one."""
+    # A garment the engine masks away under an outer one is never drawn with
+    # it, so their geometry crossing is not a defect (`wearableHidden`).
+    sealed = set()
+    for inner, (inner_layer, _o) in built.items():
+        for outer, (outer_layer, _p) in built.items():
+            covers_inner = set(GARMENTS[inner][3])
+            covers_outer = set(GARMENTS[outer][3])
+            if (inner != outer and outer_layer > inner_layer and covers_inner
+                    and covers_inner <= covers_outer):
+                sealed.add((inner, outer))
+    bvhs = [(layer, name, body_bvh(obj)) for name, (layer, obj) in built.items()]
+    problems, pairs, sample = 0, {}, {}
+    for v in body.data.vertices:
+        hits = []
+        for layer, name, gbvh in bvhs:
+            hit = gbvh.ray_cast(v.co + v.normal * 1e-4, v.normal, 0.12)
+            if hit[0] is not None and hit[3] is not None:
+                hits.append((layer, name, hit[3]))
+        hits.sort()
+        for i in range(1, len(hits)):
+            if (hits[i][0] > hits[i - 1][0] and hits[i][2] <= hits[i - 1][2]
+                    and (hits[i - 1][1], hits[i][1]) not in sealed):
+                key = "%s under %s" % (hits[i - 1][1], hits[i][1])
+                pairs[key] = pairs.get(key, 0) + 1
+                sample[key] = (v.co.x, v.co.z, -v.co.y)
+                problems += 1
+                break
+    for key in sorted(pairs, key=lambda k: -pairs[k]):
+        print("      %-28s %3d  e.g. (%.3f,%.3f,%.3f)" % (key, pairs[key], *sample[key]))
+    return problems
+
+
+def lift_over(obj, under, clearance, step=0.002, rounds=12):
+    """Lifts a garment clear of every layer already on the body.
+
+    Offsetting by ray along the body's normal is not enough on its own: a lower
+    garment's hem is a rim that sticks out sideways, and a ray fired outwards
+    goes straight past it. The trousers' waistband came through the tunic's
+    belly exactly there. This asks the question the ray cannot — "am I inside
+    what is underneath me, or too close to it?" — and pushes out until the
+    answer is no."""
+    bm = bmesh.new()
+    bm.from_mesh(obj.data)
+    bm.normal_update()
+    lifted = 0
+    for v in bm.verts:
+        normal = v.normal.copy()
+        if normal.length < 1e-9:
+            continue
+        normal.normalize()
+        for _ in range(rounds):
+            nearest = under.find_nearest(v.co)[0]
+            if nearest is None:
+                break
+            if (v.co - nearest).length >= clearance and not inside_body(under, v.co):
+                break
+            v.co = v.co + normal * step
+            lifted += 1
+    bm.to_mesh(obj.data)
+    bm.free()
+    return lifted
+
+
+def fix_folds(obj, rounds=6):
+    """Flattens faces that have folded back on themselves.
+
+    Pushing individual vertices around a shell — to clear the skin, to clear a
+    lower layer — can flip a small triangle over its neighbours. It is one
+    triangle, but it faces away from the light and reads as a black gash on an
+    otherwise clean garment. Relaxing its corners into the surface around it
+    removes the fold; collapsing the triangle instead (the obvious fix) tears
+    holes in the shell, which is a worse defect than the one being repaired."""
+    fixed = 0
+    for _ in range(rounds):
+        bm = bmesh.new()
+        bm.from_mesh(obj.data)
+        bm.normal_update()
+        folded = set()
+        for f in bm.faces:
+            neighbours = [g for e in f.edges for g in e.link_faces if g is not f]
+            if len(neighbours) < 2:
+                continue
+            average = Vector((0.0, 0.0, 0.0))
+            for g in neighbours:
+                average += g.normal
+            if average.length < 1e-9:
+                continue
+            if f.normal.dot(average.normalized()) < -0.2:
+                for v in f.verts:
+                    if not any(e.is_boundary for e in v.link_edges):
+                        folded.add(v)
+        if not folded:
+            bm.free()
+            break
+        fixed += len(folded)
+        bmesh.ops.smooth_vert(bm, verts=list(folded), factor=0.9,
+                              use_axis_x=True, use_axis_y=True, use_axis_z=True)
+        bm.to_mesh(obj.data)
+        bm.free()
+    return fixed
+
+
+def check_garment(garment, body, bvh, name, covers):
+    """The three ways a wearable goes wrong, all measured on the real geometry:
+    it sinks into the body, it fails to cover what the engine masks, or its
+    own shell is broken."""
+    sunk, deepest = 0, 0.0
+    for v in garment.data.vertices:
+        if not inside_body(bvh, v.co):
+            continue
+        sunk += 1
+        location = bvh.find_nearest(v.co)[0]
+        if location is not None:
+            deepest = max(deepest, (v.co - location).length)
+
+    bare, checked = ([], 0) if not covers else bare_spots(garment, body, covers)
+    samples = ["(%.3f,%.3f,%.3f)" % (c.x, c.z, -c.y) for c, _n in bare[:3]]
+
+    bm = bmesh.new()
+    bm.from_mesh(garment.data)
+    open_edges = sum(1 for e in bm.edges if len(e.link_faces) == 1)
+    nonmanifold = sum(1 for e in bm.edges if len(e.link_faces) > 2)
+    volume = bm.calc_volume(signed=True)
+    bm.free()
+    broken = open_edges + nonmanifold + (1 if volume <= 0.0 else 0)
+    slivers = [poly for poly in garment.data.polygons if poly.area < 2e-6]
+    sliver = len(slivers)
+    for poly in slivers[:2]:
+        c = poly.center
+        samples.append("sliver(%.3f,%.3f,%.3f)" % (c.x, c.z, -c.y))
+
+    print("   %-11s %4d tris  sunk %d (deepest %.4f m)  uncovered %d/%d  open %d  "
+          "non-manifold %d  slivers %d %s" %
+          (name, triangles(garment), sunk, deepest, len(bare), checked, open_edges,
+           nonmanifold, sliver, " ".join(samples)))
+    # A vertex a fraction of a millimetre under the skin is not a defect: the
+    # shell is 1.5 mm thick and the skin it hugs is itself a 2200-triangle
+    # approximation. A garment sunk far enough to SHOW is.
+    return (0 if deepest < 0.0015 else sunk), len(bare), broken, sliver
+
+
+def cut_shell(source, rules, name):
+    """The garment's surface: the body's own faces, restricted by the rules,
+    with every visible boundary a real plane cut."""
+    dup = source.copy()
+    dup.data = source.data.copy()
     dup.name = "Garment_" + name
     bpy.context.collection.objects.link(dup)
+
+    planes = [plane for _regions, rule_planes in rules for plane in rule_planes]
+    bm = bmesh.new()
+    bm.from_mesh(dup.data)
+    bisect_at(bm, planes)
+    bm.to_mesh(dup.data)
+    bm.free()
 
     per_vertex = vertex_regions(dup)
     bm = bmesh.new()
@@ -364,27 +807,60 @@ def build_garment(body, arm, name, layer, budget, rules):
     bm.verts.ensure_lookup_table()
     doomed = []
     for f in bm.faces:
-        y = sum(v.co.z for v in f.verts) / len(f.verts)   # blender Z = engine Y
-        inside = False
-        for regions, y0, y1 in rules:
-            keep = set(regions)
-            votes = sum(1 for v in f.verts if per_vertex[v.index] in keep)
-            if votes * 2 > len(f.verts) and y0 <= y <= y1:
-                inside = True
+        centre = f.calc_center_median()
+        # ONE region per face, by plurality — exactly as the engine's importer
+        # tags triangles. Asking each rule "are most of this face's vertices
+        # mine?" instead drops every face that straddles two regions: a quad
+        # split 2-2 between the torso and the arm belongs to neither, and the
+        # whole torso/arm seam comes out as a ring of holes around the armpit.
+        # Ties go to the lowest region name, as they do in the importer.
+        votes = {}
+        for v in f.verts:
+            r = per_vertex[v.index]
+            votes[r] = votes.get(r, 0) + 1
+        region = min(sorted(votes), key=lambda r: -votes[r])
+        keep = False
+        for regions, rule_planes in rules:
+            if region not in regions:
+                continue
+            if all((centre - to_blender(point)).dot(to_blender_dir(normal)) >= 0.0
+                   for point, normal in rule_planes):
+                keep = True
                 break
-        if not inside:
+        if not keep:
             doomed.append(f)
+    if len(doomed) == len(bm.faces):
+        raise RuntimeError("garment %s selected no faces" % name)
     bmesh.ops.delete(bm, geom=doomed, context='FACES')
     bm.to_mesh(dup.data)
     bm.free()
-    if len(dup.data.polygons) == 0:
-        raise RuntimeError("garment %s selected no faces" % name)
+    return dup
 
-    # Solidify doubles the shell and adds a rim, so the cut surface is reduced
-    # to a little under half the garment's own budget.
-    reduce_to(dup, max(48, int(budget * 0.45)))
-    clamp_influences(dup)
-    prune_far_influences(dup, arm)
+
+def build_garment(body, arm, bvh, name, layer, budget, rules, covers, under=None):
+    """Cuts the garment out of the body's own surface and lifts it onto the
+    layer's offset surface. It therefore fits the body exactly, shares the
+    body's skin weights, and encloses whatever layer sits beneath it.
+
+    The body is reduced BEFORE the cut, never after: decimating a cut shell
+    chews its boundary back into the zig-zag the plane cuts were there to
+    avoid, and a hem is the most visible edge on a garment."""
+    target = max(48, int(budget * 0.45))
+
+    probe = cut_shell(body, rules, name + "_probe")
+    share = max(1, triangles(probe))
+    bpy.data.objects.remove(probe, do_unlink=True)
+
+    source = body.copy()
+    source.data = body.data.copy()
+    source.name = "GarmentSource_" + name
+    bpy.context.collection.objects.link(source)
+    reduce_to(source, max(120, int(triangles(body) * target / float(share))))
+    clamp_influences(source)
+    prune_far_influences(source, arm)
+
+    dup = cut_shell(source, rules, name)
+    bpy.data.objects.remove(source, do_unlink=True)
 
     bm = bmesh.new()
     bm.from_mesh(dup.data)
@@ -392,23 +868,42 @@ def build_garment(body, arm, name, layer, budget, rules):
     bm.to_mesh(dup.data)
     bm.free()
 
-    # Push along the surface normal, then give the shell a thickness so it is
-    # closed from every angle (no backfaces at a hem).
-    offset = LAYER_OFFSET[min(layer, len(LAYER_OFFSET) - 1)]
-    bm = bmesh.new()
-    bm.from_mesh(dup.data)
-    bm.normal_update()
-    for v in bm.verts:
-        v.co += v.normal * offset
-    bm.to_mesh(dup.data)
-    bm.free()
+    # The OUTER surface is settled completely before the shell is given any
+    # thickness. Doing it the other way round moves the two shells
+    # independently, and where they cross, the inside of the garment faces the
+    # camera and reads as a torn dark patch.
+    bridge_creases(dup)
+    offset = OFFSET_OVERRIDE.get(name, LAYER_OFFSET[min(layer, len(LAYER_OFFSET) - 1)])
+    offset_shell(dup, bvh, offset, min_offset(layer), under)
+    if covers:
+        enclose(dup, body, covers)
+    if under is not None:
+        lift_over(dup, under, 0.008)
+    # On the OPEN shell, where "boundary" still means the hem. After solidify
+    # the outer and inner surfaces are edge-connected around that hem, and
+    # relaxing across the join drags one surface through the other — which is
+    # exactly the black gash this pass exists to remove.
+    fix_folds(dup)
 
     solid = dup.modifiers.new("solidify", 'SOLIDIFY')
-    solid.thickness = 0.004
+    solid.thickness = SHELL_THICKNESS
     solid.offset = -1.0            # grow inward, so the outer surface stays put
     activate(dup)
     bpy.ops.object.modifier_apply(modifier="solidify")
-    bpy.ops.object.shade_smooth()
+
+    bm = bmesh.new()
+    bm.from_mesh(dup.data)
+    bmesh.ops.dissolve_degenerate(bm, dist=1.8e-3, edges=bm.edges)
+    bmesh.ops.recalc_face_normals(bm, faces=bm.faces)
+    bmesh.ops.triangulate(bm, faces=bm.faces, quad_method='BEAUTY', ngon_method='BEAUTY')
+    bm.to_mesh(dup.data)
+    bm.free()
+    # A garment is a thin shell. Shaded fully smooth, every rim face averages
+    # its normal with the outer surface AND the inner one, which reads as hard
+    # dark facets along every hem. Splitting the normals by angle keeps the
+    # cloth smooth and the rim its own surface.
+    activate(dup)
+    bpy.ops.object.shade_auto_smooth(angle=math.radians(40))
 
     if not any(m.type == 'ARMATURE' for m in dup.modifiers):
         dup.modifiers.new("armature", 'ARMATURE').object = arm
@@ -505,18 +1000,48 @@ def main():
         lod.hide_render = True
 
     garments = []
-    for name, (layer, budget, rules) in sorted(GARMENTS.items()):
-        g = build_garment(lods[0], arm, name, layer, budget, rules)
+    built = {}
+    failures = []
+    bvh = body_bvh(lods[0])
+    # In layer order, so each garment can be told what is already on the body.
+    lower_verts, lower_polys = [], []
+    current_layer = None
+    for name, (layer, budget, rules, covers) in sorted(
+            GARMENTS.items(), key=lambda kv: (kv[1][0], kv[0])):
+        if layer != current_layer:
+            # Garments on the same layer do not stack, so the obstacle set only
+            # grows when the layer does.
+            under = (BVHTree.FromPolygons(lower_verts, lower_polys)
+                     if lower_polys else None)
+            current_layer = layer
+        g = build_garment(lods[0], arm, bvh, name, layer, budget, rules, covers, under)
         health(g, name)
+        sunk, holes, broken, sliver = check_garment(g, lods[0], bvh, name, covers)
+        if sunk or holes or broken or sliver:
+            failures.append("%s: %d sunk, %d bare, %d broken, %d slivers" %
+                            (name, sunk, holes, broken, sliver))
         path = os.path.join(outdir, "garment_%s.glb" % name)
         export(g, arm, path)
         exported.append((path, triangles(g)))
         g.hide_render = True
         garments.append(g)
+        built[name] = (layer, g)
+        base = len(lower_verts)
+        lower_verts.extend(tuple(v.co) for v in g.data.vertices)
+        lower_polys.extend([base + i for i in poly.vertices] for poly in g.data.polygons)
+
+    crossings = check_layering(built, lods[0])
+    print("   layering: %d places where a garment shows through the one above it"
+          % crossings)
+    if crossings:
+        failures.append("layering: %d crossings" % crossings)
 
     for path, tris in exported:
         print("exported %-34s %5d tris %8d bytes" %
               (os.path.basename(path), tris, os.path.getsize(path)))
+
+    if failures:
+        print("   GARMENT DEFECTS: " + "; ".join(failures))
 
     body.hide_render = False
     cam = add_preview_scene()

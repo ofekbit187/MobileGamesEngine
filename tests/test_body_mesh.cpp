@@ -101,6 +101,22 @@ float depthOf(const SkinnedMeshData& mesh, const VertexArray& vertices, BodyRegi
     return hi > lo ? hi - lo : 0.0f;
 }
 
+// How far forward a surface sits at a given height, on the mid-line. Layer
+// thickness has to be measured where the layers are actually stacked: the
+// widest point of the torso band is the armpit, where a garment is squeezed
+// into a crease and its thickness says nothing about its layer.
+template <typename VertexArray>
+float frontOf(const SkinnedMeshData& mesh, const VertexArray& vertices, BodyRegion region,
+              float y0, float y1) {
+    float front = 0;
+    for (uint32_t i : regionVertices(mesh, region)) {
+        const Vec3& p = vertices[i].position;
+        if (p.y < y0 || p.y > y1 || std::fabs(p.x) > 0.08f) continue;
+        front = std::fmin(front, p.z);  // the character faces -Z
+    }
+    return -front;
+}
+
 Aabb boundsOfRegion(const SkinnedMeshData& mesh, BodyRegion region) {
     Aabb box;
     bool first = true;
@@ -552,9 +568,10 @@ MGE_TEST(garments_enclose_the_body_layer_by_layer) {
 
     // At chest height: skin < tunic < armor, on the same body — the layering
     // rule of CHARACTERS.md §5.4 measured on real geometry.
-    const float skinW = maxAbsX(skin, skin.vertices, BodyRegion::Torso, 1.26f, 1.32f);
-    const float tunicW = maxAbsX(tunic, tunic.vertices, BodyRegion::Torso, 1.26f, 1.32f);
-    const float armorW = maxAbsX(armor, armor.vertices, BodyRegion::Torso, 1.26f, 1.32f);
+    const float skinW = frontOf(skin, skin.vertices, BodyRegion::Torso, 1.26f, 1.32f);
+    const float tunicW = frontOf(tunic, tunic.vertices, BodyRegion::Torso, 1.26f, 1.32f);
+    const float armorW = frontOf(armor, armor.vertices, BodyRegion::Torso, 1.26f, 1.32f);
+    printf("  chest: skin %.4f m, tunic %.4f m, armour %.4f m\n", skinW, tunicW, armorW);
     MGE_CHECK(tunicW > skinW);
     MGE_CHECK(armorW > tunicW);
     MGE_CHECK(armorW - skinW < 0.05f);  // bulk stays plausible, not a barrel

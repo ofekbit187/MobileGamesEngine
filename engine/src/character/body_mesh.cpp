@@ -347,6 +347,20 @@ void skinMesh(const SkinnedMeshData& mesh, const Mat4 palette[kJointCount], Mesh
 
 // --------------------------------------------------- one-call integration --
 
+// Outward-cascading masking (CHARACTERS.md §5.4): a garment sealed under a
+// strictly outer one that covers everything it covers is never seen, so it is
+// not skinned and not drawn. Armour over a tunic costs the armour alone.
+bool wearableHidden(const WearableInstance* wearables, size_t count, size_t index) {
+    if (wearables == nullptr || index >= count) return false;
+    const uint32_t mine = garmentCoverage(wearables[index].kind);
+    if (mine == 0) return false;  // hair and held items hide nothing and are never hidden
+    for (size_t j = 0; j < count; ++j) {
+        if (j == index || wearables[j].layer <= wearables[index].layer) continue;
+        if ((garmentCoverage(wearables[j].kind) & mine) == mine) return true;
+    }
+    return false;
+}
+
 void buildPosedCharacter(const HumanoidVariant& variant, const WearableInstance* wearables,
                          size_t wearableCount, const Pose& pose, BodyLod lod,
                          std::vector<CharacterPiece>& out) {
@@ -371,6 +385,7 @@ void buildPosedCharacter(const HumanoidVariant& variant, const WearableInstance*
     for (size_t i = 0; i < wearableCount; ++i) {
         const SkinnedMeshData& garment = sharedGarment(wearables[i].kind);
         if (garment.vertices.empty()) continue;  // held items are not garments
+        if (wearableHidden(wearables, wearableCount, i)) continue;
         out.emplace_back();
         skinMesh(garment, palette, out.back().mesh);
         for (int c = 0; c < 4; ++c) out.back().color[c] = wearables[i].color[c];
