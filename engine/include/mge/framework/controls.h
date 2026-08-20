@@ -5,6 +5,9 @@
 // intents:
 //   left zone   : virtual stick — drag from the touch-down anchor -> move
 //   right zone  : camera drag -> look deltas; a quick small-motion tap -> action
+//   buttons     : two round zones in the right zone — jump and use-held
+//                 (Phase 12). A touch inside one is a button press, never a
+//                 look drag, so aiming the camera never fires an action.
 // Coordinates are pixels with y down (Android convention).
 
 #include "mge/core/input.h"
@@ -17,7 +20,20 @@ struct GameplayIntents {
     float moveY = 0.0f;  // forward +
     float lookX = 0.0f;  // accumulated yaw delta (screen fraction)
     float lookY = 0.0f;  // accumulated pitch delta
-    bool action = false; // primary action (tap), latched until consumed
+    bool action = false;   // primary action (tap), latched until consumed
+    bool jump = false;     // action/jump  (Phase 12), latched until consumed
+    bool useHeld = false;  // action/use_held, latched until consumed
+};
+
+// A round on-screen button in pixels. The scheme owns the geometry so the
+// control logic and the HUD that draws it can never disagree (task 5.6).
+struct TouchButton {
+    float x = 0, y = 0, radius = 0;
+    bool contains(float px, float py) const {
+        const float dx = px - x;
+        const float dy = py - y;
+        return dx * dx + dy * dy <= radius * radius;
+    }
 };
 
 class TouchControlScheme {
@@ -34,6 +50,16 @@ public:
     GameplayIntents consume();
 
     bool stickActive() const { return stickPointer_ != kNoPointer; }
+
+    // Where the action buttons are, and which one is under a finger now.
+    TouchButton jumpButton() const {
+        return {width_ - height_ * 0.30f, height_ * 0.74f, height_ * 0.085f};
+    }
+    TouchButton useButton() const {
+        return {width_ - height_ * 0.13f, height_ * 0.80f, height_ * 0.105f};
+    }
+    bool jumpPressed() const { return buttonHeld_ == kButtonJump; }
+    bool usePressed() const { return buttonHeld_ == kButtonUse; }
 
     // Current stick geometry in screen pixels, for the UI overlay to draw
     // the virtual controls over the scheme's real state (task 5.6).
@@ -56,6 +82,10 @@ private:
     float width_ = 1.0f;
     float height_ = 1.0f;
 
+    static constexpr uint8_t kButtonNone = 0;
+    static constexpr uint8_t kButtonJump = 1;
+    static constexpr uint8_t kButtonUse = 2;
+
     int32_t stickPointer_ = kNoPointer;
     float stickAnchorX = 0, stickAnchorY = 0;
     float stickX = 0, stickY = 0;
@@ -67,7 +97,12 @@ private:
     float lookDownX = 0, lookDownY = 0;
     float lookTravel = 0;
 
+    int32_t buttonPointer_ = kNoPointer;
+    uint8_t buttonHeld_ = kButtonNone;
+
     bool actionLatched_ = false;
+    bool jumpLatched_ = false;
+    bool useLatched_ = false;
 };
 
 }  // namespace mge

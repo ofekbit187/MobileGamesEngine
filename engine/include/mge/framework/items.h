@@ -17,6 +17,74 @@ struct Item {
     float color[4] = {1, 1, 1, 1};   // v1 icon tint until item icons land
 };
 
+// ----------------------------------------------- what using an item means --
+// Dictation 6: `action/use_held` is ONE action whose meaning is entirely the
+// item's. The character knows how to use what it is holding; the item says
+// what that is. Adding a new kind of tool is a data change (P5).
+
+enum class ItemUseKind : uint8_t {
+    None = 0,
+    Strike,   // reach in front of the actor; the first character hit takes damage
+    Consume,  // the item is spent: heal and/or apply a status effect
+    Toggle,   // the held item flips on/off (a lit torch, a raised shield)
+    Launch,   // REPORTED, not performed — there are no projectiles yet
+    Custom,   // the game defines the meaning entirely (as status effects do)
+};
+
+struct ItemUse {
+    ItemUseKind kind = ItemUseKind::None;
+    float cooldown = 0.5f;    // seconds before this character can use again
+    float range = 2.0f;       // Strike reach / Launch distance
+    float power = 0.0f;       // Strike damage / Consume healing
+    // Consume: the status effect left behind (id 0 = none). Kept as plain
+    // fields so items.h stays independent of the character header.
+    uint64_t effectId = 0;
+    uint32_t effectTags = 0;
+    float effectMagnitude = 0;
+    float effectDuration = -1;
+    uint32_t payload = 0;      // Custom / Launch: game-defined
+    const char* animKey = "";  // presentation cue
+};
+
+// Item definitions keyed by asset id: the held item's identity is what the
+// use action looks up. Fixed capacity, refuses at the cap (P1).
+class ItemUseRegistry {
+public:
+    static constexpr size_t kMaxItems = 64;
+
+    bool define(AssetId asset, const ItemUse& use) {
+        if (asset == kInvalidAsset) return false;
+        for (size_t i = 0; i < count_; ++i) {
+            if (assets_[i] == asset) {
+                uses_[i] = use;
+                return true;
+            }
+        }
+        if (count_ >= kMaxItems) return false;
+        assets_[count_] = asset;
+        uses_[count_] = use;
+        ++count_;
+        return true;
+    }
+    bool define(const char* name, const ItemUse& use) {
+        return define(assetIdFromName(name), use);
+    }
+
+    const ItemUse* find(AssetId asset) const {
+        for (size_t i = 0; i < count_; ++i) {
+            if (assets_[i] == asset) return &uses_[i];
+        }
+        return nullptr;  // "no defined use" is a normal answer: nothing happens
+    }
+
+    size_t size() const { return count_; }
+
+private:
+    AssetId assets_[kMaxItems] = {};
+    ItemUse uses_[kMaxItems] = {};
+    size_t count_ = 0;
+};
+
 class ItemCollection {
 public:
     static constexpr uint32_t kCapacity = 48;

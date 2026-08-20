@@ -142,6 +142,11 @@ void Engine::simulateStep(double stepSeconds) {
     }
 
     world_->step(stepSeconds);
+    if (characters_ != nullptr) {
+        // Bodies settle where the world allows, once per fixed step.
+        characters_->stepLocomotion(static_cast<float>(stepSeconds));
+        characters_->tickEffects(static_cast<float>(stepSeconds));
+    }
 
     void* scratch = frameArena_->alloc(256);
     (void)scratch;

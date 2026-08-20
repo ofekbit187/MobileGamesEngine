@@ -41,7 +41,7 @@ These work identically for every character, humanoid or not:
 
 | Mechanism | Notes |
 |---|---|
-| **Locomotion** | Walking/running as movement intents resolved against the world; per-character movement parameters (speeds, turn rates). The *animation* of locomotion is body-specific; the *mechanism* is universal. |
+| **Locomotion** | Walking/running as movement intents resolved against the world; per-character movement parameters (speeds, turn rates), plus the body's collision shape, gravity and grounded/airborne state. The *animation* of locomotion is body-specific; the *mechanism* is universal. **Which locomotion actions a body has is not** — walking is granted by having a body that walks, jumping by a body that jumps (§3.1). |
 | **AI** | The AI system drives any character through `AIController`. Behavior definitions are data, assignable to humanoids and non-humanoids alike. |
 | **Mortality** | Health, damage intake, death and its consequences (loot drop from inventory/equipment, corpse handling, despawn rules). |
 | **Enemy/ally classification** | A faction/relationship system: characters belong to factions; factions have stances toward each other (ally, neutral, enemy) that AI, targeting, and UI read. Per-character overrides allowed. |
@@ -52,6 +52,65 @@ These work identically for every character, humanoid or not:
 | **Streaming & persistence behavior** | Characters live in world chunks, stream in/out (P2), and persist their state via the save delta system (P7) — inventory, equipment, health, faction overrides included. |
 
 **Humanoid-exclusive mechanisms** live on `HumanoidCharacter` only: the template body and its variant system, the humanoid skeleton and animation set, and the body-part wearable fitting mechanism (§4–§6). The split rule: *if a mechanism makes sense for a wolf, it belongs on `Character`; if it assumes a human-shaped body, it belongs on `HumanoidCharacter`.*
+
+## 3.1 Actions — what a character can do (Dictation 6)
+
+> *"a character have actions it can do. every character can interact, a humanoid can also walk,
+> I want to add a jump capability to humanoid, and an action that uses the equipment that you
+> hold in your hands, the equipment use action is dependent on the equipped item and it can do
+> completely different things depending on the item."*
+
+An **action** is a named thing a character can do. Every character carries the **set of actions it
+can perform** — not a list of behaviours it *will* perform (that is AI, occupation and schedule),
+but the vocabulary available to whoever is steering it.
+
+**Actions come from what you are, in two tiers:**
+
+| Tier | Granted by | Actions |
+|---|---|---|
+| **Universal** | Being a `Character` at all | `action/interact` |
+| **Body** | The body definition the character has | humanoid: `action/walk`, `action/jump`, `action/use_held` |
+
+The universal tier is seeded when a character is created, so "every character can interact" stays a
+structural truth rather than a flag someone remembered to set. The body tier is granted by the body:
+a humanoid walks, jumps and uses what is in its hands because *a humanoid does*; a game-defined
+creature declares its own set. A wolf that gets `action/jump` gets it by declaring it, not by
+inheriting a humanoid assumption — and a snake simply never has it.
+
+**Asking and doing.** `can(actor, action)` answers whether the vocabulary contains it; `perform(actor,
+request)` does it and reports what happened. Both take the acting character — the player's button and
+an NPC's decision reach the identical call (P9). Performing an action a character does not have fails
+cleanly; so does performing one it cannot do *right now* (jumping in mid-air, using an empty hand).
+The distinction matters: **not granted** is about what you are, **refused** is about the moment.
+
+### 3.1.1 Jump (humanoid)
+
+Jumping is the first action that needs the character to leave the ground, so it is what turns the
+Phase 11 walker into a body with real vertical state: a vertical velocity, gravity, a `grounded`
+flag, landing on what is below and hitting what is above. A character may only jump from the ground;
+in the air it falls. This is the seam Phase 11 named and deliberately left open — dynamics for
+*characters* land here; dynamics for *objects* (pushing, ragdolls, projectiles) still do not.
+
+### 3.1.2 Use what is in your hands
+
+`action/use_held` is **one action whose meaning is entirely the item's**. The character does not
+know how to swing, drink or light anything; it knows how to *use what it is holding*, and the item
+declares what that means:
+
+- The item's asset id maps to an **item-use descriptor** in data — kind, cooldown, reach, power,
+  the effect it applies, an animation key, and a game-defined payload.
+- Built-in kinds the engine performs: **strike** (reach in front of the actor; the first character
+  hit takes damage), **consume** (the item is spent; the actor is healed and/or takes a status
+  effect), **toggle** (the held item flips on/off — a lit torch, a raised shield). Two more kinds
+  are **reported, not performed**: **launch** (there are no projectiles yet — the engine hands the
+  game a launch request rather than pretending) and **custom** (the game defines the meaning
+  entirely, exactly as status effects do).
+- An empty hand, or an item with no descriptor, does nothing. Using a sheathed weapon draws it
+  first (§6.1) — you cannot swing a sword that is on your back.
+- Cooldown is per character, so the action refuses while the last use is still resolving.
+
+This is why the same button is a sword swing, a bite of an apple and a torch being lit: the action
+is fixed, the item is data, and adding a new kind of tool is a data change, not an engine change.
 
 ## 4. The humanoid template body
 

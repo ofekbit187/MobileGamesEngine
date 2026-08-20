@@ -135,10 +135,38 @@ RayHit CollisionWorld::raycast(const Vec3& origin, const Vec3& direction, float 
     return best.hit ? best : RayHit{};
 }
 
+// The highest surface under a character standing at `position` that is close
+// enough to stand on, else the ground plane. Shared by step-up and landing.
+float CollisionWorld::supportUnder(const Vec3& position, const CharacterShape& shape) const {
+    float support = groundY_;
+    const Aabb footprint = characterBounds(position, shape);
+    for (const Entry& entry : boxes_) {
+        if (!entry.used) continue;
+        const bool overlapsXZ = footprint.min.x < entry.bounds.max.x &&
+                                footprint.max.x > entry.bounds.min.x &&
+                                footprint.min.z < entry.bounds.max.z &&
+                                footprint.max.z > entry.bounds.min.z;
+        if (!overlapsXZ) continue;
+        // Only surfaces at or below stepping height count as ground; a roof
+        // overhead must not teleport the character onto it.
+        if (entry.bounds.max.y <= position.y + shape.stepHeight &&
+            entry.bounds.max.y > support) {
+            support = entry.bounds.max.y;
+        }
+    }
+    return support;
+}
+
 MoveResult CollisionWorld::moveCharacter(const Vec3& position, const CharacterShape& shape,
                                          const Vec3& delta) const {
+    constexpr float kLandEpsilon = 1e-4f;
     MoveResult result;
     Vec3 current = position;
+
+    // Were the feet down before any of this? A character in mid-air may not
+    // climb ledges — stepping up is something you do while standing.
+    const float startSupport = supportUnder(position, shape);
+    const bool wasStanding = position.y <= startSupport + kLandEpsilon;
 
     // Horizontal axes are resolved one at a time so a blocked X still allows
     // the Z component through: that IS sliding along a wall.
@@ -155,10 +183,11 @@ MoveResult CollisionWorld::moveCharacter(const Vec3& position, const CharacterSh
             current = candidate;
             continue;
         }
-        // Blocked — but a low ledge is a step, not a wall. Try again lifted.
+        // Blocked — but for someone on their feet a low ledge is a step, not
+        // a wall. Try again lifted.
         Vec3 stepped = candidate;
         stepped.y += shape.stepHeight;
-        if (!blocked(stepped, shape)) {
+        if (wasStanding && !blocked(stepped, shape)) {
             current = stepped;
             result.steppedUp = true;
             continue;
@@ -170,32 +199,34 @@ MoveResult CollisionWorld::moveCharacter(const Vec3& position, const CharacterSh
         }
     }
 
-    current.y += delta.y;
+    // What is under the feet where the character ended up horizontally. The
+    // scan uses the pre-fall height, so a fast fall lands on the platform it
+    // was above rather than tunnelling through it.
+    const float support = supportUnder(current, shape);
 
-    // Settle onto whatever is under the feet: the tallest collider top the
-    // character overlaps in XZ that is not above them, else the ground.
-    float support = groundY_;
-    const Aabb footprint = characterBounds(current, shape);
-    for (const Entry& entry : boxes_) {
-        if (!entry.used) continue;
-        const bool overlapsXZ = footprint.min.x < entry.bounds.max.x &&
-                                footprint.max.x > entry.bounds.min.x &&
-                                footprint.min.z < entry.bounds.max.z &&
-                                footprint.max.z > entry.bounds.min.z;
-        if (!overlapsXZ) continue;
-        // Only surfaces at or below stepping height count as ground; a roof
-        // overhead must not teleport the character onto it.
-        if (entry.bounds.max.y <= current.y + shape.stepHeight &&
-            entry.bounds.max.y > support) {
-            support = entry.bounds.max.y;
+    if (delta.y > 0.0f) {
+        Vec3 candidate = current;
+        candidate.y += delta.y;
+        if (blocked(candidate, shape)) {
+            result.hitCeiling = true;  // the rise stops; the caller kills the
+                                       // upward velocity and the fall begins
+        } else {
+            current.y = candidate.y;
         }
+        result.grounded = current.y <= support + kLandEpsilon;
+    } else if (delta.y < 0.0f) {
+        current.y += delta.y;
+        if (current.y <= support) {
+            current.y = support;  // landed
+            result.grounded = true;
+        }
+    } else {
+        // The Phase 11 walker: no vertical intent at all, so the feet simply
+        // follow the surface under them. Callers that do gravity never take
+        // this path.
+        current.y = support;
+        result.grounded = true;
     }
-    // v1 characters are walkers: the feet follow the surface under them, up
-    // a step and back down off it. There is no airborne state yet — gravity,
-    // jumping and falling arrive with dynamics, and this is the seam they
-    // will replace.
-    current.y = support;
-    result.grounded = true;
 
     result.position = current;
     return result;

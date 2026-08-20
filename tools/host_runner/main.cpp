@@ -12,6 +12,10 @@
 #include <cmath>
 
 #include "mge/audio/mixer.h"
+#include "mge/character/humanoid.h"
+#include "mge/framework/action.h"
+#include "mge/framework/character.h"
+#include "mge/framework/collision.h"
 #include "mge/core/log.h"
 #include "mge/framework/engine.h"
 
@@ -71,6 +75,30 @@ int main() {
     if (mixer.play(hum, humParams) == mge::kInvalidAudioVoice) return 1;
     static int16_t mixBuffer[800 * 2];  // one 60 Hz frame of 48 kHz stereo
 
+    // A body that walks, falls, lands and acts — inside the gate.
+    mge::CollisionWorld collision(64);
+    collision.addBox(mge::Aabb::fromCenterExtents({0, 0.2f, -3.0f}, {1.0f, 0.2f, 1.0f}));
+    mge::CharacterSystem characters(engine.world());
+    characters.setCollision(&collision);
+    mge::ItemUseRegistry itemUses;
+    mge::ItemUse torch;
+    torch.kind = mge::ItemUseKind::Toggle;
+    torch.cooldown = 0.05f;
+    itemUses.define("item/torch", torch);
+    characters.setItemUses(&itemUses);
+    engine.setCharacters(&characters);
+
+    const mge::EntityId walker = engine.world().spawn();
+    mge::TransformComponent walkerTransform;
+    walkerTransform.position = {0, 0, 0};
+    engine.world().setTransform(walker, walkerTransform);
+    engine.world().setMovement(walker, mge::MovementComponent{{0, 0, -1.0f}, 4.0f});
+    if (mge::CharacterComponent* c = characters.attach(walker)) {
+        c->inventory.add({mge::assetIdFromName("item/torch"), "item.torch", 1, {1, 1, 1, 1}});
+        characters.equip(walker, 0, mge::EquipSlot::HeldMain);
+    }
+    mge::grantHumanoidActions(characters, walker);
+
     constexpr int kWarmupFrames = 60;
     constexpr int kSteadyFrames = 600;
     constexpr double kFrameDt = 1.0 / 60.0;
@@ -85,11 +113,18 @@ int main() {
     engine.tick(kFrameDt);
     engine.onSurfaceCreated(1080, 2400);
 
+    // Characters join the P1 gate (task 12.3/12.6): a walking, falling body
+    // resolving against colliders and performing actions every frame must
+    // not touch the heap either.
     const long allocsBefore = gAllocCount.load();
     const auto start = std::chrono::steady_clock::now();
     for (int i = 0; i < kSteadyFrames; ++i) {
         engine.tick(kFrameDt);
         mixer.mix(mixBuffer, 800);  // the audio pull rides the same gate
+        // ... and so does a character acting: jump when it can, use what it
+        // holds, every single frame.
+        characters.perform(walker, mge::actionJump());
+        characters.perform(walker, mge::actionUseHeld());
     }
     const auto end = std::chrono::steady_clock::now();
     const long steadyAllocs = gAllocCount.load() - allocsBefore;

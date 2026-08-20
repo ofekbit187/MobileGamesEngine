@@ -16,6 +16,7 @@
 #include "mge/graphics/primitives.h"
 #include "mge/graphics/renderer.h"
 #include "mge/graphics/vulkan_device.h"
+#include "mge/framework/controls.h"
 #include "mge/ui/ui.h"
 
 using namespace mge;
@@ -113,6 +114,13 @@ void drawHud(Ui& ui, float yaw, float health, const Item* held, bool stickActive
     ui.compassStrip({kW * 0.5f - 170, 18, 340, 32}, yaw);
     ui.itemSlot({kW - 26 - 68, 20, 68, 68}, held, false);
     ui.virtualControls(stickActive, anchorX, anchorY, stickX, stickY);
+    // The Phase 12 action seals, at the control scheme's own geometry.
+    TouchControlScheme scheme;
+    scheme.configure(kW, kH);
+    const TouchButton jumpZone = scheme.jumpButton();
+    const TouchButton useZone = scheme.useButton();
+    ui.actionSeal(jumpZone.x, jumpZone.y, jumpZone.radius, false, "hud.jump");
+    ui.actionSeal(useZone.x, useZone.y, useZone.radius, true, "hud.use");
 }
 
 void drawInventory(Ui& ui, const ItemCollection& backpack, const ItemCollection& chest,
@@ -151,6 +159,10 @@ int main(int argc, char** argv) {
     if (!renderer.setUiFont(font)) return 1;
 
     Localization strings;
+    strings.set(Language::English, "hud.jump", "Leap");
+    strings.set(Language::Hebrew, "hud.jump", "לקפוץ");
+    strings.set(Language::English, "hud.use", "Use");
+    strings.set(Language::Hebrew, "hud.use", "להשתמש");
     strings.set(Language::English, "demo.title", "EMBERHOLD");
     strings.set(Language::Hebrew, "demo.title", "אחוזת הגחלת");
     strings.set(Language::English, "demo.character", "Aldric");

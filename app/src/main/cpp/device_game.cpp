@@ -178,8 +178,9 @@ struct DeviceGame::Impl {
     AiSystem* ai = nullptr;
     CollisionWorld collision;
     InteractionSystem* interactions = nullptr;
-    CharacterShape playerShape;
     ItemCollection chestContents;
+    ItemUseRegistry itemUses;   // what using each item MEANS (Phase 12)
+    uint32_t heldIndex = 0;     // which inventory entry is in the hand
     CollectionRegistry collections;
     EntityId focused = kInvalidEntity;
     uint64_t openCollectionId = 0;
@@ -360,6 +361,17 @@ bool DeviceGame::start(Engine& engine, AudioMixer& mixer, ANativeWindow* window,
     s.player.entity = spawnCharacter({0, 0, 4.0f}, 0, 1);
     s.characters->get(s.player.entity)->controller = ControllerKind::Player;
     engine.setPlayerEntity(s.player.entity);
+    // A humanoid body brings its own actions (CHARACTERS.md §3.1). The
+    // universal one (interact) was already there by being a character.
+    grantHumanoidActions(*s.characters, s.player.entity);
+    {
+        CharacterComponent* pc = s.characters->get(s.player.entity);
+        pc->inventory.add(
+            {assetIdFromName("item/torch"), "item.torch", 1, {0.95f, 0.72f, 0.30f, 1}});
+        pc->inventory.add(
+            {assetIdFromName("item/sword"), "item.sword", 1, {0.72f, 0.75f, 0.79f, 1}});
+        s.characters->equip(s.player.entity, 0, EquipSlot::HeldMain);  // torch first
+    }
 
     s.guard.entity = spawnCharacter({3.0f, 0, -2.0f}, 1, 2);
     s.characters->get(s.guard.entity)->inventory.add(
@@ -379,6 +391,9 @@ bool DeviceGame::start(Engine& engine, AudioMixer& mixer, ANativeWindow* window,
     villagerProfile.canWander = true;
     villagerProfile.homeRadius = 4.0f;
     s.ai->attach(s.villager.entity, villagerProfile);
+    // The NPCs are humanoids too — same vocabulary, different decider (P9).
+    grantHumanoidActions(*s.characters, s.guard.entity);
+    grantHumanoidActions(*s.characters, s.villager.entity);
 
     // --- Things to act on (Phase 11): an apple to take, a chest to open,
     //     and a villager to talk to. All three are ordinary world entities
@@ -389,6 +404,32 @@ bool DeviceGame::start(Engine& engine, AudioMixer& mixer, ANativeWindow* window,
     // wires the world of interactables once, onto the character system, and
     // every character has the verbs — the tap below is the player using them.
     s.characters->setInteractions(s.interactions);
+    // Phase 12: bodies fall and land inside the fixed step, and using the
+    // held item means whatever the ITEM says it means.
+    s.characters->setCollision(&s.collision);
+    s.characters->setItemUses(&s.itemUses);
+    engine.setCharacters(s.characters);
+
+    ItemUse swordUse;
+    swordUse.kind = ItemUseKind::Strike;
+    swordUse.range = 2.3f;
+    swordUse.power = 0.25f;
+    swordUse.cooldown = 0.7f;
+    swordUse.animKey = "anim/swing";
+    s.itemUses.define("item/sword", swordUse);
+
+    ItemUse appleUse;
+    appleUse.kind = ItemUseKind::Consume;
+    appleUse.power = 0.3f;           // a bite heals
+    appleUse.cooldown = 0.4f;
+    appleUse.effectId = assetIdFromName("effect/fed");
+    appleUse.effectDuration = 60.0f;
+    s.itemUses.define("item/apple", appleUse);
+
+    ItemUse torchUse;
+    torchUse.kind = ItemUseKind::Toggle;
+    torchUse.cooldown = 0.3f;
+    s.itemUses.define("item/torch", torchUse);
 
     const auto apple = [&](Vec3 position) {
         const EntityId entity = place(crateId, position, 0.0f, 0.85f, 0.25f, 0.20f);
@@ -551,6 +592,10 @@ bool DeviceGame::start(Engine& engine, AudioMixer& mixer, ANativeWindow* window,
             s.strings.set(Language::English, "prompt.talk", "Speak");
             s.strings.set(Language::Hebrew, "prompt.talk", "\xd7\x9c\xd7\x93\xd7\x91\xd7\xa8");
             s.strings.set(Language::English, "hud.flash", "");
+            s.strings.set(Language::English, "hud.jump", "Leap");
+            s.strings.set(Language::Hebrew, "hud.jump", "\xd7\x9c\xd7\xa7\xd7\xa4\xd7\x95\xd7\xa5");
+            s.strings.set(Language::English, "hud.use", "Use");
+            s.strings.set(Language::Hebrew, "hud.use", "\xd7\x9c\xd7\x94\xd7\xa9\xd7\xaa\xd7\x9e\xd7\xa9");
             s.strings.set(Language::English, "hud.subtitle",
                           "Fine morning, friend. Mind the bell tower.");
             s.strings.set(Language::Hebrew, "hud.subtitle",
@@ -610,38 +655,74 @@ void DeviceGame::frame(double dtSeconds, ANativeWindow* window) {
 
     // --- Simulation: AI intents, then the engine's fixed-step tick ---
     World& world = s.engine->world();
-    Vec3 before[3] = {};
-    Impl::Actor* actors[3] = {&s.player, &s.guard, &s.villager};
-    for (int i = 0; i < 3; ++i) {
-        if (const TransformComponent* t = world.transform(actors[i]->entity)) {
-            before[i] = t->position;
-        }
-    }
     s.ai->step(static_cast<float>(dt));
+    // The world is solid (Phase 11) and bodies have weight (Phase 12): the
+    // engine resolves every character's locomotion INSIDE its fixed step —
+    // player and NPCs alike, through the same call — so falling and landing
+    // don't change with frame rate.
     s.engine->tick(dt);
-
-    // The world is solid (Phase 11): whatever the controls and the AI asked
-    // for, the collision world decides where bodies actually end up — for
-    // the player and the NPCs alike, through the same call.
-    for (int i = 0; i < 3; ++i) {
-        TransformComponent* t = world.transform(actors[i]->entity);
-        if (t == nullptr) continue;
-        const MoveResult resolved =
-            s.collision.moveCharacter(before[i], s.playerShape, t->position - before[i]);
-        t->position = resolved.position;
-    }
     for (Impl::Actor* actor : {&s.player, &s.guard, &s.villager}) {
         const MovementComponent* m = world.movement(actor->entity);
         actor->anim.update(static_cast<float>(dt),
                            m != nullptr ? m->velocity.length() : 0.0f);
     }
 
+    // --- The player's actions (Phase 12). Two buttons, and everything they
+    //     do is a CHARACTER action — the same calls an NPC would make. ---
+    const GameplayIntents& intents = s.engine->lastIntents();
+    if (intents.jump) s.characters->perform(s.player.entity, actionJump());
+    if (intents.useHeld) {
+        const ActionResult used = s.characters->perform(s.player.entity, actionUseHeld());
+        switch (used.useKind) {
+            case ItemUseKind::Strike:
+                if (used.target != kInvalidEntity) {
+                    s.strings.set(Language::English, "hud.flash", "Your blade lands");
+                    s.strings.set(Language::Hebrew, "hud.flash",
+                                  "\xd7\x94\xd7\x9c\xd7\x94\xd7\x91 \xd7\xa4\xd7\x95\xd7\x92\xd7\xa2");
+                } else {
+                    s.strings.set(Language::English, "hud.flash", "You swing at nothing");
+                }
+                s.promptFlash = 1.6;
+                break;
+            case ItemUseKind::Consume:
+                s.strings.set(Language::English, "hud.flash", "You eat, and feel better");
+                s.promptFlash = 1.8;
+                break;
+            case ItemUseKind::Toggle:
+                s.strings.set(Language::English, "hud.flash",
+                              used.toggledOn ? "The torch catches" : "The torch is out");
+                s.promptFlash = 1.6;
+                break;
+            default:
+                if (used.refusal == ActionRefusal::NothingHeld) {
+                    s.strings.set(Language::English, "hud.flash", "Your hands are empty");
+                    s.promptFlash = 1.4;
+                }
+                break;
+        }
+    }
+
     // --- What the player is about to act on, and what a tap does to it ---
     s.focused = s.characters->focus(s.player.entity);
     s.promptFlash -= dt;
-    if (s.engine->lastIntents().action) {
+    if (intents.action) {
         if (s.openCollectionId != 0) {
             s.openCollectionId = 0;  // a tap closes the open container
+        } else if (s.focused == kInvalidEntity) {
+            // Facing nothing usable: the tap swaps what is in your hand, so
+            // every item's meaning of "use" is reachable on the phone.
+            CharacterComponent* pc = s.characters->get(s.player.entity);
+            if (pc != nullptr && pc->inventory.size() > 0) {
+                s.characters->unequip(s.player.entity, EquipSlot::HeldMain);
+                s.heldIndex = (s.heldIndex + 1) % pc->inventory.size();
+                if (s.characters->equip(s.player.entity, s.heldIndex, EquipSlot::HeldMain)) {
+                    const EquippedItem& slot =
+                        pc->equipment[static_cast<size_t>(EquipSlot::HeldMain)];
+                    s.strings.set(Language::English, "hud.flash",
+                                  slot.item.nameKey != nullptr ? "Now in hand" : "Now in hand");
+                    s.promptFlash = 1.4;
+                }
+            }
         } else {
             InteractionResult acted;
             s.characters->interact(s.player.entity, &acted);
@@ -823,6 +904,21 @@ void DeviceGame::frame(double dtSeconds, ANativeWindow* window) {
             } else {
                 // Resting stick hint in the left control zone.
                 s.ui.virtualControls(false, w * 0.14f, h * 0.78f, w * 0.14f, h * 0.78f);
+            }
+            // The action buttons (Phase 12), drawn from the control scheme's
+            // own geometry so the seal you press and the circle that answers
+            // are the same circle. Touch is in device pixels; the HUD is in
+            // render pixels, hence the scale.
+            {
+                const TouchControlScheme& scheme = s.engine->controls();
+                const TouchButton jumpZone = scheme.jumpButton();
+                const TouchButton useZone = scheme.useButton();
+                s.ui.actionSeal(jumpZone.x * s.touchScaleX, jumpZone.y * s.touchScaleY,
+                                jumpZone.radius * s.touchScaleY, scheme.jumpPressed(),
+                                "hud.jump");
+                s.ui.actionSeal(useZone.x * s.touchScaleX, useZone.y * s.touchScaleY,
+                                useZone.radius * s.touchScaleY, scheme.usePressed(),
+                                "hud.use");
             }
             // What you are about to act on (Phase 11): the prompt is the
             // interactable's own localized key, so a Hebrew game reads

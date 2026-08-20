@@ -18,6 +18,12 @@ Quat rotZ(float a) { return Quat::fromAxisAngle({0, 0, 1}, a); }
 
 }  // namespace
 
+void grantHumanoidActions(CharacterSystem& characters, EntityId entity) {
+    characters.grant(entity, actionWalk());
+    characters.grant(entity, actionJump());
+    characters.grant(entity, actionUseHeld());
+}
+
 // ----------------------------------------------------------------- rig ------
 
 Skeleton buildSkeleton(const HumanoidVariant& variant) {

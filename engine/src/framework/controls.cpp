@@ -13,6 +13,19 @@ void TouchControlScheme::handle(const TouchEvent& event) {
                 stickPointer_ = event.pointerId;
                 stickAnchorX = stickX = event.x;
                 stickAnchorY = stickY = event.y;
+            } else if (!inStickZone && buttonPointer_ == kNoPointer &&
+                       (jumpButton().contains(event.x, event.y) ||
+                        useButton().contains(event.x, event.y))) {
+                // A button press, not a camera drag. Latched on touch-down so
+                // the action fires the instant the finger lands.
+                buttonPointer_ = event.pointerId;
+                if (jumpButton().contains(event.x, event.y)) {
+                    buttonHeld_ = kButtonJump;
+                    jumpLatched_ = true;
+                } else {
+                    buttonHeld_ = kButtonUse;
+                    useLatched_ = true;
+                }
             } else if (!inStickZone && lookPointer_ == kNoPointer) {
                 lookPointer_ = event.pointerId;
                 lookLastX = lookDownX = event.x;
@@ -39,6 +52,9 @@ void TouchControlScheme::handle(const TouchEvent& event) {
         case TouchAction::Cancel:
             if (event.pointerId == stickPointer_) {
                 stickPointer_ = kNoPointer;
+            } else if (event.pointerId == buttonPointer_) {
+                buttonPointer_ = kNoPointer;
+                buttonHeld_ = kButtonNone;
             } else if (event.pointerId == lookPointer_) {
                 if (event.action == TouchAction::Up &&
                     event.timestampNs - lookDownTimeNs <= kTapMaxNs &&
@@ -68,8 +84,12 @@ GameplayIntents TouchControlScheme::consume() {
     intents.lookX = lookAccumX;
     intents.lookY = lookAccumY;
     intents.action = actionLatched_;
+    intents.jump = jumpLatched_;
+    intents.useHeld = useLatched_;
     lookAccumX = lookAccumY = 0;
     actionLatched_ = false;
+    jumpLatched_ = false;
+    useLatched_ = false;
     return intents;
 }
 

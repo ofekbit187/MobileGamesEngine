@@ -9,6 +9,8 @@
 #include <cstdint>
 #include <vector>
 
+#include "mge/framework/action.h"
+#include "mge/framework/collision.h"
 #include "mge/framework/items.h"
 #include "mge/framework/world.h"
 
@@ -91,11 +93,22 @@ struct EquippedItem {
     Item item;            // count 0 = slot empty
     uint8_t layer = 1;    // 0 base / 1 mid / 2 outer (wearable slots)
     bool sheathed = false;  // held slots only
+    bool active = false;    // held slots: a Toggle item's on/off (a lit torch)
 };
 
 struct CharacterComponent {
     float health = 1.0f;
     float maxHealth = 1.0f;
+    // What this character CAN do (Dictation 6, §3.1). Seeded with the
+    // universal actions on attach; the body adds its own.
+    ActionSet actions;
+    // How the body occupies space, and where it is vertically. v1 characters
+    // stopped at "walker"; jumping made this real state (task 12.3).
+    CharacterShape shape;
+    float verticalVelocity = 0;   // m/s, + up
+    bool grounded = true;
+    float jumpSpeed = 4.6f;       // launch speed of action/jump
+    float useCooldown = 0;        // seconds left before use_held may fire again
     FactionId faction = 0;
     ControllerKind controller = ControllerKind::None;
     bool alive = true;
@@ -196,6 +209,35 @@ public:
     // Held-item state (CHARACTERS.md §6.1).
     bool setSheathed(EntityId entity, bool sheathed);
 
+    // ---------------------------------------------------- actions (§3.1) ---
+    // The vocabulary, and using it. `can` asks what the character IS; a
+    // perform that returns refusal != NotGranted failed on the moment, not
+    // on the character. Both take the acting character: the player's button
+    // and an NPC's decision are the same call (P9).
+    bool can(EntityId actor, ActionId action) const;
+    bool grant(EntityId actor, ActionId action);
+    void revoke(EntityId actor, ActionId action);
+    ActionResult perform(EntityId actor, const ActionRequest& request);
+    ActionResult perform(EntityId actor, ActionId action) {
+        ActionRequest request;
+        request.id = action;
+        return perform(actor, request);
+    }
+
+    // What using the held item means is the ITEM's business; the character
+    // only knows how to use what it holds. Without a registry wired, using
+    // anything is simply nothing happening.
+    void setItemUses(const ItemUseRegistry* uses) { itemUses_ = uses; }
+
+    // --------------------------------------------- locomotion (task 12.3) ---
+    // Gravity and collision resolution for every character, run once per
+    // fixed step AFTER World::step has integrated velocities. Characters
+    // fall, land, hit ceilings and stand on what supports them. Without a
+    // collision world wired this is a no-op and characters stay walkers.
+    void setCollision(const CollisionWorld* collision) { collision_ = collision; }
+    void setGravity(float metersPerSecondSquared) { gravity_ = metersPerSecondSquared; }
+    void stepLocomotion(float dt);
+
     // ------------------------------------------------ interaction (P9) ---
     // Acting on the world is a capability of BEING A CHARACTER (owner ruling,
     // Phase 11) — not of being the player. It lives here, on the character
@@ -223,7 +265,8 @@ public:
     const StatusEffect* findEffect(EntityId entity, uint64_t effectId) const;
     float sumMagnitude(EntityId entity, uint32_t tagMask) const;
     // One fixed step for timed effects: durations tick down, expired effects
-    // drop. Permanent effects (skills/education) never expire.
+    // drop. Permanent effects (skills/education) never expire. Action
+    // cooldowns tick here too — they are the same kind of clock.
     void tickEffects(float dt);
 
     // Persistence + streaming (task 8.9). Snapshot captures every character
@@ -249,6 +292,10 @@ public:
 
 private:
     int32_t indexOf(EntityId entity) const;
+    ActionResult performJump(EntityId actor, CharacterComponent& character);
+    ActionResult performUseHeld(EntityId actor, CharacterComponent& character);
+    // The character a swing lands on: nearest living one in front, in reach.
+    EntityId strikeTarget(EntityId actor, float reach) const;
 
     World& world_;
     uint32_t capacity_;
@@ -258,6 +305,9 @@ private:
     std::vector<CharacterComponent> components_;
     FactionTable factions_;
     InteractionSystem* interactions_ = nullptr;
+    const ItemUseRegistry* itemUses_ = nullptr;
+    const CollisionWorld* collision_ = nullptr;
+    float gravity_ = -18.0f;  // snappier than earth: this is a game (tunable)
 };
 
 }  // namespace mge

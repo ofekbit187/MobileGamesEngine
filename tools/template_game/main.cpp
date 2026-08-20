@@ -18,6 +18,7 @@
 #include <vector>
 
 #include "mge/character/humanoid.h"
+#include "mge/framework/action.h"
 #include "mge/framework/ai.h"
 #include "mge/framework/asset_registry.h"
 #include "mge/framework/camera_controller.h"
@@ -497,13 +498,138 @@ int main(int argc, char** argv) {
         const bool focusedApple = characters.focus(player) == apple;
         CharacterComponent* playerCharacter = characters.get(player);
         const uint32_t carriedBefore = playerCharacter->inventory.size();
-        const InteractionSystem::Result took = interactions.interact(player);
+        InteractionResult took;
+        characters.interact(player, &took);
         const bool carried = playerCharacter->inventory.size() == carriedBefore + 1;
         printf("apple: focused %s, taken %s, gone from the world %s\n",
                focusedApple ? "yes" : "no", took.handled ? "yes" : "no",
                !world.entities().isAlive(apple) ? "yes" : "no");
         mechanismsOk = stoppedByWall && focusedApple && took.handled && carried &&
                        !world.entities().isAlive(apple);
+    }
+
+    // --- Phase 12 actions: a character's vocabulary, on a real body ---
+    // The player jumps (leaving the ground for the first time in this engine)
+    // and then uses what is in their hands — the SAME action producing three
+    // different outcomes because the item decides what it means.
+    bool actionsOk = false;
+    {
+        // The walkabout above is the record for the capture checks; this
+        // block teleports the player around to exercise actions, so its
+        // transform is put back exactly as it was afterwards.
+        const TransformComponent walkaboutEnd = *world.transform(player);
+        ItemUseRegistry itemUses;
+        characters.setItemUses(&itemUses);
+        characters.setCollision(&collision);
+
+        ItemUse sword;
+        sword.kind = ItemUseKind::Strike;
+        sword.range = 2.2f;
+        sword.power = 0.3f;
+        sword.cooldown = 0.6f;
+        sword.animKey = "anim/swing";
+        itemUses.define("item/sword", sword);
+
+        ItemUse apple;
+        apple.kind = ItemUseKind::Consume;
+        apple.power = 0.25f;
+        apple.cooldown = 0.3f;
+        apple.effectId = assetIdFromName("effect/fed");
+        apple.effectDuration = 60.0f;
+        itemUses.define("item/apple", apple);
+
+        ItemUse torch;
+        torch.kind = ItemUseKind::Toggle;
+        torch.cooldown = 0.2f;
+        itemUses.define("item/torch", torch);
+
+        // The vocabulary: universal by existing, humanoid by having a body.
+        grantHumanoidActions(characters, player);
+        const bool vocabulary = characters.can(player, actionInteract()) &&
+                                characters.can(player, actionJump()) &&
+                                characters.can(player, actionUseHeld());
+
+        TransformComponent* pt = world.transform(player);
+        pt->position = {0.0f, 0.0f, 6.0f};
+        pt->prevPosition = pt->position;
+        world.movement(player)->velocity = {0, 0, 0};
+        const float dt32 = static_cast<float>(dt);
+        world.step(dt);
+        characters.stepLocomotion(dt32);
+
+        const bool jumped = characters.perform(player, actionJump()).performed;
+        const bool refusedMidAir =
+            characters.perform(player, actionJump()).refusal == ActionRefusal::NotGrounded;
+        float peakHeight = 0;
+        bool landed = false;
+        for (int step = 0; step < 240 && !landed; ++step) {
+            world.step(dt);
+            characters.stepLocomotion(dt32);
+            characters.tickEffects(dt32);
+            const float y = world.transform(player)->position.y;
+            if (y > peakHeight) peakHeight = y;
+            if (step > 10 && characters.get(player)->grounded) landed = true;
+        }
+        printf("jump: rose %.2f m, refused in mid-air %s, landed %s\n", peakHeight,
+               refusedMidAir ? "yes" : "no", landed ? "yes" : "no");
+
+        // One action, three meanings. Face the villager and swing.
+        CharacterComponent* playerCharacter = characters.get(player);
+        const TransformComponent* villagerTransform = world.transform(villager);
+        pt = world.transform(player);
+        pt->position = villagerTransform->position + Vec3{0, 0, 1.4f};
+        pt->prevPosition = pt->position;
+        pt->yaw = kPi;  // facing -Z... toward the villager at lower Z
+        Vec3 toVillager = villagerTransform->position - pt->position;
+        pt->yaw = std::atan2(toVillager.x, -toVillager.z);
+
+        playerCharacter->inventory = ItemCollection{};
+        playerCharacter->inventory.add(
+            {assetIdFromName("item/sword"), "item.sword", 1, {0.72f, 0.75f, 0.79f, 1}});
+        characters.equip(player, 0, EquipSlot::HeldMain);
+        characters.setSheathed(player, true);
+        const float villagerHealthBefore = characters.get(villager)->health;
+        const ActionResult swing = characters.perform(player, actionUseHeld());
+        const bool drewToStrike =
+            !playerCharacter->equipment[static_cast<size_t>(EquipSlot::HeldMain)].sheathed;
+        const bool struck = swing.performed && swing.useKind == ItemUseKind::Strike &&
+                            characters.get(villager)->health < villagerHealthBefore;
+        const bool cooldownHolds =
+            characters.perform(player, actionUseHeld()).refusal == ActionRefusal::OnCooldown;
+        characters.tickEffects(1.0f);
+
+        // Same button, an apple in hand: eaten, and it heals.
+        characters.unequip(player, EquipSlot::HeldMain);
+        playerCharacter->inventory = ItemCollection{};
+        playerCharacter->inventory.add(
+            {assetIdFromName("item/apple"), "item.apple", 1, {0.8f, 0.22f, 0.16f, 1}});
+        characters.equip(player, 0, EquipSlot::HeldMain);
+        characters.damage(player, 0.4f);
+        const float healthBefore = playerCharacter->health;
+        const ActionResult bite = characters.perform(player, actionUseHeld());
+        const bool ate = bite.performed && bite.useKind == ItemUseKind::Consume &&
+                         playerCharacter->health > healthBefore &&
+                         playerCharacter->equipment[static_cast<size_t>(EquipSlot::HeldMain)]
+                                 .item.count == 0;
+        characters.tickEffects(1.0f);
+
+        // Same button, a torch in hand: it lights.
+        playerCharacter->inventory = ItemCollection{};
+        playerCharacter->inventory.add(
+            {assetIdFromName("item/torch"), "item.torch", 1, {0.95f, 0.72f, 0.30f, 1}});
+        characters.equip(player, 0, EquipSlot::HeldMain);
+        const ActionResult light = characters.perform(player, actionUseHeld());
+        const bool lit = light.performed && light.useKind == ItemUseKind::Toggle &&
+                         light.toggledOn;
+
+        printf("use held: sword %s, apple %s, torch %s (one action, the item decides)\n",
+               struck ? "struck" : "MISSED", ate ? "eaten" : "NOT eaten",
+               lit ? "lit" : "NOT lit");
+
+        actionsOk = vocabulary && jumped && refusedMidAir && landed && peakHeight > 0.4f &&
+                    drewToStrike && struck && cooldownHolds && ate && lit;
+        characters.setCollision(nullptr);  // the walkabout above is a walker
+        *world.transform(player) = walkaboutEnd;
     }
 
     // --- Character persistence (8.9): the walkabout's state rides a real
@@ -544,13 +670,14 @@ int main(int argc, char** argv) {
     engine.shutdown();
 
     const bool ok = captures == 3 && traveled > 15.0f && finalT->yaw > 0.5f &&
-                    guardTraveled > 0.5f && persistenceOk && mechanismsOk && gpuResidual == 0;
+                    guardTraveled > 0.5f && persistenceOk && mechanismsOk && actionsOk &&
+                    gpuResidual == 0;
     if (!ok) {
         fprintf(stderr,
                 "FAIL: captures=%d traveled=%.1f yaw=%.2f guard=%.1f persist=%d "
-                "mechanisms=%d gpuResidual=%zu\n",
+                "mechanisms=%d actions=%d gpuResidual=%zu\n",
                 captures, traveled, finalT->yaw, guardTraveled, persistenceOk, mechanismsOk,
-                gpuResidual);
+                actionsOk, gpuResidual);
         return 1;
     }
     printf("OK\n");

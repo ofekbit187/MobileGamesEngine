@@ -49,6 +49,11 @@ public:
     // --- virtual gameplay controls (5.6), draw-only over the scheme state ---
     void virtualControls(bool stickActive, float stickAnchorX, float stickAnchorY,
                          float stickX, float stickY);
+    // A wax-seal action button, drawn where the CONTROL SCHEME says its touch
+    // zone is (Phase 12) — the drawn seal and the zone that answers a finger
+    // are the same circle by construction. labelKey may be empty.
+    void actionSeal(float centerX, float centerY, float radius, bool pressed,
+                    const char* labelKey);
 
     // Mirrors a logical-LTR rect for the active direction (P11). All widget
     // calls apply this internally; exposed for custom layouts.

@@ -271,14 +271,23 @@ void Ui::virtualControls(bool stickActive, float stickAnchorX, float stickAnchor
     const float knob = ringRadius * 0.38f;
     drawList_.rect({knobX - knob, knobY - knob, knob * 2, knob * 2}, knobColor);
 
-    // Wax-seal action buttons, lower right.
-    const float seal = height_ * 0.085f;
-    float sealColor[4] = {theme_.crimson[0], theme_.crimson[1], theme_.crimson[2], 0.55f};
-    drawList_.rect({width_ * 0.86f, height_ * 0.72f, seal, seal}, sealColor);
-    drawList_.border({width_ * 0.86f, height_ * 0.72f, seal, seal}, 2.0f, ringColor);
-    drawList_.rect({width_ * 0.79f, height_ * 0.82f, seal * 0.75f, seal * 0.75f}, sealColor);
-    drawList_.border({width_ * 0.79f, height_ * 0.82f, seal * 0.75f, seal * 0.75f}, 2.0f,
-                     ringColor);
+}
+
+void Ui::actionSeal(float centerX, float centerY, float radius, bool pressed,
+                    const char* labelKey) {
+    const float size = radius * 1.55f;  // the drawn seal inside the touch circle
+    const UiRect box{centerX - size * 0.5f, centerY - size * 0.5f, size, size};
+    float fill[4] = {theme_.crimson[0], theme_.crimson[1], theme_.crimson[2],
+                     pressed ? 0.95f : 0.55f};
+    float rim[4] = {theme_.gold[0], theme_.gold[1], theme_.gold[2], pressed ? 1.0f : 0.6f};
+    drawList_.rect(box, fill);
+    drawList_.border(box, 2.0f, rim);
+    if (labelKey != nullptr && labelKey[0] != '\0') {
+        // Not mirrored: thumbs don't move with reading direction (§P11), but
+        // the LABEL is a key, so it still reads in the player's language.
+        label({box.x, box.y + size * 0.32f, size, size * 0.4f}, labelKey, 0.5f,
+              TextAlign::Center);
+    }
 }
 
 }  // namespace mge

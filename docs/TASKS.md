@@ -206,15 +206,30 @@ Status legend: `[ ]` not started · `[~]` in progress · `[x]` done
 
 **Exit criteria:** on the phone, the world is solid, a prompt appears when you face something usable, and a tap picks up an item, opens a chest's contents, or makes a villager speak. — *Built and headlessly verified; the on-device confirmation is the owner's next device test.*
 
-## Phase 12 and beyond — held for further dictation
+## Phase 12 — Actions (Dictation 6)
+
+*Goal: a character's vocabulary. Actions are what a character CAN do, granted by what it is — universal for every character, body-level for a humanoid. Jump makes characters leave the ground for the first time; use-held makes one action mean whatever the item in your hands means.*
+
+- [ ] **12.1** Action model: `ActionId` name space, the per-character granted set (seeded with the universal actions at creation, so "every character can interact" needs no flag), `can` / `grant` / `revoke`, and `perform(actor, request) -> ActionResult`. Not-granted and refused-right-now are distinct answers
+- [ ] **12.2** Body-level grants: `humanoidActions()` = walk + jump + use-held, applied when a character is given a humanoid body. Non-humanoids declare their own set and inherit no humanoid assumption
+- [ ] **12.3** Airborne characters: `verticalVelocity` + `grounded` on the character, gravity in a character-level locomotion step, and real vertical resolution in `moveCharacter` — rising hits ceilings, falling lands on what supports you (the seam task 11.2 named)
+- [ ] **12.4** `action/jump`: from the ground only, refused in mid-air; jump strength is a per-character parameter
+- [ ] **12.5** Item-use descriptors: `ItemUse` (kind, cooldown, reach, power, effect, animation key, payload) in a registry keyed by asset id — a data change adds a new kind of tool
+- [ ] **12.6** `action/use_held`: dispatch on what is actually in the hand. Engine performs strike / consume / toggle; reports launch and custom rather than pretending. Empty hand does nothing; a sheathed weapon is drawn first; per-character cooldown refuses a too-early second use
+- [ ] **12.7** Controls: jump and use as first-class touch intents next to move/look/action, so the phone can reach the new actions
+- [ ] **12.8** Tests + `template_game` headless proof + the device build: jump over a crate, swing a sword at a guard, eat an apple, light a torch — one button, three meanings
+
+**Exit criteria:** on the phone, the player jumps, and the same "use" button does something different depending on what is in hand — while every one of those actions is reachable by any character that has it.
+
+## Phase 13 and beyond — held for further dictation
 
 Deliberately not planned yet; known candidates awaiting direction:
 
 - Textures & materials (everything renders flat-shaded today)
 - UI screen flow: screen stack, pause menu, inventory reachable in-game
-- AI expansion (behavior model beyond the v1 state machine, schedules, group behavior) — v1 landed in 8.8
+- AI expansion (behavior model beyond the v1 state machine, schedules, group behavior) — v1 landed in 8.8; *when* a character chooses to perform an action belongs here, not in Phase 12
 - Advanced facial animation (lip-sync, emotes, gaze) — basic set specified in 8.20
-- Physics beyond the v1 collision (dynamics, ragdolls, projectiles)
+- Physics beyond the v1 collision for OBJECTS (pushing, ragdolls, projectiles) — character dynamics landed in 12.3
 - World-authoring/editor tooling
 - Scripting / game-logic authoring model
 - Networking / multiplayer

@@ -5,8 +5,13 @@
 // Scope is deliberately small and honest: STATIC axis-aligned boxes for world
 // geometry, and characters resolved as upright boxes that slide along
 // blockers, step over low ledges, and stand on what's under them. That is
-// what "you cannot walk through a house" needs. Dynamics (falling, pushing,
-// ragdolls, projectiles) are a later phase and are not pretended here.
+// what "you cannot walk through a house" needs.
+//
+// Phase 12 (jump) added the vertical half for CHARACTERS: a move with a
+// vertical component rises until it hits something, falls until something
+// supports it, and reports whether the feet are down. Dynamics for OBJECTS
+// (pushing, ragdolls, projectiles) remain a later phase and are still not
+// pretended here.
 //
 // P1: fixed capacity, no allocation after construction, refuse at the cap.
 // P2: colliders are registered and released with their chunk, so the cost of
@@ -44,6 +49,7 @@ struct MoveResult {
     bool blockedZ = false;
     bool grounded = false;   // standing on ground or on a collider
     bool steppedUp = false;
+    bool hitCeiling = false; // a rise was stopped by something overhead
 };
 
 constexpr int32_t kInvalidCollider = -1;
@@ -70,7 +76,15 @@ public:
                    EntityId ignore = kInvalidEntity) const;
 
     // Resolve a desired movement: slide along what blocks, step over low
-    // ledges, and settle onto whatever supports the feet. Allocation-free.
+    // ledges, and settle vertically. Allocation-free.
+    //
+    // `delta.y` is the difference between a walker and a body with weight:
+    //   == 0  the Phase 11 walker — the feet follow the surface under them,
+    //         up a step and back down off it, never leaving the ground.
+    //   != 0  the caller is doing gravity (task 12.3) — the character rises
+    //         until something overhead stops it and falls until something
+    //         supports it. Step-up applies only to a character that was
+    //         already standing; you cannot climb a ledge from mid-air.
     MoveResult moveCharacter(const Vec3& position, const CharacterShape& shape,
                              const Vec3& delta) const;
 
@@ -88,6 +102,7 @@ private:
     // `supportOut` receives the highest surface under the feet that is close
     // enough to stand on (step-up and support share this scan).
     bool blocked(const Vec3& position, const CharacterShape& shape) const;
+    float supportUnder(const Vec3& position, const CharacterShape& shape) const;
 
     std::vector<Entry> boxes_;
     uint32_t liveCount_ = 0;

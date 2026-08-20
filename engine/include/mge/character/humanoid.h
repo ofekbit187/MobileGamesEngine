@@ -20,6 +20,14 @@
 
 namespace mge {
 
+// --------------------------------------------------- what a humanoid does ---
+// Body tier of the action model (CHARACTERS.md §3.1): a humanoid walks,
+// jumps and uses what is in its hands because a humanoid DOES. Nothing here
+// is universal — a creature that cannot jump simply never asks for this set,
+// and the universal tier (interact) is already on every character.
+
+void grantHumanoidActions(CharacterSystem& characters, EntityId entity);
+
 // ------------------------------------------------------------------- rig ---
 
 enum class Joint : uint8_t {

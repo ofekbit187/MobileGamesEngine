@@ -18,6 +18,10 @@
 #include "mge/framework/world.h"
 
 namespace mge {
+class CharacterSystem;
+}
+
+namespace mge {
 
 struct EngineConfig {
     double fixedStepSeconds = 1.0 / 60.0;
@@ -78,6 +82,11 @@ public:
     // can be handed to the player controller; the engine steers it from touch
     // intents each simulation step. Swap at will.
     void setPlayerEntity(EntityId id) { player_ = id; }
+
+    // Characters registered here have their locomotion resolved INSIDE the
+    // fixed step — gravity, landing and ceilings must not run at frame rate
+    // (task 12.3) — along with their timed state (effects, cooldowns).
+    void setCharacters(CharacterSystem* characters) { characters_ = characters; }
     EntityId playerEntity() const { return player_; }
     TouchControlScheme& controls() { return controls_; }
     // The intents the last simulation step consumed. The game layer reads
@@ -106,6 +115,7 @@ private:
     TouchControlScheme controls_;
     GameplayIntents lastIntents_{};
     EntityId player_ = kInvalidEntity;
+    CharacterSystem* characters_ = nullptr;
     InputQueue inputQueue_;
     TouchEvent lastTouch_;
     EngineStats stats_;
