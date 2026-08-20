@@ -10,6 +10,12 @@ male base mesh. THE GEOMETRY IS NOT MODIFIED. This script only:
 
   1. places it (180 deg yaw so it faces the engine's -Z, uniform scale to
      1.75 m, soles on the ground, centred on the mid-line)
+  1b. repacks its UV chart from the source's 24-tile UDIM layout into the
+     single [0,1] tile with the halves DISJOINT (ADR 0010). Mechanical, via
+     tools/model/repack_uv.py — islands move as units, nothing is split, no
+     seam is cut, vertex order is untouched. This is not a tidy-up: a UDIM
+     layout has no representation in the uint16 vertex UV (B-3), so without it
+     the hardened importer refuses the body outright.
   2. builds the engine's canonical 17-joint rig AT THE MESH'S OWN JOINTS —
      the rig is fitted to the model, never the model bent onto the rig
   3. skins it with bone-heat weights, clamped to four influences and pruned
@@ -43,6 +49,7 @@ from mathutils.bvhtree import BVHTree
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import humanoid_morphs
+import repack_uv
 
 HEIGHT = 1.75
 LOD_TRIANGLES = (2200, 1200, 560)
@@ -240,7 +247,7 @@ def _bone_tail(name):
     return pos[child[name]] if name in child else pos[name]
 
 
-def duplicate_reduced(obj, arm, name, target):
+def duplicate_reduced(obj, arm, name, target, morphs=True):
     dup = obj.copy()
     dup.data = obj.data.copy()
     dup.name = name
@@ -254,11 +261,17 @@ def duplicate_reduced(obj, arm, name, target):
     activate(dup)
     bpy.ops.object.shade_smooth()
     # After the reduction, never before: Blender refuses to apply a decimate
-    # modifier to a mesh that already carries shape keys.
-    humanoid_morphs.add_shape_keys(
-        dup, bones={name: (Vector(_bone_head(name)), Vector(_bone_tail(name)))
-                    for name in humanoid_morphs.LIMB_BONES})
+    # modifier to a mesh that already carries shape keys. `morphs=False` defers
+    # them entirely, which is what lets one LOD be decimated out of another.
+    if morphs:
+        add_morphs(dup)
     return dup
+
+
+def add_morphs(obj):
+    humanoid_morphs.add_shape_keys(
+        obj, bones={name: (Vector(_bone_head(name)), Vector(_bone_tail(name)))
+                    for name in humanoid_morphs.LIMB_BONES})
 
 
 # --------------------------------------------------------------- weights ----
@@ -891,6 +904,13 @@ def build_garment(body, arm, bvh, name, layer, budget, rules, covers, under=None
     source.data = body.data.copy()
     source.name = "GarmentSource_" + name
     bpy.context.collection.objects.link(source)
+    # The body carries the variation morphs by now, and decimation refuses a
+    # mesh with shape keys. The garment does not want them anyway: a garment
+    # follows a morphed body through the fitting pipeline's re-fit (13.4), not
+    # by carrying the body's own shape keys.
+    if source.data.shape_keys:
+        activate(source)
+        bpy.ops.object.shape_key_remove(all=True)
     reduce_to(source, max(120, int(triangles(body) * target / float(share))))
     clamp_influences(source)
     prune_far_influences(source, arm)
@@ -1002,7 +1022,14 @@ def render_views(cam, outdir, tag, views=None, ortho=1.95, target=(0, 0, 0.88)):
     views = views or (("front", 0.0), ("threequarter", 40.0), ("side", 90.0))
     for name, angle in views:
         a = math.radians(angle)
-        cam.location = tgt + Vector((math.sin(a) * 3.0, -math.cos(a) * 3.0, 0.0))
+        # +Y, not -Y. The body is placed facing Blender +Y (engine -Z, its
+        # forward), so a camera on -Y stands BEHIND it: every "front" preview
+        # this script has ever written was actually the back. Harmless to the
+        # assets, corrosive to the review — these renders are the evidence the
+        # owner's aesthetic gate is judged on, and it was being handed the
+        # wrong side. Verified against the engine's own body_preview sheet,
+        # which renders the same body facing the camera.
+        cam.location = tgt + Vector((math.sin(a) * 3.0, math.cos(a) * 3.0, 0.0))
         cam.rotation_euler = (tgt - cam.location).to_track_quat('-Z', 'Y').to_euler()
         scene.render.filepath = os.path.join(outdir, "blender_%s_%s.png" % (tag, name))
         bpy.ops.render.render(write_still=True)
@@ -1025,12 +1052,38 @@ def main():
         raise RuntimeError("%d skin influences survived the prune" % leaks)
 
     exported = []
-    lods = [duplicate_reduced(body, arm, "Body_LOD%d" % i, t)
-            for i, t in enumerate(LOD_TRIANGLES)]
+    # The chart is packed on LOD0, and LOD1/LOD2 are decimated OUT OF LOD0 so
+    # they inherit it.
+    #
+    # Packing the full-resolution body instead looks equivalent and is not.
+    # Which region a triangle belongs to is decided from the bone that moves
+    # it, and decimation moves weights: a chart packed on the 21 160-triangle
+    # base and measured on the 2 200-triangle LOD0 disagrees about a handful of
+    # triangles near every region seam. A handful is enough, because
+    # `chart_islands_disjoint` compares region BOUNDING BOXES — one stray
+    # triangle stretches a region's box across the sheet. Measured: 0 of 55
+    # region pairs overlapped on the base mesh, and 45 of 55 overlapped on the
+    # LOD0 imported from it. Packing the mesh the gate actually measures is the
+    # only version of this that holds.
+    lods = [duplicate_reduced(body, arm, "Body_LOD0", LOD_TRIANGLES[0], morphs=False)]
+    uv = repack_uv.repack_by_region(lods[0], REGION_OF_BONE)
+    print("   uv chart: %d regions, %.1f%% of the tile used, %.0f px/m at "
+          "1024^2, %d loops outside, %.1f%% of the halves' texels shared"
+          % (uv['regions'], uv['covered'] * 100.0, uv['density'],
+             uv['outside'], uv['shared_frac'] * 100.0))
+    for level in (1, 2):
+        lods.append(duplicate_reduced(lods[level - 1], arm, "Body_LOD%d" % level,
+                                      LOD_TRIANGLES[level], morphs=False))
+    for lod in lods:
+        add_morphs(lod)
     for level, lod in enumerate(lods):
         health(lod, "LOD%d" % level)
         if weight_report(lod, arm) > 0:
             raise RuntimeError("LOD%d skin weights leak" % level)
+        # Decimation moves the surviving UVs slightly; the guard band exists so
+        # they cannot leave the tile. Checked here so the pipeline names the
+        # mesh, instead of the importer refusing the body three steps later.
+        repack_uv.assert_inside_tile(lod, "LOD%d" % level)
         path = os.path.join(outdir, "humanoid_template_lod%d.glb" % level)
         export(lod, arm, path)
         exported.append((path, triangles(lod)))
