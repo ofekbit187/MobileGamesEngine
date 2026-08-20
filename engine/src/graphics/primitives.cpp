@@ -6,13 +6,34 @@ namespace mge {
 
 namespace {
 
+// UVs are in METRES of surface (mesh_data.h): the quad is projected onto the
+// two axes it actually spans, so a 4 m x 3 m wall comes out u = 0..4, v = 0..3
+// and one tiling material covers it at a uniform texel density. Projecting on
+// the dominant-normal axis pair is exact for an axis-aligned quad, which every
+// primitive face here is.
+void planarUv(const Vec3& normal, const Vec3& p, float& u, float& v) {
+    const float ax = std::fabs(normal.x), ay = std::fabs(normal.y), az = std::fabs(normal.z);
+    if (ax >= ay && ax >= az) {
+        u = p.z;
+        v = p.y;
+    } else if (ay >= az) {
+        u = p.x;
+        v = p.z;
+    } else {
+        u = p.x;
+        v = p.y;
+    }
+}
+
 void addQuad(MeshData& mesh, const Vec3& a, const Vec3& b, const Vec3& c, const Vec3& d,
              const Vec3& normal) {
     const uint32_t base = static_cast<uint32_t>(mesh.vertices.size());
-    mesh.vertices.push_back({a, normal});
-    mesh.vertices.push_back({b, normal});
-    mesh.vertices.push_back({c, normal});
-    mesh.vertices.push_back({d, normal});
+    const Vec3 corners[4] = {a, b, c, d};
+    for (const Vec3& p : corners) {
+        Vertex vertex{p, normal, {0, 0}};
+        planarUv(normal, p, vertex.uv[0], vertex.uv[1]);
+        mesh.vertices.push_back(vertex);
+    }
     // CCW winding seen from the normal side.
     mesh.indices.insert(mesh.indices.end(), {base, base + 1, base + 2, base, base + 2, base + 3});
 }
@@ -41,8 +62,10 @@ MeshData makeCylinder(float radius, float height, int segments) {
     for (int i = 0; i <= segments; ++i) {
         const float a = static_cast<float>(i) / segments * 2.0f * kPi;
         const Vec3 n{std::cos(a), 0, std::sin(a)};
-        m.vertices.push_back({{n.x * radius, -h, n.z * radius}, n});
-        m.vertices.push_back({{n.x * radius, h, n.z * radius}, n});
+        // u wraps the circumference in metres, v runs the height in metres.
+        const float u = a * radius;
+        m.vertices.push_back({{n.x * radius, -h, n.z * radius}, n, {u, 0}});
+        m.vertices.push_back({{n.x * radius, h, n.z * radius}, n, {u, height}});
     }
     for (int i = 0; i < segments; ++i) {
         const uint32_t b = static_cast<uint32_t>(i * 2);
@@ -54,10 +77,11 @@ MeshData makeCylinder(float radius, float height, int segments) {
         const float yv = cap == 0 ? h : -h;
         const Vec3 n{0, cap == 0 ? 1.0f : -1.0f, 0};
         const uint32_t center = static_cast<uint32_t>(m.vertices.size());
-        m.vertices.push_back({{0, yv, 0}, n});
+        m.vertices.push_back({{0, yv, 0}, n, {0, 0}});
         for (int i = 0; i <= segments; ++i) {
             const float a = static_cast<float>(i) / segments * 2.0f * kPi;
-            m.vertices.push_back({{std::cos(a) * radius, yv, std::sin(a) * radius}, n});
+            m.vertices.push_back({{std::cos(a) * radius, yv, std::sin(a) * radius}, n,
+                                  {std::cos(a) * radius, std::sin(a) * radius}});
         }
         for (int i = 0; i < segments; ++i) {
             const uint32_t v0 = center + 1 + i, v1 = center + 2 + i;
@@ -88,7 +112,9 @@ MeshData makeCapsule(float radius, float height, int segments, int rings) {
         for (int s = 0; s <= segments; ++s) {
             const float a = static_cast<float>(s) / segments * 2.0f * kPi;
             const Vec3 n{sp * std::cos(a), cp, sp * std::sin(a)};
-            m.vertices.push_back({{n.x * radius, n.y * radius + yOffset, n.z * radius}, n});
+            m.vertices.push_back({{n.x * radius, n.y * radius + yOffset, n.z * radius}, n,
+                                  {std::atan2(n.z, n.x) * radius,
+                                   n.y * radius + yOffset}});
         }
     }
     const int stride = segments + 1;
@@ -109,7 +135,7 @@ void appendMesh(MeshData& dst, const MeshData& src, const Vec3& offset) {
     const uint32_t base = static_cast<uint32_t>(dst.vertices.size());
     dst.vertices.reserve(dst.vertices.size() + src.vertices.size());
     for (const Vertex& v : src.vertices) {
-        dst.vertices.push_back({v.position + offset, v.normal});
+        dst.vertices.push_back({v.position + offset, v.normal, {v.uv[0], v.uv[1]}});
     }
     dst.indices.reserve(dst.indices.size() + src.indices.size());
     for (uint32_t index : src.indices) dst.indices.push_back(base + index);

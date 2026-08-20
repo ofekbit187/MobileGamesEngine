@@ -14,6 +14,7 @@ layout(push_constant) uniform DrawData {
     mat4 model;
     vec4 baseColor;   // placeholder tint
     vec4 params;      // x: hatch scale (stripes per meter)
+    vec4 material;    // unused here; keeps one push-constant layout engine-wide
 } draw;
 
 layout(location = 0) in vec3 inWorldPos;

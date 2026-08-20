@@ -26,13 +26,17 @@ struct FrameData {
     float cameraPos[4];
 };
 
-// Must match the shader-side push-constant block (96 bytes <= min spec 128).
+// Must match the shader-side push-constant block (112 bytes <= min spec 128).
 struct DrawPush {
     float model[16];
     float baseColor[4];
     float params[4];
+    // x = roughness fallback, y = AO fallback, z = 1 when a packed map is
+    // bound, w = UV scale. The fallbacks are what makes a one-fetch material
+    // ordinary rather than a special case (docs/TEXTURING.md §3).
+    float material[4];
 };
-static_assert(sizeof(DrawPush) == 96, "push constant layout is a shader contract");
+static_assert(sizeof(DrawPush) == 112, "push constant layout is a shader contract");
 
 // One skinning slot as the shader sees it: `mat4 joints[17]` followed by
 // `vec4 morphWeights[4]`. The weights ride alongside the palette because they
@@ -98,7 +102,15 @@ bool Renderer::init(const RendererConfig& config) {
         return false;
     }
 
-    MGE_LOGI(kTag, "renderer ready %ux%u", config_.width, config_.height);
+    // Needs the command buffer and fence above: uploading the 1x1 white
+    // texture is a real transfer submit.
+    if (!createDefaultMaterial()) {
+        shutdown();
+        return false;
+    }
+
+    MGE_LOGI(kTag, "renderer ready %ux%u (%s texture pack)", config_.width, config_.height,
+             texturePackName(device_.preferredTexturePack()));
     return true;
 }
 
@@ -150,6 +162,16 @@ void Renderer::shutdown() {
     if (pipelineLayout_ != VK_NULL_HANDLE) vkDestroyPipelineLayout(vk, pipelineLayout_, nullptr);
     litPipeline_ = placeholderPipeline_ = VK_NULL_HANDLE;
     pipelineLayout_ = VK_NULL_HANDLE;
+
+    destroyMaterial(defaultMaterial_);
+    destroyTexture(whiteTexture_);
+    if (textureSampler_ != VK_NULL_HANDLE) vkDestroySampler(vk, textureSampler_, nullptr);
+    if (materialPool_ != VK_NULL_HANDLE) vkDestroyDescriptorPool(vk, materialPool_, nullptr);
+    if (materialSetLayout_ != VK_NULL_HANDLE)
+        vkDestroyDescriptorSetLayout(vk, materialSetLayout_, nullptr);
+    textureSampler_ = VK_NULL_HANDLE;
+    materialPool_ = VK_NULL_HANDLE;
+    materialSetLayout_ = VK_NULL_HANDLE;
 
     destroyBuffer(emptyMorphBuffer_, emptyMorphMemory_, emptyMorphMemorySize_);
     if (morphPool_ != VK_NULL_HANDLE) vkDestroyDescriptorPool(vk, morphPool_, nullptr);
@@ -397,6 +419,50 @@ bool Renderer::createDescriptors() {
     emptyWrite.descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
     emptyWrite.pBufferInfo = &emptyInfo;
     vkUpdateDescriptorSets(vk, 1, &emptyWrite, 0, nullptr);
+
+    // Set 2: the material — albedo and packed, two combined image samplers.
+    // Two fetches is the ceiling the standard sets (TEXTURING §3).
+    VkDescriptorSetLayoutBinding materialBindings[2]{};
+    for (int i = 0; i < 2; ++i) {
+        materialBindings[i].binding = static_cast<uint32_t>(i);
+        materialBindings[i].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+        materialBindings[i].descriptorCount = 1;
+        materialBindings[i].stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
+    }
+    VkDescriptorSetLayoutCreateInfo materialLayoutInfo{};
+    materialLayoutInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
+    materialLayoutInfo.bindingCount = 2;
+    materialLayoutInfo.pBindings = materialBindings;
+    if (vkCreateDescriptorSetLayout(vk, &materialLayoutInfo, nullptr, &materialSetLayout_) !=
+        VK_SUCCESS) {
+        return false;
+    }
+
+    VkDescriptorPoolSize materialPoolSize{VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
+                                          (kMaxMaterials + 1) * 2};
+    VkDescriptorPoolCreateInfo materialPoolInfo{};
+    materialPoolInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
+    materialPoolInfo.flags = VK_DESCRIPTOR_POOL_CREATE_FREE_DESCRIPTOR_SET_BIT;
+    materialPoolInfo.maxSets = kMaxMaterials + 1;  // + the default material
+    materialPoolInfo.poolSizeCount = 1;
+    materialPoolInfo.pPoolSizes = &materialPoolSize;
+    if (vkCreateDescriptorPool(vk, &materialPoolInfo, nullptr, &materialPool_) != VK_SUCCESS)
+        return false;
+
+    // Bilinear + mips is the default: trilinear costs 2x on Mali-class
+    // hardware, and aniso is used surgically per material rather than
+    // globally (TEXTURING §7). Repeat addressing, because world materials tile.
+    VkSamplerCreateInfo samplerInfo{};
+    samplerInfo.sType = VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO;
+    samplerInfo.magFilter = VK_FILTER_LINEAR;
+    samplerInfo.minFilter = VK_FILTER_LINEAR;
+    samplerInfo.mipmapMode = VK_SAMPLER_MIPMAP_MODE_NEAREST;
+    samplerInfo.addressModeU = VK_SAMPLER_ADDRESS_MODE_REPEAT;
+    samplerInfo.addressModeV = VK_SAMPLER_ADDRESS_MODE_REPEAT;
+    samplerInfo.addressModeW = VK_SAMPLER_ADDRESS_MODE_REPEAT;
+    samplerInfo.maxLod = VK_LOD_CLAMP_NONE;
+    if (vkCreateSampler(vk, &samplerInfo, nullptr, &textureSampler_) != VK_SUCCESS)
+        return false;
     return true;
 }
 
@@ -416,12 +482,14 @@ bool Renderer::createPipelines() {
     VkPushConstantRange pushRange{};
     pushRange.stageFlags = VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT;
     pushRange.size = sizeof(DrawPush);
-    // Set 0 is per frame and per character; set 1 is per mesh (morph deltas).
-    // The unskinned pipelines share this layout and simply never use set 1.
-    const VkDescriptorSetLayout setLayouts[2] = {setLayout_, morphSetLayout_};
+    // Set 0 is per frame and per character; set 1 is per mesh (morph deltas);
+    // set 2 is per material. Pipelines that do not use a set simply never
+    // reference it.
+    const VkDescriptorSetLayout setLayouts[3] = {setLayout_, morphSetLayout_,
+                                                 materialSetLayout_};
     VkPipelineLayoutCreateInfo layoutInfo{};
     layoutInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
-    layoutInfo.setLayoutCount = 2;
+    layoutInfo.setLayoutCount = 3;
     layoutInfo.pSetLayouts = setLayouts;
     layoutInfo.pushConstantRangeCount = 1;
     layoutInfo.pPushConstantRanges = &pushRange;
@@ -439,15 +507,17 @@ bool Renderer::createPipelines() {
 
     VkVertexInputBindingDescription vertexBinding{0, sizeof(Vertex),
                                                   VK_VERTEX_INPUT_RATE_VERTEX};
-    VkVertexInputAttributeDescription vertexAttributes[2]{};
+    VkVertexInputAttributeDescription vertexAttributes[3]{};
     vertexAttributes[0] = {0, 0, VK_FORMAT_R32G32B32_SFLOAT, offsetof(Vertex, position)};
     vertexAttributes[1] = {1, 0, VK_FORMAT_R32G32B32_SFLOAT, offsetof(Vertex, normal)};
+    // Float UV, because world geometry tiles past the unit square (mesh_data.h).
+    vertexAttributes[2] = {2, 0, VK_FORMAT_R32G32_SFLOAT, offsetof(Vertex, uv)};
 
     VkPipelineVertexInputStateCreateInfo vertexInput{};
     vertexInput.sType = VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO;
     vertexInput.vertexBindingDescriptionCount = 1;
     vertexInput.pVertexBindingDescriptions = &vertexBinding;
-    vertexInput.vertexAttributeDescriptionCount = 2;
+    vertexInput.vertexAttributeDescriptionCount = 3;
     vertexInput.pVertexAttributeDescriptions = vertexAttributes;
 
     VkPipelineInputAssemblyStateCreateInfo inputAssembly{};
@@ -500,7 +570,7 @@ bool Renderer::createPipelines() {
     VkVertexInputAttributeDescription skinnedAttributes[5]{};
     skinnedAttributes[0] = {0, 0, VK_FORMAT_R32G32B32_SFLOAT, offsetof(SkinVertex, position)};
     skinnedAttributes[1] = {1, 0, VK_FORMAT_R32G32B32_SFLOAT, offsetof(SkinVertex, normal)};
-    skinnedAttributes[2] = {2, 0, VK_FORMAT_R16G16_UNORM, offsetof(SkinVertex, uv)};
+    skinnedAttributes[2] = {2, 0, VK_FORMAT_R16G16_UNORM, offsetof(SkinVertex, uv)};  // 0..1 chart
     skinnedAttributes[3] = {3, 0, VK_FORMAT_R8G8B8A8_UINT, offsetof(SkinVertex, joints)};
     skinnedAttributes[4] = {4, 0, VK_FORMAT_R8G8B8A8_UNORM, offsetof(SkinVertex, weights)};
     VkPipelineVertexInputStateCreateInfo skinnedInput{};
@@ -550,6 +620,212 @@ bool Renderer::createPipelines() {
     vkDestroyShaderModule(vk, litFrag, nullptr);
     vkDestroyShaderModule(vk, placeholderFrag, nullptr);
     return ok;
+}
+
+// ------------------------------------------------------------- textures ----
+
+bool Renderer::uploadTexture(const TextureData& data, GpuTexture& out) {
+    const char* reason = "";
+    if (!validateTexture(data, &reason)) {
+        MGE_LOGE(kTag, "refused texture upload: %s", reason);
+        return false;
+    }
+    if (!device_.supportsTextureFormat(data.format)) {
+        // Refuse rather than silently substituting a format: a device that
+        // cannot sample this pack was shipped the wrong pack, and quietly
+        // decoding it at runtime is exactly the cost the format exists to
+        // avoid (docs/TEXTURING.md §4).
+        MGE_LOGE(kTag, "device cannot sample %s — wrong texture pack for this device",
+                 textureFormatName(data.format));
+        return false;
+    }
+    VkDevice vk = device_.device();
+
+    const VkFormat format = toVkFormat(data.format, data.colorSpace);
+    VkImageCreateInfo imageInfo{};
+    imageInfo.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
+    imageInfo.imageType = VK_IMAGE_TYPE_2D;
+    imageInfo.format = format;
+    imageInfo.extent = {data.width, data.height, 1};
+    imageInfo.mipLevels = static_cast<uint32_t>(data.mips.size());
+    imageInfo.arrayLayers = 1;
+    imageInfo.samples = VK_SAMPLE_COUNT_1_BIT;
+    imageInfo.tiling = VK_IMAGE_TILING_OPTIMAL;
+    imageInfo.usage = VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT;
+    imageInfo.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+    if (vkCreateImage(vk, &imageInfo, nullptr, &out.image) != VK_SUCCESS) return false;
+
+    VkMemoryRequirements requirements;
+    vkGetImageMemoryRequirements(vk, out.image, &requirements);
+    // The TEXTURE budget, not the general GPU one.
+    out.memory = device_.allocateTexture(requirements, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
+    if (out.memory == VK_NULL_HANDLE) {
+        MGE_LOGW(kTag, "texture budget refused %zu KiB",
+                 static_cast<size_t>(requirements.size) / 1024);
+        vkDestroyImage(vk, out.image, nullptr);
+        out.image = VK_NULL_HANDLE;
+        return false;  // caller degrades — caps refuse, they never grow
+    }
+    out.memorySize = requirements.size;
+    vkBindImageMemory(vk, out.image, out.memory, 0);
+
+    // Staging: the whole baked payload goes up in one copy list, one region
+    // per mip. The bytes are already in their final GPU format — no decode,
+    // no mip generation, nothing but a transfer (TEXTURING §7).
+    VkBuffer staging = VK_NULL_HANDLE;
+    VkDeviceMemory stagingMemory = VK_NULL_HANDLE;
+    VkDeviceSize stagingSize = 0;
+    if (!createBuffer(data.pixels.size(), VK_BUFFER_USAGE_TRANSFER_SRC_BIT, staging,
+                      stagingMemory, stagingSize)) {
+        destroyTexture(out);
+        return false;
+    }
+    void* mapped = nullptr;
+    vkMapMemory(vk, stagingMemory, 0, data.pixels.size(), 0, &mapped);
+    memcpy(mapped, data.pixels.data(), data.pixels.size());
+    vkUnmapMemory(vk, stagingMemory);
+
+    std::vector<VkBufferImageCopy> regions(data.mips.size());
+    for (size_t i = 0; i < data.mips.size(); ++i) {
+        const TextureMip& mip = data.mips[i];
+        VkBufferImageCopy& region = regions[i];
+        region = VkBufferImageCopy{};
+        region.bufferOffset = mip.offset;
+        region.imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, static_cast<uint32_t>(i), 0, 1};
+        region.imageExtent = {mip.width, mip.height, 1};
+    }
+
+    vkResetCommandBuffer(commandBuffer_, 0);
+    VkCommandBufferBeginInfo beginInfo{};
+    beginInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
+    vkBeginCommandBuffer(commandBuffer_, &beginInfo);
+    VkImageMemoryBarrier toDst{};
+    toDst.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+    toDst.dstAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+    toDst.oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+    toDst.newLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+    toDst.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+    toDst.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+    toDst.image = out.image;
+    toDst.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0,
+                              static_cast<uint32_t>(data.mips.size()), 0, 1};
+    vkCmdPipelineBarrier(commandBuffer_, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
+                         VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0, nullptr, 0, nullptr, 1, &toDst);
+    vkCmdCopyBufferToImage(commandBuffer_, staging, out.image,
+                           VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                           static_cast<uint32_t>(regions.size()), regions.data());
+    VkImageMemoryBarrier toRead = toDst;
+    toRead.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+    toRead.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
+    toRead.oldLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+    toRead.newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+    vkCmdPipelineBarrier(commandBuffer_, VK_PIPELINE_STAGE_TRANSFER_BIT,
+                         VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT | VK_PIPELINE_STAGE_VERTEX_SHADER_BIT,
+                         0, 0, nullptr, 0, nullptr, 1, &toRead);
+    vkEndCommandBuffer(commandBuffer_);
+    VkSubmitInfo submit{};
+    submit.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
+    submit.commandBufferCount = 1;
+    submit.pCommandBuffers = &commandBuffer_;
+    vkResetFences(vk, 1, &fence_);
+    vkQueueSubmit(device_.graphicsQueue(), 1, &submit, fence_);
+    vkWaitForFences(vk, 1, &fence_, VK_TRUE, UINT64_MAX);
+    vkDestroyBuffer(vk, staging, nullptr);
+    device_.free(stagingMemory, stagingSize);
+
+    VkImageViewCreateInfo viewInfo{};
+    viewInfo.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
+    viewInfo.image = out.image;
+    viewInfo.viewType = VK_IMAGE_VIEW_TYPE_2D;
+    viewInfo.format = format;
+    viewInfo.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0,
+                                 static_cast<uint32_t>(data.mips.size()), 0, 1};
+    if (vkCreateImageView(vk, &viewInfo, nullptr, &out.view) != VK_SUCCESS) {
+        destroyTexture(out);
+        return false;
+    }
+
+    out.width = data.width;
+    out.height = data.height;
+    out.mipLevels = static_cast<uint32_t>(data.mips.size());
+    out.format = data.format;
+    out.colorSpace = data.colorSpace;
+    return true;
+}
+
+void Renderer::destroyTexture(GpuTexture& texture) {
+    VkDevice vk = device_.device();
+    if (vk == VK_NULL_HANDLE) return;
+    if (texture.view != VK_NULL_HANDLE) vkDestroyImageView(vk, texture.view, nullptr);
+    if (texture.image != VK_NULL_HANDLE) vkDestroyImage(vk, texture.image, nullptr);
+    device_.freeTexture(texture.memory, texture.memorySize);
+    texture = GpuTexture{};
+}
+
+bool Renderer::createMaterial(const GpuTexture* albedo, const GpuTexture* packed,
+                              GpuMaterial& out) {
+    if (materialPool_ == VK_NULL_HANDLE) return false;
+    VkDevice vk = device_.device();
+
+    VkDescriptorSetAllocateInfo allocInfo{};
+    allocInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
+    allocInfo.descriptorPool = materialPool_;
+    allocInfo.descriptorSetCount = 1;
+    allocInfo.pSetLayouts = &materialSetLayout_;
+    if (vkAllocateDescriptorSets(vk, &allocInfo, &out.set) != VK_SUCCESS) {
+        MGE_LOGW(kTag, "material pool exhausted (cap %u materials)", kMaxMaterials);
+        out.set = VK_NULL_HANDLE;
+        return false;
+    }
+
+    // Both slots always point at something real: an absent map resolves to the
+    // 1x1 white texture, so the shader has one code path and the pipeline has
+    // one permutation.
+    const GpuTexture* albedoTexture = albedo != nullptr && albedo->valid() ? albedo
+                                                                          : &whiteTexture_;
+    const GpuTexture* packedTexture = packed != nullptr && packed->valid() ? packed
+                                                                          : &whiteTexture_;
+    VkDescriptorImageInfo images[2] = {
+        {textureSampler_, albedoTexture->view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL},
+        {textureSampler_, packedTexture->view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL},
+    };
+    VkWriteDescriptorSet writes[2]{};
+    for (int i = 0; i < 2; ++i) {
+        writes[i].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+        writes[i].dstSet = out.set;
+        writes[i].dstBinding = static_cast<uint32_t>(i);
+        writes[i].descriptorCount = 1;
+        writes[i].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+        writes[i].pImageInfo = &images[i];
+    }
+    vkUpdateDescriptorSets(vk, 2, writes, 0, nullptr);
+
+    out.albedo = albedo;
+    out.packed = packed;
+    return true;
+}
+
+void Renderer::destroyMaterial(GpuMaterial& material) {
+    if (material.set != VK_NULL_HANDLE && materialPool_ != VK_NULL_HANDLE) {
+        vkFreeDescriptorSets(device_.device(), materialPool_, 1, &material.set);
+    }
+    material = GpuMaterial{};
+}
+
+bool Renderer::createDefaultMaterial() {
+    // A 1x1 white texture with a full (single-level) mip chain. Every material
+    // slot that has no map points here, which is what keeps "textured" and
+    // "untextured" the same pipeline.
+    TextureData white;
+    white.width = 1;
+    white.height = 1;
+    white.format = TextureFormat::Rgba8;
+    white.colorSpace = ColorSpace::Srgb;
+    white.usage = TextureUsage::Albedo;
+    white.pixels = {255, 255, 255, 255};
+    white.mips.push_back(TextureMip{1, 1, 0, 4});
+    if (!uploadTexture(white, whiteTexture_)) return false;
+    return createMaterial(nullptr, nullptr, defaultMaterial_);
 }
 
 bool Renderer::createUiPipeline() {
@@ -1073,6 +1349,7 @@ void Renderer::recordDrawItems(const Camera& camera, const DrawItem* items, size
                                bool cull, RenderStats* stats) {
     const Frustum frustum = Frustum::fromViewProj(camera.viewProj());
     VkPipeline boundPipeline = VK_NULL_HANDLE;
+    VkDescriptorSet boundMaterial = VK_NULL_HANDLE;
     for (size_t i = 0; i < count; ++i) {
         const DrawItem& item = items[i];
         if (item.mesh == nullptr || item.mesh->lods.empty()) continue;
@@ -1093,10 +1370,24 @@ void Renderer::recordDrawItems(const Camera& camera, const DrawItem* items, size
             boundPipeline = wanted;
         }
 
+        // The material's textures. Every draw binds one: an item without a
+        // surface gets the default white, so there is no untextured pipeline.
+        const GpuMaterial* surface =
+            item.surface != nullptr && item.surface->valid() ? item.surface : &defaultMaterial_;
+        if (surface->set != boundMaterial) {
+            vkCmdBindDescriptorSets(commandBuffer_, VK_PIPELINE_BIND_POINT_GRAPHICS,
+                                    pipelineLayout_, 2, 1, &surface->set, 0, nullptr);
+            boundMaterial = surface->set;
+        }
+
         DrawPush push{};
         memcpy(push.model, item.model.m, sizeof(push.model));
         memcpy(push.baseColor, item.baseColor, sizeof(push.baseColor));
         memcpy(push.params, item.params, sizeof(push.params));
+        push.material[0] = surface->roughness;
+        push.material[1] = surface->ao;
+        push.material[2] = surface->packed != nullptr && surface->packed->valid() ? 1.0f : 0.0f;
+        push.material[3] = surface->uvScale;
         vkCmdPushConstants(commandBuffer_, pipelineLayout_,
                            VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 0,
                            sizeof(push), &push);
@@ -1115,6 +1406,7 @@ void Renderer::recordSkinnedItems(const Camera& camera, const SkinnedDrawItem* i
     const Frustum frustum = Frustum::fromViewProj(camera.viewProj());
     vkCmdBindPipeline(commandBuffer_, VK_PIPELINE_BIND_POINT_GRAPHICS, skinnedPipeline_);
     VkDescriptorSet boundMorphSet = VK_NULL_HANDLE;
+    VkDescriptorSet boundMaterial = VK_NULL_HANDLE;
 
     for (size_t i = 0; i < count; ++i) {
         const SkinnedDrawItem& item = items[i];
@@ -1131,6 +1423,12 @@ void Renderer::recordSkinnedItems(const Camera& camera, const SkinnedDrawItem* i
         vkCmdBindDescriptorSets(commandBuffer_, VK_PIPELINE_BIND_POINT_GRAPHICS,
                                 pipelineLayout_, 0, 1, &descriptorSet_, 2, offsets);
 
+        if (defaultMaterial_.set != boundMaterial) {
+            vkCmdBindDescriptorSets(commandBuffer_, VK_PIPELINE_BIND_POINT_GRAPHICS,
+                                    pipelineLayout_, 2, 1, &defaultMaterial_.set, 0, nullptr);
+            boundMaterial = defaultMaterial_.set;
+        }
+
         // The mesh's shared deltas. A crowd on one mesh binds this once.
         const bool morphed = item.mesh->hasMorphs() && item.morphWeights != nullptr;
         VkDescriptorSet morphSet = morphed ? item.mesh->morphSet : emptyMorphSet_;
@@ -1144,6 +1442,12 @@ void Renderer::recordSkinnedItems(const Camera& camera, const SkinnedDrawItem* i
         memcpy(push.model, item.model.m, sizeof(push.model));
         memcpy(push.baseColor, item.baseColor, sizeof(push.baseColor));
         push.params[0] = morphed ? 1.0f : 0.0f;  // run the shape pass
+        // Characters are not textured yet — the body's UV chart is refused
+        // (docs/research/uv-audit.md) — so they draw against the default white
+        // material and their base colour, exactly as before.
+        push.material[0] = defaultMaterial_.roughness;
+        push.material[1] = defaultMaterial_.ao;
+        push.material[3] = 1.0f;
         vkCmdPushConstants(commandBuffer_, pipelineLayout_,
                            VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 0,
                            sizeof(push), &push);

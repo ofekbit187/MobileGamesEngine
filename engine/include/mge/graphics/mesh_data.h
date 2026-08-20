@@ -11,11 +11,25 @@
 
 namespace mge {
 
+// 32 bytes: position, normal, and a texture coordinate.
+//
+// UV is float, not the normalized uint16 the skinned vertex uses (B-3), for
+// one reason: static world geometry TILES. A four-metre plank wall wants
+// u = 0..4 so one authored 512² material repeats across it, and a chart
+// clamped to the unit tile cannot say that — which is exactly the defect
+// docs/research/uv-audit.md found on the body. Quantizing this stream is
+// `.mgemesh` v2 work (task 2.4) and must keep tiling representable.
+//
+// The convention for engine-generated geometry is METRES: one unit of UV is
+// one metre of surface, so texel density is uniform across every primitive
+// without the caller thinking about it, and a material scales the rate it
+// wants (docs/TEXTURING.md §5.1).
 struct Vertex {
     Vec3 position;
     Vec3 normal;
+    float uv[2] = {0, 0};
 };
-static_assert(sizeof(Vertex) == 24, "vertex layout is part of the pipeline contract");
+static_assert(sizeof(Vertex) == 32, "vertex layout is part of the pipeline contract");
 
 struct MeshData {
     std::vector<Vertex> vertices;

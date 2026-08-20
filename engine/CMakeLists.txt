@@ -26,6 +26,8 @@ add_library(mge_core STATIC
     src/audio/mixer.cpp
     src/graphics/primitives.cpp
     src/graphics/mesh_io.cpp
+    src/graphics/texture_data.cpp
+    src/graphics/texture_io.cpp
     src/streaming/world_file.cpp
     src/streaming/streaming_manager.cpp
     src/ui/text.cpp

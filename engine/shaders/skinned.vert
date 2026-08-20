@@ -52,6 +52,7 @@ layout(push_constant) uniform DrawData {
     mat4 model;
     vec4 baseColor;
     vec4 params;  // x != 0: this draw carries morph targets and weights
+    vec4 material;  // unused here; keeps one push-constant layout engine-wide
 } draw;
 
 layout(location = 0) in vec3 inPosition;

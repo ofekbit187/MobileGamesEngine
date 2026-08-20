@@ -10,7 +10,18 @@ namespace mge {
 namespace {
 
 constexpr char kMagic[4] = {'M', 'G', 'E', 'M'};
-constexpr uint32_t kVersion = 1;
+// v2 widened the vertex from 24 to 32 bytes to carry a texture coordinate.
+// v1 files still load — their vertices simply have no UV, which is the honest
+// reading of a file written before the engine could texture anything.
+constexpr uint32_t kVersion = 2;
+constexpr uint32_t kVersionNoUv = 1;
+
+// The v1 vertex, kept so old files can be read rather than rejected.
+struct VertexV1 {
+    Vec3 position;
+    Vec3 normal;
+};
+static_assert(sizeof(VertexV1) == 24, "v1 vertex layout is frozen by shipped files");
 
 struct FileHeader {
     char magic[4];
@@ -79,10 +90,12 @@ bool deserializeMesh(const uint8_t* data, size_t size, LodMesh& out) {
 
     FileHeader header{};
     if (!read(cursor, remaining, &header, sizeof(header)) ||
-        memcmp(header.magic, kMagic, 4) != 0 || header.version != kVersion ||
+        memcmp(header.magic, kMagic, 4) != 0 ||
+        (header.version != kVersion && header.version != kVersionNoUv) ||
         header.lodCount == 0 || header.lodCount > 16) {
         return false;
     }
+    const bool hasUv = header.version == kVersion;
 
     out = LodMesh{};
     out.bounds.min = {header.bounds[0], header.bounds[1], header.bounds[2]};
@@ -95,10 +108,19 @@ bool deserializeMesh(const uint8_t* data, size_t size, LodMesh& out) {
         MeshData& lod = out.lods[i];
         lod.vertices.resize(lodHeader.vertexCount);
         lod.indices.resize(lodHeader.indexCount);
-        if (!read(cursor, remaining, lod.vertices.data(),
-                  lodHeader.vertexCount * sizeof(Vertex)) ||
-            !read(cursor, remaining, lod.indices.data(),
-                  lodHeader.indexCount * sizeof(uint32_t))) {
+        bool vertexOk = true;
+        if (hasUv) {
+            vertexOk = read(cursor, remaining, lod.vertices.data(),
+                            lodHeader.vertexCount * sizeof(Vertex));
+        } else {
+            for (uint32_t v = 0; v < lodHeader.vertexCount && vertexOk; ++v) {
+                VertexV1 old{};
+                vertexOk = read(cursor, remaining, &old, sizeof(old));
+                lod.vertices[v] = Vertex{old.position, old.normal, {0, 0}};
+            }
+        }
+        if (!vertexOk || !read(cursor, remaining, lod.indices.data(),
+                               lodHeader.indexCount * sizeof(uint32_t))) {
             out = LodMesh{};
             return false;
         }

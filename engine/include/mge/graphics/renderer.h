@@ -17,6 +17,7 @@
 #include "mge/character/body_mesh.h"
 #include "mge/graphics/camera.h"
 #include "mge/graphics/mesh_data.h"
+#include "mge/graphics/texture_data.h"
 #include "mge/graphics/vulkan_device.h"
 #include "mge/ui/draw_list.h"
 
@@ -73,6 +74,40 @@ struct GpuSkinnedMesh {
     bool hasMorphs() const { return morphSet != VK_NULL_HANDLE; }
 };
 
+// A texture resident on the GPU: one image, all its mip levels, sampled by
+// every material that references it. Memory comes from the device's TEXTURE
+// budget, separate from the mesh budget so a texture leak cannot hide inside
+// geometry headroom (docs/TEXTURING.md §5).
+struct GpuTexture {
+    VkImage image = VK_NULL_HANDLE;
+    VkImageView view = VK_NULL_HANDLE;
+    VkDeviceMemory memory = VK_NULL_HANDLE;
+    VkDeviceSize memorySize = 0;
+    uint32_t width = 0;
+    uint32_t height = 0;
+    uint32_t mipLevels = 0;
+    TextureFormat format = TextureFormat::Rgba8;
+    ColorSpace colorSpace = ColorSpace::Linear;
+    bool valid() const { return image != VK_NULL_HANDLE; }
+};
+
+// What a surface is made of. At most TWO texture fetches, because mobile
+// tile-based GPUs are filtering-bound long before they are bandwidth-bound
+// and every extra sampler is a permanent per-pixel tax (TEXTURING §3).
+//
+// A material with no `packed` map is normal, not lazy: roughness and AO fall
+// back to the constants below, and most props never need the second fetch.
+struct GpuMaterial {
+    VkDescriptorSet set = VK_NULL_HANDLE;
+    const GpuTexture* albedo = nullptr;
+    const GpuTexture* packed = nullptr;  // R=AO G=roughness B=mask, linear
+    float baseColor[4] = {1, 1, 1, 1};
+    float roughness = 0.8f;  // used when `packed` is absent
+    float ao = 1.0f;         // used when `packed` is absent
+    float uvScale = 1.0f;    // tiles the mesh's metre-based UVs (mesh_data.h)
+    bool valid() const { return set != VK_NULL_HANDLE; }
+};
+
 enum class MaterialKind : uint8_t {
     Lit = 0,      // basic lit opaque
     Placeholder,  // virtual-model treatment (P5)
@@ -86,6 +121,9 @@ struct DrawItem {
     float baseColor[4] = {1, 1, 1, 1};
     float params[4] = {0, 0, 0, 0};  // placeholder: x = hatch scale
     MaterialKind material = MaterialKind::Lit;
+    // Null draws untextured — the renderer binds its 1x1 white default, so
+    // there is one lit pipeline rather than a textured and an untextured one.
+    const GpuMaterial* surface = nullptr;
 };
 
 // One skinned draw: a shared mesh + this character's joint palette and shape.
@@ -160,6 +198,18 @@ public:
     static constexpr uint32_t kMaxSkinnedDraws = 48;   // palettes per frame
     static constexpr uint32_t kMaxMorphMeshes = 32;    // distinct delta sets
 
+    // Textures and materials (task 2.3/2.6, docs/TEXTURING.md). Uploads are
+    // load-path work: every mip comes from the baked container, the runtime
+    // neither decodes nor generates any of them.
+    bool uploadTexture(const TextureData& data, GpuTexture& out);
+    void destroyTexture(GpuTexture& texture);
+    // Binds textures into a descriptor set. `albedo` may be null, in which
+    // case the default white 1x1 stands in.
+    bool createMaterial(const GpuTexture* albedo, const GpuTexture* packed,
+                        GpuMaterial& out);
+    void destroyMaterial(GpuMaterial& material);
+    static constexpr uint32_t kMaxMaterials = 64;
+
     // Uploads the UI font atlas and enables the overlay pipeline (task 5.2).
     bool setUiFont(const FontAtlas& font);
 
@@ -224,6 +274,14 @@ private:
     VkDeviceMemory paletteMemory_ = VK_NULL_HANDLE;
     VkDeviceSize paletteMemorySize_ = 0;
     VkDeviceSize paletteSlotStride_ = 0;
+
+    // Materials: set 2, one combined-image-sampler pair per material.
+    bool createDefaultMaterial();
+    VkDescriptorSetLayout materialSetLayout_ = VK_NULL_HANDLE;
+    VkDescriptorPool materialPool_ = VK_NULL_HANDLE;
+    VkSampler textureSampler_ = VK_NULL_HANDLE;
+    GpuTexture whiteTexture_{};
+    GpuMaterial defaultMaterial_{};
 
     // Morph deltas: set 1, one storage-buffer descriptor per skinned mesh.
     // Meshes without targets bind `emptyMorphSet_` — the shader never reads
