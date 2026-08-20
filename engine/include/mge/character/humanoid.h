@@ -72,8 +72,8 @@ void evaluatePose(const Skeleton& skeleton, const Pose& pose, Mat4 outWorld[kJoi
 // The variant data file's contents: everything humanoid variety comes from.
 struct HumanoidVariant {
     float height = 1.75f;         // meters, sole to crown
-    float shoulderWidth = 0.42f;  // meters
-    float hipWidth = 0.30f;
+    float shoulderWidth = 0.37f;  // meters, shoulder joint to shoulder joint
+    float hipWidth = 0.20f;       // femoral head to femoral head
     float legRatio = 0.50f;       // legs as a fraction of height
     float armRatio = 0.44f;       // arm length as a fraction of height
     float bulk = 1.0f;            // limb/torso thickness scale
