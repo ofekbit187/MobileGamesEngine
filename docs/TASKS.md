@@ -210,16 +210,16 @@ Status legend: `[ ]` not started · `[~]` in progress · `[x]` done
 
 *Goal: a character's vocabulary. Actions are what a character CAN do, granted by what it is — universal for every character, body-level for a humanoid. Jump makes characters leave the ground for the first time; use-held makes one action mean whatever the item in your hands means.*
 
-- [ ] **12.1** Action model: `ActionId` name space, the per-character granted set (seeded with the universal actions at creation, so "every character can interact" needs no flag), `can` / `grant` / `revoke`, and `perform(actor, request) -> ActionResult`. Not-granted and refused-right-now are distinct answers
-- [ ] **12.2** Body-level grants: `humanoidActions()` = walk + jump + use-held, applied when a character is given a humanoid body. Non-humanoids declare their own set and inherit no humanoid assumption
-- [ ] **12.3** Airborne characters: `verticalVelocity` + `grounded` on the character, gravity in a character-level locomotion step, and real vertical resolution in `moveCharacter` — rising hits ceilings, falling lands on what supports you (the seam task 11.2 named)
-- [ ] **12.4** `action/jump`: from the ground only, refused in mid-air; jump strength is a per-character parameter
-- [ ] **12.5** Item-use descriptors: `ItemUse` (kind, cooldown, reach, power, effect, animation key, payload) in a registry keyed by asset id — a data change adds a new kind of tool
-- [ ] **12.6** `action/use_held`: dispatch on what is actually in the hand. Engine performs strike / consume / toggle; reports launch and custom rather than pretending. Empty hand does nothing; a sheathed weapon is drawn first; per-character cooldown refuses a too-early second use
-- [ ] **12.7** Controls: jump and use as first-class touch intents next to move/look/action, so the phone can reach the new actions
-- [ ] **12.8** Tests + `template_game` headless proof + the device build: jump over a crate, swing a sword at a guard, eat an apple, light a torch — one button, three meanings
+- [x] **12.1** Action model: `ActionId` name space, the per-character granted set (seeded with the universal actions at creation, so "every character can interact" needs no flag), `can` / `grant` / `revoke`, and `perform(actor, request) -> ActionResult`. Not-granted and refused-right-now are distinct answers
+- [x] **12.2** Body-level grants: `humanoidActions()` = walk + jump + use-held, applied when a character is given a humanoid body. Non-humanoids declare their own set and inherit no humanoid assumption
+- [x] **12.3** Airborne characters: `verticalVelocity` + `grounded` on the character, gravity in a character-level locomotion step, and real vertical resolution in `moveCharacter` — rising hits ceilings, falling lands on what supports you (the seam task 11.2 named)
+- [x] **12.4** `action/jump`: from the ground only, refused in mid-air; jump strength is a per-character parameter
+- [x] **12.5** Item-use descriptors: `ItemUse` (kind, cooldown, reach, power, effect, animation key, payload) in a registry keyed by asset id — a data change adds a new kind of tool
+- [x] **12.6** `action/use_held`: dispatch on what is actually in the hand. Engine performs strike / consume / toggle; reports launch and custom rather than pretending. Empty hand does nothing; a sheathed weapon is drawn first; per-character cooldown refuses a too-early second use
+- [x] **12.7** Controls: jump and use as first-class touch intents next to move/look/action, so the phone can reach the new actions
+- [x] **12.8** Tests + `template_game` headless proof + the device build: jump over a crate, swing a sword at a guard, eat an apple, light a torch — one button, three meanings
 
-**Exit criteria:** on the phone, the player jumps, and the same "use" button does something different depending on what is in hand — while every one of those actions is reachable by any character that has it.
+**Exit criteria:** on the phone, the player jumps, and the same "use" button does something different depending on what is in hand — while every one of those actions is reachable by any character that has it. — *Built and headlessly verified (`jump: rose 0.55 m, refused in mid-air yes, landed yes` / `use held: sword struck, apple eaten, torch lit`); the on-device confirmation is the owner's next device test.*
 
 ## Phase 13 and beyond — held for further dictation
 
