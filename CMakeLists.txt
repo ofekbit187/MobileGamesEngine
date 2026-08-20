@@ -23,6 +23,9 @@ if(NOT ANDROID OR MGE_EMULATED_TESTS)
     add_subdirectory(tools/audio_demo)
     enable_testing()
     add_subdirectory(tests)
+    # After enable_testing(): mge_uv_report registers itself as a test so the
+    # UV chart stays measured on every run (docs/TEXTURING.md §6).
+    add_subdirectory(tools/uv_report)
 endif()
 
 if(TARGET mge_import)

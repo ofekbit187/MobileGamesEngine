@@ -225,7 +225,15 @@ Status legend: `[ ]` not started · `[~]` in progress · `[x]` done
 
 Deliberately not planned yet; known candidates awaiting direction:
 
-- Textures & materials (everything renders flat-shaded today)
+- Textures & materials (everything renders flat-shaded today) — the standard is
+  now written ahead of the work in [`TEXTURING.md`](TEXTURING.md): map set,
+  ASTC/ETC2 two-pack bake, `.mgetex` runtime container, per-class budgets and
+  texel density, mip/streaming rules, and a definition of done. It also
+  measures the template UV chart (`tools/uv_report`, in `ctest`) and reports
+  four defects that must be fixed before the first skin texture is authored.
+  Awaiting the owner's verdict; the engine-side prerequisites are listed in
+  TEXTURING.md §13 (UVs on the static vertex, samplers in the lit pipeline,
+  texture upload in 2.3, material refs in ADR 0002, per-mip ranges in ADR 0003)
 - UI screen flow: screen stack, pause menu, inventory reachable in-game
 - AI expansion (behavior model beyond the v1 state machine, schedules, group behavior) — v1 landed in 8.8; *when* a character chooses to perform an action belongs here, not in Phase 12
 - Advanced facial animation (lip-sync, emotes, gaze) — basic set specified in 8.20
