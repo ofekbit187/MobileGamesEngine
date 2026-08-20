@@ -113,31 +113,12 @@ EntityId InteractionSystem::focus(EntityId actor) const {
     return best;
 }
 
-EntityId InteractionSystem::nearestOfKind(const Vec3& from, float radius,
-                                          InteractionKind kind) const {
-    EntityId best = kInvalidEntity;
-    float bestDistance = radius;
-    for (uint32_t i = 0; i < capacity_; ++i) {
-        if (!used_[i] || !components_[i].enabled || components_[i].kind != kind) continue;
-        if (!world_.entities().isAlive(entities_[i])) continue;
-        const TransformComponent* transform =
-            const_cast<World&>(world_).transform(entities_[i]);
-        if (transform == nullptr) continue;
-        const float distance = (transform->position - from).length();
-        if (distance < bestDistance) {
-            bestDistance = distance;
-            best = entities_[i];
-        }
-    }
-    return best;
-}
-
-InteractionSystem::Result InteractionSystem::interact(EntityId actor) {
+InteractionResult InteractionSystem::interact(EntityId actor) {
     return interactWith(actor, focus(actor));
 }
 
-InteractionSystem::Result InteractionSystem::interactWith(EntityId actor, EntityId target) {
-    Result result;
+InteractionResult InteractionSystem::interactWith(EntityId actor, EntityId target) {
+    InteractionResult result;
     if (target == kInvalidEntity) return result;
     // Any character may act — but not a dead one (mortality is universal too).
     if (const CharacterComponent* character = characters_.get(actor)) {

@@ -14,6 +14,9 @@
 
 namespace mge {
 
+class InteractionSystem;
+struct InteractionResult;
+
 // ---------------------------------------------------------------- factions --
 
 using FactionId = uint8_t;
@@ -193,6 +196,24 @@ public:
     // Held-item state (CHARACTERS.md §6.1).
     bool setSheathed(EntityId entity, bool sheathed);
 
+    // ------------------------------------------------ interaction (P9) ---
+    // Acting on the world is a capability of BEING A CHARACTER (owner ruling,
+    // Phase 11) — not of being the player. It lives here, on the character
+    // system, precisely so there is nowhere to put a "can interact" flag:
+    // every character that exists has these verbs, and a game that hands the
+    // player's tap to `interact` hands an NPC's decision to the same call.
+    // The interactables themselves live in InteractionSystem; wiring one in
+    // is what gives the world something to act ON.
+    void setInteractions(InteractionSystem* interactions) { interactions_ = interactions; }
+    InteractionSystem* interactions() const { return interactions_; }
+
+    // What this character is about to act on (in reach, faced, in sight), and
+    // acting on it. A character with no interaction world wired, or a dead
+    // one, acts on nothing — mortality is universal too.
+    EntityId focus(EntityId actor) const;
+    bool interact(EntityId actor, InteractionResult* out = nullptr);
+    bool interactWith(EntityId actor, EntityId target, InteractionResult* out = nullptr);
+
     // Status effects (task 9.6). Adding an effect whose id is already
     // present refreshes it (magnitude/duration replaced); a full list
     // refuses (P1). sumMagnitude totals effects matching ANY given tag bit —
@@ -236,6 +257,7 @@ private:
     std::vector<EntityId> entities_;
     std::vector<CharacterComponent> components_;
     FactionTable factions_;
+    InteractionSystem* interactions_ = nullptr;
 };
 
 }  // namespace mge

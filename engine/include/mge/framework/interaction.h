@@ -8,10 +8,12 @@
 // what happened so the game layer can react. Focus needs the collision world
 // for line of sight: you cannot use a chest through a wall.
 //
-// EVERY CHARACTER CAN INTERACT (owner ruling, P9). Nothing here knows what a
-// player is: `focus` and `interact` take the acting character, so a villager
-// picking an apple off the ground runs the same code as your tap. Characters
-// are equally valid targets — the player can be the one spoken to.
+// EVERY CHARACTER CAN INTERACT (owner ruling, P9). Interaction is a capability
+// of being a character, not of being the player: it is reached through
+// CharacterSystem (`characters.interact(actor)`), every character has it, and
+// there is no flag that grants or withholds it. Nothing here knows what a
+// player is — `focus`/`interact` take the acting character. Characters are
+// equally valid targets: the player can be the one spoken to.
 
 #include <cstdint>
 #include <vector>
@@ -45,6 +47,17 @@ struct InteractableComponent {
     uint32_t payload = 0;  // Talk: line index; Custom: game-defined
 };
 
+// What an interaction did. PickUp is performed by the engine (inventory +
+// despawn); Container and Talk are reported for the game layer to present.
+struct InteractionResult {
+    bool handled = false;
+    InteractionKind kind = InteractionKind::None;
+    EntityId target = kInvalidEntity;
+    uint64_t collectionId = 0;
+    uint32_t payload = 0;
+    Item item;  // what was picked up, when kind == PickUp
+};
+
 class InteractionSystem {
 public:
     InteractionSystem(World& world, CharacterSystem& characters, uint32_t capacity = 256);
@@ -63,25 +76,13 @@ public:
     // visible. Nearest-in-front wins. kInvalidEntity when nothing qualifies.
     EntityId focus(EntityId actor) const;
 
-    // "What of this kind is around me?" — position-based, no facing or line
-    // of sight, for characters deciding what to walk toward (AI gathering,
-    // quest markers, spawn placement).
-    EntityId nearestOfKind(const Vec3& from, float radius, InteractionKind kind) const;
+    using Result = InteractionResult;
 
-    struct Result {
-        bool handled = false;
-        InteractionKind kind = InteractionKind::None;
-        EntityId target = kInvalidEntity;
-        uint64_t collectionId = 0;
-        uint32_t payload = 0;
-        Item item;  // what was picked up, when kind == PickUp
-    };
-
-    // Acts on the focused target (or on `target` explicitly). PickUp is
-    // performed by the engine (inventory + despawn); Container and Talk are
-    // reported for the game layer to present.
-    Result interact(EntityId actor);
-    Result interactWith(EntityId actor, EntityId target);
+    // Acts on the focused target (or on `target` explicitly). Games reach
+    // these through CharacterSystem — interaction is a character capability
+    // (P9) — but they are actor-agnostic here in exactly the same way.
+    InteractionResult interact(EntityId actor);
+    InteractionResult interactWith(EntityId actor, EntityId target);
 
 private:
     int32_t indexOf(EntityId entity) const;

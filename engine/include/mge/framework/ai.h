@@ -9,7 +9,6 @@
 #include <cstdint>
 
 #include "mge/framework/character.h"
-#include "mge/framework/interaction.h"
 
 namespace mge {
 
@@ -21,7 +20,6 @@ enum class AiState : uint8_t {
     Attack,   // in range: deal damage on a cooldown
     Flee,     // run from the threat
     Return,   // go back home / to the path
-    Gather,   // walk to a thing worth having and take it
 };
 
 // ai_profile (data): which behaviors are enabled and their tuning.
@@ -30,10 +28,6 @@ struct AiProfile {
     bool canPatrol = false;
     bool aggressive = false;    // chase/attack enemies on sight
     bool fearful = false;       // flee from enemies on sight
-    // Every character can interact (P9): a gatherer notices things lying
-    // around and picks them up through the same call the player's tap uses.
-    bool gathers = false;
-    float gatherRange = 7.0f;
     float wanderSpeed = 1.2f;
     float chaseSpeed = 3.5f;
     float fleeSpeed = 4.0f;
@@ -75,9 +69,6 @@ public:
 
     AiState stateOf(EntityId entity) const;
 
-    // Gathering needs somewhere to ask "what's lying around?"; without this
-    // the profile flag is simply inert.
-    void setInteractions(InteractionSystem* interactions) { interactions_ = interactions; }
 
 private:
     struct Agent {
@@ -95,7 +86,6 @@ private:
 
     World& world_;
     CharacterSystem& characters_;
-    InteractionSystem* interactions_ = nullptr;
     std::vector<Agent> agents_;
 };
 

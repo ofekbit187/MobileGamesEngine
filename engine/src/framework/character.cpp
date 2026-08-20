@@ -3,6 +3,7 @@
 #include <cmath>
 
 #include "mge/core/log.h"
+#include "mge/framework/interaction.h"
 
 namespace mge {
 
@@ -303,6 +304,28 @@ EntityId CharacterSystem::findByPersistentId(uint32_t persistentId) const {
         }
     }
     return kInvalidEntity;
+}
+
+// ---------------------------------------------------- interaction (P9) ---
+// Every character can interact (owner ruling, Phase 11). There is deliberately
+// no capability flag to consult here: if you are a character, these are yours.
+
+EntityId CharacterSystem::focus(EntityId actor) const {
+    if (interactions_ == nullptr) return kInvalidEntity;
+    const CharacterComponent* character = get(actor);
+    if (character == nullptr || !character->alive) return kInvalidEntity;
+    return interactions_->focus(actor);
+}
+
+bool CharacterSystem::interact(EntityId actor, InteractionResult* out) {
+    return interactWith(actor, focus(actor), out);
+}
+
+bool CharacterSystem::interactWith(EntityId actor, EntityId target, InteractionResult* out) {
+    if (interactions_ == nullptr) return false;
+    const InteractionResult result = interactions_->interactWith(actor, target);
+    if (out != nullptr) *out = result;
+    return result.handled;
 }
 
 bool CharacterSystem::setSheathed(EntityId entity, bool sheathed) {

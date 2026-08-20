@@ -378,10 +378,6 @@ bool DeviceGame::start(Engine& engine, AudioMixer& mixer, ANativeWindow* window,
     AiProfile villagerProfile;
     villagerProfile.canWander = true;
     villagerProfile.homeRadius = 4.0f;
-    // Every character can interact (owner ruling, P9) — the villager takes
-    // fruit off the ground through the same call the player's tap makes.
-    villagerProfile.gathers = true;
-    villagerProfile.gatherRange = 3.0f;  // only what falls near their own patch
     s.ai->attach(s.villager.entity, villagerProfile);
 
     // --- Things to act on (Phase 11): an apple to take, a chest to open,
@@ -389,7 +385,10 @@ bool DeviceGame::start(Engine& engine, AudioMixer& mixer, ANativeWindow* window,
     //     with an InteractableComponent — nothing here is special-cased.
     s.interactions = new InteractionSystem(world, *s.characters);
     s.interactions->setCollisionWorld(&s.collision);
-    s.ai->setInteractions(s.interactions);  // NPCs act through the same system
+    // Interaction is a character capability (owner ruling, P9): the game
+    // wires the world of interactables once, onto the character system, and
+    // every character has the verbs — the tap below is the player using them.
+    s.characters->setInteractions(s.interactions);
 
     const auto apple = [&](Vec3 position) {
         const EntityId entity = place(crateId, position, 0.0f, 0.85f, 0.25f, 0.20f);
@@ -403,7 +402,6 @@ bool DeviceGame::start(Engine& engine, AudioMixer& mixer, ANativeWindow* window,
     };
     apple({1.2f, 0.2f, 1.0f});
     apple({-2.6f, 0.2f, -1.4f});
-    apple({-3.4f, 0.2f, -3.4f});  // in the villager's reach: watch them take it
 
     // The chest binds a registered collection — the UI shows whatever the
     // game put in it (the Phase 5 data binding, now reachable in play).
@@ -639,13 +637,14 @@ void DeviceGame::frame(double dtSeconds, ANativeWindow* window) {
     }
 
     // --- What the player is about to act on, and what a tap does to it ---
-    s.focused = s.interactions->focus(s.player.entity);
+    s.focused = s.characters->focus(s.player.entity);
     s.promptFlash -= dt;
     if (s.engine->lastIntents().action) {
         if (s.openCollectionId != 0) {
             s.openCollectionId = 0;  // a tap closes the open container
         } else {
-            const InteractionSystem::Result acted = s.interactions->interact(s.player.entity);
+            InteractionResult acted;
+            s.characters->interact(s.player.entity, &acted);
             switch (acted.kind) {
                 case InteractionKind::PickUp:
                     if (acted.handled) {
