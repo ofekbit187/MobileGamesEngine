@@ -15,3 +15,9 @@ app/.cxx/
 .idea/
 *.iml
 .vscode/
+
+# Build-time modelling inputs: large third-party base meshes (CC0), downloaded
+# rather than committed — see docs/MODELING.md §7. The baked assets in
+# assets/models/ are what ships.
+tools/model/vendor/
+__pycache__/

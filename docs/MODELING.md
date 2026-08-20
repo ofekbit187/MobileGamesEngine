@@ -12,13 +12,39 @@ ones that follow.
 
 ---
 
+## 0. Where geometry comes from
+
+**Look for a good base mesh before modelling one.** Two revisions of the
+humanoid body were generated from code and both read as mannequins; the third
+is Blender Studio's CC0 base mesh and reads as a person. Anatomy that took
+character artists years to get right is not worth re-deriving from a profile
+table.
+
+When a suitable base mesh exists, the pipeline is: **place it, rig it, reduce
+it, export it** — and *never edit its geometry*. The corollary is the rule that
+governs everything in `tools/model/`:
+
+> **Fit the rig to the mesh. Never bend the mesh onto the rig.**
+
+A rig is cheap to move and free to get wrong twice. A base mesh warped towards
+an idealised skeleton is destroyed, and the damage is hard to see until it is
+animated. If the model's authored stance is a relaxed A-pose, then that stance
+*is* the engine's bind pose, and the engine's `buildSkeleton()` is what changes.
+
+Base meshes must be **CC0 or otherwise unencumbered**, and are **build-time
+inputs**: the large source file is not committed, the baked `.mgeskin` asset is,
+and the download is documented in the authoring script. Credits live in §7.
+
+---
+
 ## 1. Style
 
 **Grounded realism at low resolution.** Real proportions and real anatomy,
 resolved coarsely — not stylized, not cartoon, not photoreal.
 
-- **Proportions are measured, not felt.** A 1.75 m human is 7.4 heads tall,
-  0.42 m across the shoulders, ~0.36 m across the hips. Deviating from human
+- **Proportions are measured, not felt.** A 1.75 m human is ~7.3 heads tall,
+  ~0.46 m deltoid to deltoid (0.37 m shoulder joint to shoulder joint), ~0.35 m
+  across the hips, with the ankle ~0.12 m off the ground. Deviating from human
   measurement is what makes a model read as a toy.
 - **Silhouette carries the model.** Every triangle should buy outline: the
   deltoid, the calf, the jaw, the arch of a foot. Detail that only exists in
@@ -38,7 +64,7 @@ screen at once:
 | Content | LOD0 | LOD1 | LOD2 |
 |---|---|---|---|
 | Humanoid body (crowd content) | ≤ 2 200 | ≤ 1 300 | ≤ 650 |
-| Wearable / garment | ≤ 600 | ≤ 350 | ≤ 150 |
+| Wearable / garment | ≤ 900 | ≤ 450 | ≤ 200 |
 | Held item (weapon, tool) | ≤ 400 | ≤ 200 | ≤ 80 |
 | Prop, small (crate, stool) | ≤ 300 | ≤ 150 | — |
 | Prop, large (building shell) | ≤ 1 500 | ≤ 700 | ≤ 250 |
@@ -53,8 +79,9 @@ Also budgeted:
 - **Vertex cost**: 36 B skinned (position, normal, uint16 UV, 4 joints, 4 uint8
   weights), 24 B static. Vertex *count* matters as much as triangles — a UV
   seam or a hard edge duplicates vertices.
-- **Bone influences**: at most 4 per vertex (the hardware-skinning maximum),
-  at most 2 in engine-shipped models.
+- **Bone influences**: at most 4 per vertex (the hardware-skinning maximum).
+  Shipped models should average close to 2 — the template body averages 2.2 —
+  because the skinning inner loop runs once per influence.
 - **Draw calls**: one model is one draw per material. Splitting a body into
   more materials than it has textures is a regression.
 
@@ -69,8 +96,11 @@ Also budgeted:
 4. **Caps must be hidden or rounded.** A flat end-cap that pokes out of the
    surface it was meant to hide reads as a plate stuck on the model — the
    commonest defect in part-assembled bodies.
-5. **Region segmentation.** Parts a wearable can cover are separate closed
-   shells, so masking a region leaves no hole (CHARACTERS.md §5.1).
+5. **Region segmentation.** A model is one watertight shell; the regions a
+   wearable can cover are a *partition of its triangles*, derived from each
+   vertex's dominant bone. Masking is then an index-range decision, and it
+   leaves no hole because the garment that triggered it was cut from the very
+   triangles being removed (CHARACTERS.md §5.1).
 6. **Smooth normals, welded across seams.** Weld by exact position, never by a
    hashed position: a hash collision averages two unrelated normals and shows
    up as a black facet somewhere unrelated.
@@ -81,17 +111,33 @@ Also budgeted:
 
 - One canonical humanoid rig (17 joints, `Joint` in `humanoid.h`). Everything
   humanoid binds to it; no per-model skeletons.
-- Bind pose is the rig's rest pose. Model in bind space; never bake a pose.
+- **The model's authored stance is the bind pose** — for the humanoid, the
+  base mesh's relaxed A-pose. The rig is fitted to it (§0); the mesh is never
+  posed to match a rig, and no animation is ever baked into the geometry.
 - **Variants are palette scale, never new geometry** (ADR 0005). If a
   proportion cannot be expressed as a per-joint scale or a morph delta, it does
   not belong in the variant schema.
-- Weights are authored per ring, not painted per vertex: predictable, diffable,
-  and impossible to leave a stray influence behind.
+- **Variant scale is applied in the bone's own frame**, +Y along the bone. In
+  an A-pose bind no limb is axis-aligned, so scaling in character axes makes a
+  bulky character's arms longer instead of thicker.
+- **Weights are pruned, not just normalised.** Bone-heat weighting is a
+  diffusion solve and it leaks across joints — on the template body it left the
+  ankle ~10 % *thigh* influence, which reads as the foot swimming when the knee
+  bends. Keep an influence only if its bone is within ~10 cm of the closest
+  bone influencing that vertex.
+- **Re-clamp and re-prune after every decimation.** Collapsing an edge merges
+  the influence sets of the two vertices, so a reduced LOD silently regains
+  both a fifth influence and the leakage the full mesh was cleaned of. The
+  export is what ships, so the export is what must be checked.
+- Measure a weight's reach against the **bone** (joint to its first child), not
+  against the joint: a long femur legitimately moves vertices far from the hip,
+  but nothing it moves is far from the femur.
 
 ## 5. UVs and textures
 
-- The template UV chart is fixed: every region owns an island, and every skin
-  texture ever made for the engine conforms to it (CHARACTERS.md §4).
+- The template UV chart is the base mesh's own unwrap, carried through import
+  and fixed from then on: every skin texture ever made for the engine conforms
+  to it (CHARACTERS.md §4).
 - UVs are laid out even at 1:1 scale across regions — a texture must not be
   sharper on the hands than on the torso.
 - UVs ship before textures do. Retro-fitting a chart invalidates every texture
@@ -103,14 +149,16 @@ A model is done when all of the following hold, and each is a test, not an
 opinion (see `tests/test_body_mesh.cpp` for the worked example):
 
 - [ ] **Closed and consistently wound** — every directed edge appears once and
-      its opposite exists, per shell.
+      its opposite exists, over the whole mesh, and the signed volume is
+      positive and physically plausible.
 - [ ] **No degenerate triangles.**
 - [ ] **Normals point outward**, welded across seams.
 - [ ] **Human-measured proportions** — checked numerically, not by eye.
 - [ ] **Inside budget** at every LOD, with LODs strictly decreasing and
       silhouettes matching within 3 %.
-- [ ] **Skin weights valid** — sum to 1, ≤ 4 influences, no influence from a
-      joint far from the vertex.
+- [ ] **Skin weights valid** — sum to exactly 255, ≤ 4 influences, and no
+      influence whose bone is far from the vertex compared with the nearest
+      bone influencing it. Checked on the *baked* asset, not on the source.
 - [ ] **Survives its extremes** — bend every joint to its limit; the joint loop
       keeps ≥ 75 % of its girth and no vertex flies away.
 - [ ] **Wearables fit and layer** — every layer encloses the one beneath, on
@@ -122,3 +170,16 @@ opinion (see `tests/test_body_mesh.cpp` for the worked example):
       palms facing the wrong way, a gap between hem and boot) was found by
       looking at a render, not by reading numbers. `tools/body_preview` exists
       for exactly this.
+
+
+## 7. Third-party geometry
+
+| Model | Source | Licence |
+|---|---|---|
+| Humanoid template body | [Blender Studio — Human Base Meshes](https://www.blender.org/download/demo-files/) bundle v1.4.1, object `GEO-body_male_realistic` | CC0 (public domain) |
+
+CC0 requires no attribution; the credit is here because knowing where a model
+came from is part of being able to re-derive it. The bundle is downloaded from
+<https://download.blender.org/demo/asset-bundles/human-base-meshes/> and placed
+in `tools/model/vendor/` (or pointed at with `MGE_HUMAN_BASE_BLEND`); it is not
+committed — the baked assets in `assets/models/` are.

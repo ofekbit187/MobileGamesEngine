@@ -21,18 +21,27 @@ Quat rotZ(float a) { return Quat::fromAxisAngle({0, 0, 1}, a); }
 // ----------------------------------------------------------------- rig ------
 
 Skeleton buildSkeleton(const HumanoidVariant& variant) {
+    // The bind pose IS the template model's own pose (ADR 0005). The body is
+    // Blender Studio's CC0 base mesh, and this rig was fitted to it — bones
+    // measured inside its limbs, in its authored relaxed stance — rather than
+    // the mesh being bent onto a rig. That is why the arms sit slightly away
+    // from the body and the legs splay a little towards the ankles: that is
+    // where the model's joints actually are.
+    //
+    // Every offset below is the fitted template value scaled by the variant:
+    // overall size by height, limbs by their ratios, shoulders and hips by
+    // their widths. Animation is unaffected — clips rotate joints, and every
+    // variant shares this skeleton.
     Skeleton s{};
-    const float legLen = variant.height * variant.legRatio;
-    const float headSize = 0.135f * variant.height * variant.headScale;
-    const float torso = variant.height - legLen - headSize;  // hips -> skull base
-    const float armLen = variant.height * variant.armRatio;
-
-    s.thighLength = legLen * 0.52f;
-    s.shinLength = legLen * 0.44f;  // the remainder is ankle height
-    s.upperArmLength = armLen * 0.53f;
-    s.forearmLength = armLen * 0.47f;
-    s.torsoLength = torso;
-    s.headSize = headSize;
+    const float k = variant.height / 1.75f;
+    const float legK = k * (variant.legRatio / 0.50f);
+    const float armK = k * (variant.armRatio / 0.44f);
+    const float shoulderX = variant.shoulderWidth * 0.5f;
+    const float hipX = variant.hipWidth * 0.5f;
+    // Head joint (the atlas, where the skull pivots) to the crown, measured on
+    // the template body: 1.750 - 1.580. It is what "the head" means everywhere
+    // below, so head.y + headSize lands exactly on the variant's height.
+    const float headSize = 0.170f * k * variant.headScale;
 
     const auto set = [&s](Joint joint, int8_t parent, Vec3 offset) {
         s.parent[idx(joint)] = parent;
@@ -40,27 +49,43 @@ Skeleton buildSkeleton(const HumanoidVariant& variant) {
     };
     const auto p = [](Joint j) { return static_cast<int8_t>(j); };
 
-    set(Joint::Hips, -1, {0, legLen, 0});
-    set(Joint::Spine, p(Joint::Hips), {0, torso * 0.30f, 0});
-    set(Joint::Chest, p(Joint::Spine), {0, torso * 0.35f, 0});
-    set(Joint::Neck, p(Joint::Chest), {0, torso * 0.35f, 0});
-    set(Joint::Head, p(Joint::Neck), {0, headSize * 0.15f, 0});
+    // --- spine: hips at 0.900 m on the template body ---
+    set(Joint::Hips, -1, {0, 1.8f * variant.height * variant.legRatio * 0.5714f, 0});
+    set(Joint::Spine, p(Joint::Hips), {0, 0.180f * k, 0});
+    set(Joint::Chest, p(Joint::Spine), {0, 0.200f * k, -0.010f * k});
+    set(Joint::Neck, p(Joint::Chest), {0, 0.220f * k, 0.000f});
+    set(Joint::Head, p(Joint::Neck), {0, 0.080f * k, -0.010f * k});
 
-    const float shoulderX = variant.shoulderWidth * 0.5f;
-    set(Joint::UpperArmL, p(Joint::Chest), {shoulderX, torso * 0.32f, 0});
-    set(Joint::ForearmL, p(Joint::UpperArmL), {0, -s.upperArmLength, 0});
-    set(Joint::HandL, p(Joint::ForearmL), {0, -s.forearmLength, 0});
-    set(Joint::UpperArmR, p(Joint::Chest), {-shoulderX, torso * 0.32f, 0});
-    set(Joint::ForearmR, p(Joint::UpperArmR), {0, -s.upperArmLength, 0});
-    set(Joint::HandR, p(Joint::ForearmR), {0, -s.forearmLength, 0});
+    // --- arms: the model's relaxed stance, 23 degrees off vertical ---
+    for (int side = 0; side < 2; ++side) {
+        const float m = side == 0 ? 1.0f : -1.0f;
+        const Joint upper = side == 0 ? Joint::UpperArmL : Joint::UpperArmR;
+        const Joint fore = side == 0 ? Joint::ForearmL : Joint::ForearmR;
+        const Joint hand = side == 0 ? Joint::HandL : Joint::HandR;
+        set(upper, p(Joint::Chest), {m * shoulderX, 0.170f * k, 0.010f * k});
+        set(fore, p(upper), {m * 0.114f * armK, -0.300f * armK, -0.045f * armK});
+        set(hand, p(fore), {m * 0.102f * armK, -0.272f * armK, -0.046f * armK});
+    }
 
-    const float hipX = variant.hipWidth * 0.5f;
-    set(Joint::ThighL, p(Joint::Hips), {hipX, 0, 0});
-    set(Joint::ShinL, p(Joint::ThighL), {0, -s.thighLength, 0});
-    set(Joint::FootL, p(Joint::ShinL), {0, -s.shinLength, 0});
-    set(Joint::ThighR, p(Joint::Hips), {-hipX, 0, 0});
-    set(Joint::ShinR, p(Joint::ThighR), {0, -s.thighLength, 0});
-    set(Joint::FootR, p(Joint::ShinR), {0, -s.shinLength, 0});
+    // --- legs: hip joints at the model's femoral heads, splaying to the ankle
+    for (int side = 0; side < 2; ++side) {
+        const float m = side == 0 ? 1.0f : -1.0f;
+        const Joint thigh = side == 0 ? Joint::ThighL : Joint::ThighR;
+        const Joint shin = side == 0 ? Joint::ShinL : Joint::ShinR;
+        const Joint foot = side == 0 ? Joint::FootL : Joint::FootR;
+        set(thigh, p(Joint::Hips), {m * hipX, -0.020f * k, 0.010f * k});
+        set(shin, p(thigh), {m * 0.055f * legK, -0.450f * legK, -0.044f * legK});
+        set(foot, p(shin), {m * 0.022f * legK, -0.315f * legK, -0.021f * legK});
+    }
+
+    // Bone lengths the body, animation and variant palette builders need.
+    const auto len = [&s](Joint j) { return s.bindOffset[idx(j)].length(); };
+    s.thighLength = len(Joint::ShinL);
+    s.shinLength = len(Joint::FootL);
+    s.upperArmLength = len(Joint::ForearmL);
+    s.forearmLength = len(Joint::HandL);
+    s.torsoLength = (0.180f + 0.200f + 0.220f) * k;
+    s.headSize = headSize;
     return s;
 }
 

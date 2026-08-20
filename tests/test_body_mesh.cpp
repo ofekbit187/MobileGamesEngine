@@ -89,6 +89,18 @@ float widthOf(const SkinnedMeshData& mesh, const VertexArray& vertices, BodyRegi
     return hi > lo ? hi - lo : 0.0f;
 }
 
+// Thickness across a limb that does not hang straight down: the region's
+// extent in Z, which for the arms and legs is perpendicular to the bone.
+template <typename VertexArray>
+float depthOf(const SkinnedMeshData& mesh, const VertexArray& vertices, BodyRegion region) {
+    float lo = 1e9f, hi = -1e9f;
+    for (uint32_t i : regionVertices(mesh, region)) {
+        lo = std::fmin(lo, vertices[i].position.z);
+        hi = std::fmax(hi, vertices[i].position.z);
+    }
+    return hi > lo ? hi - lo : 0.0f;
+}
+
 Aabb boundsOfRegion(const SkinnedMeshData& mesh, BodyRegion region) {
     Aabb box;
     bool first = true;
@@ -124,30 +136,38 @@ float areaNear(const MeshData& mesh, const Vec3& center, float radius) {
 
 MGE_TEST(body_mesh_is_closed_and_consistently_wound) {
     const SkinnedMeshData mesh = body();
-    // Each shell (part) is checked on its own: the body is a set of closed
-    // shells that interpenetrate where the seams are hidden inside.
-    for (const MeshPart& part : mesh.parts) {
-        std::map<std::pair<int64_t, int64_t>, int> directed;
-        for (uint32_t i = 0; i < part.indexCount; i += 3) {
-            const uint32_t base = part.firstIndex + i;
-            int64_t k[3];
-            for (int e = 0; e < 3; ++e) {
-                k[e] = weldKey(mesh.vertices[mesh.indices[base + e]].position);
-            }
-            for (int e = 0; e < 3; ++e) {
-                directed[{k[e], k[(e + 1) % 3]}] += 1;
-            }
+    // The template body is ONE watertight shell. Regions are a partition of
+    // its triangles (what a garment masks), not separate shells, so the test
+    // is on the whole surface: every directed edge occurs exactly once and
+    // its opposite exists. That is closed AND consistently wound in one check.
+    std::map<std::pair<int64_t, int64_t>, int> directed;
+    for (size_t i = 0; i + 2 < mesh.indices.size(); i += 3) {
+        int64_t k[3];
+        for (int e = 0; e < 3; ++e) {
+            k[e] = weldKey(mesh.vertices[mesh.indices[i + e]].position);
         }
-        bool manifold = true;
-        for (const auto& entry : directed) {
-            // Consistent winding: every directed edge appears exactly once,
-            // and its opposite exists (closed surface, no boundary).
-            if (entry.second != 1) manifold = false;
-            const auto opposite = directed.find({entry.first.second, entry.first.first});
-            if (opposite == directed.end()) manifold = false;
-        }
-        MGE_CHECK(manifold);
+        for (int e = 0; e < 3; ++e) directed[{k[e], k[(e + 1) % 3]}] += 1;
     }
+    size_t doubled = 0, boundary = 0;
+    for (const auto& entry : directed) {
+        if (entry.second != 1) ++doubled;
+        if (directed.find({entry.first.second, entry.first.first}) == directed.end()) ++boundary;
+    }
+    printf("  directed edges: %zu, doubled %zu, boundary %zu\n", directed.size(), doubled,
+           boundary);
+    MGE_CHECK(doubled == 0);
+    MGE_CHECK(boundary == 0);
+
+    // Closed and outward: the divergence-theorem volume of a human-sized body.
+    double volume = 0;
+    for (size_t i = 0; i + 2 < mesh.indices.size(); i += 3) {
+        const Vec3& a = mesh.vertices[mesh.indices[i]].position;
+        const Vec3& b = mesh.vertices[mesh.indices[i + 1]].position;
+        const Vec3& c = mesh.vertices[mesh.indices[i + 2]].position;
+        volume += a.dot(b.cross(c));
+    }
+    volume /= 6.0;
+    MGE_CHECK(volume > 0.055 && volume < 0.100);  // ~70 kg of person
 }
 
 MGE_TEST(body_mesh_has_no_degenerate_triangles) {
@@ -164,19 +184,38 @@ MGE_TEST(body_mesh_has_no_degenerate_triangles) {
 
 MGE_TEST(body_mesh_normals_point_outward) {
     const SkinnedMeshData mesh = body();
-    // Sampled on the torso, where "outward" is unambiguous: the surface
-    // normal must agree with the direction away from the body's axis.
-    size_t checked = 0, agreeing = 0;
+    // The authoritative test, on every triangle: the shading normal must agree
+    // with the winding. A flipped face or an inverted normal fails here.
+    size_t triangles = 0, agreeing = 0;
+    for (size_t i = 0; i + 2 < mesh.indices.size(); i += 3) {
+        const SkinVertex& a = mesh.vertices[mesh.indices[i]];
+        const SkinVertex& b = mesh.vertices[mesh.indices[i + 1]];
+        const SkinVertex& c = mesh.vertices[mesh.indices[i + 2]];
+        const Vec3 face = (b.position - a.position).cross(c.position - a.position);
+        const Vec3 shading = a.normal + b.normal + c.normal;
+        if (face.lengthSq() < 1e-12f || shading.lengthSq() < 1e-12f) continue;
+        ++triangles;
+        if (face.normalized().dot(shading.normalized()) > 0.0f) ++agreeing;
+    }
+    printf("  normals agree with winding on %zu/%zu triangles\n", agreeing, triangles);
+    MGE_CHECK(triangles > 1000);
+    // A creased fold (armpit, crotch) can smooth its vertex normals past the
+    // face plane; a modelling error shows up as whole patches, not a handful.
+    MGE_CHECK(agreeing * 200 >= triangles * 199);
+
+    // And on the chest, where "outward" is unambiguous, the normal points away
+    // from the body's axis.
+    size_t checked = 0, outward = 0;
     for (uint32_t i : regionVertices(mesh, BodyRegion::Torso)) {
         const SkinVertex& v = mesh.vertices[i];
-        if (v.position.y < 1.0f || v.position.y > 1.35f) continue;
+        if (v.position.y < 1.15f || v.position.y > 1.35f) continue;
         const Vec3 radial{v.position.x, 0, v.position.z};
         if (radial.length() < 0.05f) continue;
         ++checked;
-        if (radial.normalized().dot(v.normal) > 0.2f) ++agreeing;
+        if (radial.normalized().dot(v.normal) > 0.0f) ++outward;
     }
     MGE_CHECK(checked > 50);
-    MGE_CHECK(agreeing == checked);
+    MGE_CHECK(outward == checked);
 }
 
 MGE_TEST(body_mesh_is_deterministic) {
@@ -246,21 +285,61 @@ MGE_TEST(body_mesh_skin_weights_are_valid) {
     const SkinnedMeshData mesh = body();
     Vec3 bind[kJointCount];
     templateBindPositions(bind);
+    // The bone a joint drives runs from that joint to its first child; a leaf
+    // bone continues the direction it came in on. Measuring against the BONE
+    // rather than the joint is what makes the rule pose-independent: a long
+    // femur legitimately moves vertices far from the hip, but nothing it
+    // moves is far from the femur itself.
+    Vec3 boneEnd[kJointCount];
+    {
+        const Skeleton s = buildSkeleton(templateVariant());
+        int8_t child[kJointCount];
+        for (size_t j = 0; j < kJointCount; ++j) child[j] = -1;
+        for (size_t j = 0; j < kJointCount; ++j) {
+            const int8_t parent = s.parent[j];
+            if (parent >= 0 && child[static_cast<size_t>(parent)] < 0) {
+                child[static_cast<size_t>(parent)] = static_cast<int8_t>(j);
+            }
+        }
+        for (size_t j = 0; j < kJointCount; ++j) {
+            boneEnd[j] = child[j] >= 0 ? bind[static_cast<size_t>(child[j])] : bind[j];
+        }
+    }
+    const auto distanceToBone = [&](const Vec3& p, size_t j) {
+        const Vec3 ab = boneEnd[j] - bind[j];
+        const float denom = ab.lengthSq();
+        float t = denom < 1e-12f ? 0.0f : (p - bind[j]).dot(ab) / denom;
+        t = t < 0.0f ? 0.0f : (t > 1.0f ? 1.0f : t);
+        return (p - (bind[j] + ab * t)).length();
+    };
+
     bool ok = true;
+    float worstReach = 0;
     for (const SkinVertex& v : mesh.vertices) {
         int sum = 0;
         for (int k = 0; k < 4; ++k) {
             sum += v.weights[k];
-            if (v.joints[k] >= kJointCount) ok = false;
-            // A weighted joint must be near the vertex it moves: a stray
-            // influence is the classic rigging bug and shows as a spike.
-            if (v.weights[k] > 0 &&
-                (v.position - bind[v.joints[k]]).length() > 0.65f) {
+            if (v.joints[k] >= kJointCount) {
                 ok = false;
+                continue;
             }
+            if (v.weights[k] == 0) continue;
+            // A stray influence is the classic rigging bug — bone-heat weights
+            // leak across a joint and the limb swims when the joint bends.
+            // Every influence must be on a bone essentially as close to the
+            // vertex as the closest bone influencing it.
+            float nearest = 1e9f;
+            for (int q = 0; q < 4; ++q) {
+                if (v.weights[q] == 0 || v.joints[q] >= kJointCount) continue;
+                nearest = std::fmin(nearest, distanceToBone(v.position, v.joints[q]));
+            }
+            const float reach = distanceToBone(v.position, v.joints[k]) - nearest;
+            worstReach = std::fmax(worstReach, reach);
+            if (reach > 0.12f) ok = false;
         }
         if (sum != 255) ok = false;
     }
+    printf("  worst influence reach past the nearest bone: %.4f m\n", worstReach);
     MGE_CHECK(ok);
 }
 
@@ -304,9 +383,34 @@ MGE_TEST(body_variants_come_from_the_palette_not_new_meshes) {
     heavy.bulk = 1.5f;
     const MeshData thinPosed = restPose(thin, mesh);
     const MeshData heavyPosed = restPose(heavy, mesh);
-    const float thinArm = widthOf(mesh, thinPosed.vertices, BodyRegion::ArmL, -1.0f, 3.0f);
-    const float heavyArm = widthOf(mesh, heavyPosed.vertices, BodyRegion::ArmL, -1.0f, 3.0f);
-    MGE_CHECK(heavyArm > thinArm * 1.5f);  // bulk 1.5 vs 0.75: twice the limb
+    // Measured ACROSS the arm (its depth in Z), not along X: the template's
+    // bind pose is the base mesh's relaxed stance, so the arm hangs
+    // diagonally and its X span is mostly length. Bulk must thicken the limb
+    // without lengthening it — that is what the bone-local scale frame buys.
+    const float thinArm = depthOf(mesh, thinPosed.vertices, BodyRegion::ArmL);
+    const float heavyArm = depthOf(mesh, heavyPosed.vertices, BodyRegion::ArmL);
+    printf("  arm thickness: bulk 0.75 -> %.4f m, bulk 1.50 -> %.4f m\n", thinArm, heavyArm);
+    MGE_CHECK(heavyArm > thinArm * 1.5f);  // bulk 1.5 vs 0.75: half again as thick
+
+    // ...and the arm keeps its length: a heavy character is not a long-armed
+    // one. Length is the span of the arm's vertices ALONG the bone.
+    Vec3 bindPos[kJointCount];
+    templateBindPositions(bindPos);
+    const Vec3 armAxis =
+        (bindPos[J(Joint::HandL)] - bindPos[J(Joint::UpperArmL)]).normalized();
+    const std::vector<uint32_t> armVerts = regionVertices(mesh, BodyRegion::ArmL);
+    const auto armSpan = [&](const MeshData& posed) {
+        float lo = 1e9f, hi = -1e9f;
+        for (uint32_t i : armVerts) {
+            const float t = posed.vertices[i].position.dot(armAxis);
+            lo = std::fmin(lo, t);
+            hi = std::fmax(hi, t);
+        }
+        return hi - lo;
+    };
+    const float thinSpan = armSpan(thinPosed), heavySpan = armSpan(heavyPosed);
+    printf("  arm span: thin %.4f m, heavy %.4f m\n", thinSpan, heavySpan);
+    MGE_CHECK(std::fabs(heavySpan - thinSpan) < 0.06f);
 }
 
 MGE_TEST(body_mesh_survives_joint_bending) {

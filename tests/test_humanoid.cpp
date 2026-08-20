@@ -52,7 +52,9 @@ MGE_TEST(skeleton_matches_variant_proportions) {
     const Vec3 head = jointPosition(s, bind, Joint::Head);
     MGE_CHECK_NEAR(head.y + s.headSize, avg.height, 0.06f);
     const Vec3 footL = jointPosition(s, bind, Joint::FootL);
-    MGE_CHECK(footL.y > 0.0f && footL.y < 0.08f);  // ankle just above ground
+    // The ankle, where the template body's ankle actually is: ~6.6% of height
+    // above the sole. (The rig is fitted to the mesh, not the mesh to the rig.)
+    MGE_CHECK(footL.y > 0.04f * avg.height && footL.y < 0.10f * avg.height);
     MGE_CHECK_NEAR(jointPosition(s, bind, Joint::UpperArmL).x, avg.shoulderWidth * 0.5f, 1e-4f);
     MGE_CHECK_NEAR(jointPosition(s, bind, Joint::ThighR).x, -avg.hipWidth * 0.5f, 1e-4f);
 

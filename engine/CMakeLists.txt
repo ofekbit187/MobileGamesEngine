@@ -29,6 +29,10 @@ add_library(mge_core STATIC
 )
 
 target_include_directories(mge_core PUBLIC include)
+# The shipped character assets (the humanoid template body and its garments)
+# live in the repo; Android overrides this at runtime with the extracted pack.
+target_compile_definitions(mge_core PRIVATE
+    MGE_CHARACTER_ASSET_DIR="${CMAKE_CURRENT_SOURCE_DIR}/../assets/models")
 # Vendored single-header libs (stb_truetype for font baking).
 target_include_directories(mge_core PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/../third_party/stb)
 
@@ -40,7 +44,10 @@ target_link_libraries(mge_core PUBLIC Threads::Threads)
 # Import module (task 2.5): host-side tooling — bakes glTF into the runtime
 # mesh format. Not built for Android; devices consume baked assets only.
 if(NOT ANDROID)
-    add_library(mge_import STATIC src/import/gltf_import.cpp)
+    add_library(mge_import STATIC
+        src/import/gltf_import.cpp
+        src/import/gltf_skin_import.cpp
+    )
     target_link_libraries(mge_import PUBLIC mge_core)
     target_include_directories(mge_import PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/../third_party/cgltf)
 endif()
