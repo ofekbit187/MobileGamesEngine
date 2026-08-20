@@ -71,6 +71,28 @@ const cgltf_accessor* findAttribute(const cgltf_primitive& primitive,
     return nullptr;
 }
 
+// glTF carries morph targets natively (Blender exports shape keys as these),
+// so a shape parameter is authored, exported and imported like any other part
+// of the model — no side-car file, no bespoke authoring format.
+bool morphFromName(const char* name, Morph& out) {
+    if (name == nullptr) return false;
+    for (size_t i = 0; i < kMorphCount; ++i) {
+        if (std::strcmp(name, morphName(static_cast<Morph>(i))) == 0) {
+            out = static_cast<Morph>(i);
+            return true;
+        }
+    }
+    return false;
+}
+
+const cgltf_accessor* findTargetAttribute(const cgltf_morph_target& target,
+                                          cgltf_attribute_type type) {
+    for (cgltf_size a = 0; a < target.attributes_count; ++a) {
+        if (target.attributes[a].type == type) return target.attributes[a].data;
+    }
+    return nullptr;
+}
+
 }  // namespace
 
 bool importSkinnedGltf(const char* path, SkinnedMeshData& out, std::string* error) {
@@ -218,6 +240,59 @@ bool importSkinnedGltf(const char* path, SkinnedMeshData& out, std::string* erro
             }
         }
         out.indices.insert(out.indices.end(), primIndices.begin(), primIndices.end());
+
+        // --- morph targets, matched to the canonical shape parameters by name
+        const cgltf_mesh& parent = *skinnedNode->mesh;
+        for (cgltf_size t = 0; t < prim.targets_count; ++t) {
+            const char* name = t < parent.target_names_count ? parent.target_names[t] : nullptr;
+            Morph morph{};
+            if (!morphFromName(name, morph)) continue;  // unknown target: ignored, not an error
+            const cgltf_accessor* dpos =
+                findTargetAttribute(prim.targets[t], cgltf_attribute_type_position);
+            if (dpos == nullptr) continue;
+            const cgltf_accessor* dnrm =
+                findTargetAttribute(prim.targets[t], cgltf_attribute_type_normal);
+
+            // Two passes: the first finds the largest displacement, which sets
+            // the quantization scale, so int16 spends its whole range on this
+            // target rather than on a fixed guess.
+            float largest = 0.0f;
+            for (cgltf_size v = 0; v < dpos->count; ++v) {
+                float p[3] = {0, 0, 0};
+                cgltf_accessor_read_float(dpos, v, p, 3);
+                for (int k = 0; k < 3; ++k) largest = std::max(largest, std::fabs(p[k]));
+            }
+            if (largest < 1e-6f) continue;  // a target that moves nothing is not stored
+
+            MorphTarget target;
+            target.morph = morph;
+            target.scale = largest;
+            const float quantize = 32767.0f / largest;
+            for (cgltf_size v = 0; v < dpos->count && v < positions->count; ++v) {
+                float p[3] = {0, 0, 0};
+                cgltf_accessor_read_float(dpos, v, p, 3);
+                float n[3] = {0, 0, 0};
+                if (dnrm != nullptr) cgltf_accessor_read_float(dnrm, v, n, 3);
+                // Sparse by construction: a facial parameter leaves most of
+                // the body untouched, and untouched vertices cost nothing.
+                if (std::fabs(p[0]) + std::fabs(p[1]) + std::fabs(p[2]) < 2e-5f &&
+                    std::fabs(n[0]) + std::fabs(n[1]) + std::fabs(n[2]) < 2e-3f) {
+                    continue;
+                }
+                MorphDelta delta;
+                delta.vertex = static_cast<uint16_t>(base + v);
+                for (int k = 0; k < 3; ++k) {
+                    const float q = p[k] * quantize;
+                    delta.position[k] = static_cast<int16_t>(
+                        q < -32767.0f ? -32767.0f : (q > 32767.0f ? 32767.0f : q));
+                    const float m = n[k] * 127.0f;
+                    delta.normal[k] =
+                        static_cast<int8_t>(m < -127.0f ? -127.0f : (m > 127.0f ? 127.0f : m));
+                }
+                target.deltas.push_back(delta);
+            }
+            if (!target.deltas.empty()) out.morphs.push_back(std::move(target));
+        }
     }
     cgltf_free(data);
 

@@ -24,8 +24,12 @@ int importSkinned(const char* in, const char* out) {
         fprintf(stderr, "write failed: %s\n", out);
         return 1;
     }
-    printf("%s -> %s: %zu vertices, %zu triangles, %zu regions\n", in, out,
-           mesh.vertices.size(), mesh.triangleCount(), mesh.parts.size());
+    size_t morphDeltas = 0;
+    for (const mge::MorphTarget& t : mesh.morphs) morphDeltas += t.deltas.size();
+    printf("%s -> %s: %zu vertices, %zu triangles, %zu regions, %zu morph targets "
+           "(%zu deltas, %zu B)\n",
+           in, out, mesh.vertices.size(), mesh.triangleCount(), mesh.parts.size(),
+           mesh.morphs.size(), morphDeltas, morphDeltas * sizeof(mge::MorphDelta));
     return 0;
 }
 

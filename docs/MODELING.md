@@ -120,6 +120,15 @@ Also budgeted:
 - **Variant scale is applied in the bone's own frame**, +Y along the bone. In
   an A-pose bind no limb is axis-aligned, so scaling in character axes makes a
   bulky character's arms longer instead of thicker.
+- **What scaling cannot say is a morph target** (ADR 0009): a ribcage, a
+  belly, a brow. Author them PARAMETRICALLY — a region measured against
+  landmarks found on the model, and a displacement over it — never as a hand
+  sculpt. Parametric targets are deterministic, diffable, re-derivable when
+  the base mesh changes, smooth by construction (so they cannot tear the
+  mesh), and a test can read them. Generate them per LOD, AFTER decimation.
+- **A morph target stores one direction.** The engine negates it for the other
+  half of the range, so a target that is not an exact mirror of itself is a
+  bug — and storing both halves is a P1 regression.
 - **Weights are pruned, not just normalised.** Bone-heat weighting is a
   diffusion solve and it leaks across joints — on the template body it left the
   ankle ~10 % *thigh* influence, which reads as the foot swimming when the knee

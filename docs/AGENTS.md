@@ -226,7 +226,8 @@ far lived in platform glue that headless tests could not reach — closing that 
   | 0006 | Audio architecture | in use |
   | 0007 | Humanoid template body | in use — **not 0005**, whatever older comments say |
   | 0008 | Wearable fitting pipeline | in use — ruled, see §10.1 |
-  | 0009+ | — | available on request |
+  | 0009 | Humanoid variation scope | in use — renumbered from a third self-assigned 0006 |
+  | 0010+ | — | available on request |
 - **CMake source lists**: one file per line, alphabetical. Both-added lines are the most
   common merge conflict in this repo.
 - **Shared headers**: append at the documented seam point, don't reorganize. A tidy-up of
@@ -324,6 +325,18 @@ the body-mesh test skips Face explicitly). Harmless until the first mask, visor 
 face-covering helm — then it blocks that item outright. Hem loops, region vertex groups and
 the published authoring reference are likewise undelivered, and they gate the first
 *authored garment* rather than the body itself. Tracked as tasks 13.7–13.9.
+
+### 10.1a Morph deltas do not ride the GPU yet — **Body ⇄ Renderer, OPEN**
+
+The variation-scope milestone (ADR 0009) applies shape morphs in `skinMesh()` — CPU, bind
+space, before the palette, explicitly documented as the order the shader must use. The GPU
+skinning path predates it and applies palette only: **a morphed character GPU-skins without
+its shape**. Until closed, morphed characters must CPU-skin or lose their face/body shape.
+The fix is the renderer's (morph-delta buffer + weights alongside the palette slot, applied
+in `skinned.vert` in the same order), verified the same way as before — `mge_skin_test`
+compares GPU output against the CPU reference, now with non-zero morph weights. This is the
+next renderer job, and it also gates facial expressions (10.2) and the wearables shape
+re-fit (13.4 consumes the same deltas).
 
 ### 10.2 Facial expressions need geometry AND renderer support — **Body ⇄ Renderer**
 

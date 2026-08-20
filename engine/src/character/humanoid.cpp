@@ -26,7 +26,62 @@ void grantHumanoidActions(CharacterSystem& characters, EntityId entity) {
 
 // ----------------------------------------------------------------- rig ------
 
-Skeleton buildSkeleton(const HumanoidVariant& variant) {
+// ------------------------------------------------- the variation scope -----
+//
+// The limits are anatomy, not taste. Height spans a small adult to a very
+// large one; the ratios span the range real human proportions cover, widened
+// a little so a game can stylize without leaving the space the rig and the
+// wearables were built for. ADR 0009 records why each is where it is.
+const VariantRange kHeightRange{1.35f, 2.15f, 1.75f};
+const VariantRange kShoulderWidthRange{0.28f, 0.52f, 0.37f};
+const VariantRange kHipWidthRange{0.15f, 0.30f, 0.20f};
+const VariantRange kLegRatioRange{0.43f, 0.56f, 0.50f};
+const VariantRange kArmRatioRange{0.38f, 0.50f, 0.44f};
+const VariantRange kBulkRange{0.70f, 1.60f, 1.00f};
+const VariantRange kHeadScaleRange{0.85f, 1.20f, 1.00f};
+const VariantRange kFootScaleRange{0.80f, 1.25f, 1.00f};
+
+namespace {
+
+float clampRange(float value, const VariantRange& range) {
+    return value < range.min ? range.min : (value > range.max ? range.max : value);
+}
+
+float clampShape(float value) { return clampf(value, -1.0f, 1.0f); }
+
+}  // namespace
+
+HumanoidVariant clampToScope(const HumanoidVariant& variant) {
+    HumanoidVariant v = variant;
+    v.height = clampRange(v.height, kHeightRange);
+    v.shoulderWidth = clampRange(v.shoulderWidth, kShoulderWidthRange);
+    v.hipWidth = clampRange(v.hipWidth, kHipWidthRange);
+    v.legRatio = clampRange(v.legRatio, kLegRatioRange);
+    v.armRatio = clampRange(v.armRatio, kArmRatioRange);
+    v.bulk = clampRange(v.bulk, kBulkRange);
+    v.headScale = clampRange(v.headScale, kHeadScaleRange);
+    v.footScale = clampRange(v.footScale, kFootScaleRange);
+    v.chest = clampShape(v.chest);
+    v.belly = clampShape(v.belly);
+    v.seat = clampShape(v.seat);
+    v.muscle = clampShape(v.muscle);
+    v.neck = clampShape(v.neck);
+    v.face.skull = clampShape(v.face.skull);
+    v.face.brow = clampShape(v.face.brow);
+    v.face.cheeks = clampShape(v.face.cheeks);
+    v.face.jawWidth = clampShape(v.face.jawWidth);
+    v.face.chin = clampShape(v.face.chin);
+    v.face.noseLength = clampShape(v.face.noseLength);
+    v.face.noseWidth = clampShape(v.face.noseWidth);
+    v.face.mouth = clampShape(v.face.mouth);
+    v.face.eyes = clampShape(v.face.eyes);
+    v.face.ears = clampShape(v.face.ears);
+    return v;
+}
+
+Skeleton buildSkeleton(const HumanoidVariant& requested) {
+    // Content can ask for anything; the scope decides what it gets.
+    const HumanoidVariant variant = clampToScope(requested);
     // The bind pose IS the template model's own pose (ADR 0005). The body is
     // Blender Studio's CC0 base mesh, and this rig was fitted to it — bones
     // measured inside its limbs, in its authored relaxed stance — rather than
@@ -44,10 +99,20 @@ Skeleton buildSkeleton(const HumanoidVariant& variant) {
     const float armK = k * (variant.armRatio / 0.44f);
     const float shoulderX = variant.shoulderWidth * 0.5f;
     const float hipX = variant.hipWidth * 0.5f;
+
+    // `height` means sole to crown, for EVERY combination of the other
+    // parameters — otherwise a variant file is lying and no game can lay out
+    // a doorway. Legs and head are placed from their own parameters, and the
+    // spine takes up whatever is left, so the crown always lands on `height`.
+    //   hips  = height * legRatio * 1.0285   (0.900 m on the 1.75 m template)
+    //   crown = hips + spine chain + headSize
+    const float hipsY = 1.8f * variant.height * variant.legRatio * 0.5714f;
     // Head joint (the atlas, where the skull pivots) to the crown, measured on
-    // the template body: 1.750 - 1.580. It is what "the head" means everywhere
-    // below, so head.y + headSize lands exactly on the variant's height.
+    // the template body: 1.750 - 1.580.
     const float headSize = 0.170f * k * variant.headScale;
+    // The template's hips-to-Head-joint distance is 0.680 m.
+    const float chain = variant.height - hipsY - headSize;
+    const float chainK = chain > 0.05f ? chain / 0.680f : 0.05f / 0.680f;
 
     const auto set = [&s](Joint joint, int8_t parent, Vec3 offset) {
         s.parent[idx(joint)] = parent;
@@ -56,11 +121,11 @@ Skeleton buildSkeleton(const HumanoidVariant& variant) {
     const auto p = [](Joint j) { return static_cast<int8_t>(j); };
 
     // --- spine: hips at 0.900 m on the template body ---
-    set(Joint::Hips, -1, {0, 1.8f * variant.height * variant.legRatio * 0.5714f, 0});
-    set(Joint::Spine, p(Joint::Hips), {0, 0.180f * k, 0});
-    set(Joint::Chest, p(Joint::Spine), {0, 0.200f * k, -0.010f * k});
-    set(Joint::Neck, p(Joint::Chest), {0, 0.220f * k, 0.000f});
-    set(Joint::Head, p(Joint::Neck), {0, 0.080f * k, -0.010f * k});
+    set(Joint::Hips, -1, {0, hipsY, 0});
+    set(Joint::Spine, p(Joint::Hips), {0, 0.180f * chainK, 0});
+    set(Joint::Chest, p(Joint::Spine), {0, 0.200f * chainK, -0.010f * k});
+    set(Joint::Neck, p(Joint::Chest), {0, 0.220f * chainK, 0.000f});
+    set(Joint::Head, p(Joint::Neck), {0, 0.080f * chainK, -0.010f * k});
 
     // --- arms: the model's relaxed stance, 23 degrees off vertical ---
     for (int side = 0; side < 2; ++side) {
@@ -68,7 +133,7 @@ Skeleton buildSkeleton(const HumanoidVariant& variant) {
         const Joint upper = side == 0 ? Joint::UpperArmL : Joint::UpperArmR;
         const Joint fore = side == 0 ? Joint::ForearmL : Joint::ForearmR;
         const Joint hand = side == 0 ? Joint::HandL : Joint::HandR;
-        set(upper, p(Joint::Chest), {m * shoulderX, 0.170f * k, 0.010f * k});
+        set(upper, p(Joint::Chest), {m * shoulderX, 0.170f * chainK, 0.010f * k});
         set(fore, p(upper), {m * 0.114f * armK, -0.300f * armK, -0.045f * armK});
         set(hand, p(fore), {m * 0.102f * armK, -0.272f * armK, -0.046f * armK});
     }
@@ -90,7 +155,7 @@ Skeleton buildSkeleton(const HumanoidVariant& variant) {
     s.shinLength = len(Joint::FootL);
     s.upperArmLength = len(Joint::ForearmL);
     s.forearmLength = len(Joint::HandL);
-    s.torsoLength = (0.180f + 0.200f + 0.220f) * k;
+    s.torsoLength = (0.180f + 0.200f + 0.220f) * chainK;
     s.headSize = headSize;
     return s;
 }
