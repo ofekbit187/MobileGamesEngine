@@ -47,7 +47,7 @@ when they run; concurrency is incidental, not the point. Two consequences:
   half-state costs more than it saved.
 
 The architect writes each session's brief before it starts and reviews its work when it
-ends (§10) — that review is what keeps many narrow sessions adding up to one coherent
+ends (§11) — that review is what keeps many narrow sessions adding up to one coherent
 engine.
 
 ### Areas jobs are drawn from
@@ -134,7 +134,7 @@ Each charter is written to be handed to a fresh session as its brief.
 Supervise the engine against the owner's dictations. Absorb every new dictation and every
 review-board comment into `docs/` before any code moves. Own the seams (§4) and rule on
 cross-session questions. Keep `docs/TASKS.md` honest at the phase level. Publish the review
-board (§8). Review other sessions' merged work for scope drift, principle violations
+board (§9). Review other sessions' merged work for scope drift, principle violations
 (especially P1), and dictation fidelity — and say so plainly when something has drifted.
 Build only what has no owner.
 
@@ -203,16 +203,77 @@ far lived in platform glue that headless tests could not reach — closing that 
 
 - **Branches.** One branch per session, named for the session. Merge the others' work into
   yours; never rewrite shared history.
-- **ADR numbers are reserved, not chosen.** Two sessions both minted `0005` once and it cost
-  a renumbering. Ask the architect for a number. Reserved so far: 0001–0007 in use;
-  **0008+ available on request**.
+- **ADR numbers are reserved, not chosen.** Two sessions both minted `0005`; it cost a
+  renumbering, and then a second correction when the body session's later work still
+  referenced the old number. Ask the architect for a number — never pick one.
+
+  | ADR | Subject | State |
+  |---|---|---|
+  | 0001 | Technology stack | in use |
+  | 0002 | Runtime mesh format (`.mgemesh`) | in use |
+  | 0003 | World streaming format (`.mgeworld`) | in use |
+  | 0004 | Save format (`.mgesave`) | in use |
+  | 0005 | Family-tree format (`.mgetree`) | in use |
+  | 0006 | Audio architecture | in use |
+  | 0007 | Humanoid template body | in use — **not 0005**, whatever older comments say |
+  | 0008 | Wearable fitting pipeline | **reserved** for the wearables area, pending §10.1 |
+  | 0009+ | — | available on request |
 - **CMake source lists**: one file per line, alphabetical. Both-added lines are the most
   common merge conflict in this repo.
 - **Shared headers**: append at the documented seam point, don't reorganize. A tidy-up of
   someone else's header is not worth the conflict.
-- **The review board has one publisher** (§8).
+- **The review board has one publisher** (§9).
 
-## 8. The review board
+## 8. Integration — one line everyone merges into
+
+**Owner's ruling:** the architect's branch is the **integration branch**.
+
+```
+claude/android-game-engine-design-blsmnw
+```
+
+The name is historical — it was a task branch before it was the trunk. It is the line that
+must always build, always pass, and always be the truth about what the engine is.
+
+**Direction of travel.** Session branches flow *in*; nobody develops on the integration
+branch except the architect.
+
+```
+   session branch ──┐
+   session branch ──┼──▶  integration branch  ──▶  the engine, verified
+   session branch ──┘         (architect merges, verifies, pushes)
+```
+
+**A session's obligations:**
+
+1. **Start from integration.** Merge it into your branch before you begin, so you are
+   building on what exists rather than on a snapshot from three phases ago. The body
+   session diverged for four phases once; catching up cost a hand-resolved merge and a
+   second ADR-number collision.
+2. **Merge integration in again before you finish**, and make sure your branch still passes
+   with it. Resolving your own conflicts is cheaper than the architect guessing at them.
+3. **Push your branch and say it's ready.** Do not merge yourself.
+
+**The architect's obligations:**
+
+1. Merge finished session branches into integration — promptly, because divergence is
+   superlinear: two sessions apart is a conflict, four phases apart is an archaeology
+   project.
+2. **Verify after every merge, before pushing**: `scripts/verify.sh` green across all three
+   tiers, and the host runner still printing `steady-state heap allocations: 0`. A merge
+   that builds is not a merge that works — the merge itself is a change nobody wrote and
+   nobody tested.
+3. Resolve conflicts. Inside someone's area, their version wins — they are the authority
+   there (§1.3). Where a resolution would change *behaviour* rather than reconcile text, it
+   goes back to the owning session instead of being guessed at.
+4. Never rewrite shared history. No rebase, amend, or force-push on a line other sessions
+   have pulled.
+
+**When integration is red, it is the architect's emergency and nothing else ships until it
+is green.** A broken trunk multiplies: every session that starts from it inherits the
+break and wastes its context diagnosing someone else's problem.
+
+## 9. The review board
 
 The owner reviews progress on one living artifact — one URL, updated in place.
 **Only the architect publishes it.** Two sessions publishing the same artifact caused a
@@ -224,13 +285,13 @@ produced by the engine, a test name that now passes. The board's labelling rule 
 ● real output means the engine produced it here; ○ design proposal means it is a mockup
 awaiting the owner's verdict. Never present a mockup as engine output.
 
-## 9. Open coordination items
+## 10. Open coordination items
 
 Live cross-session questions the architect is holding. Each names the sessions it binds and
 the decision that unblocks them. These are the coordination the owner asked for, made
 concrete — not a backlog.
 
-### 9.1 How wearables fit an imported body — **RESEARCHED, awaiting the owner's verdict**
+### 10.1 How wearables fit an imported body — **RESEARCHED, awaiting the owner's verdict**
 
 *Status: the premise this item was written against has changed twice. The imported body has
 landed, and the owner commissioned the wearables session to research the fitting question
@@ -281,7 +342,7 @@ glTF authoring reference, and per-region vertex groups) — none of which the cu
 fully provides yet. `BodyRegion::Face` is empty today, which the body session has recorded
 honestly and which the research says will matter the moment a mask or visor exists.
 
-### 9.2 Facial expressions need geometry AND renderer support — **Body ⇄ Renderer**
+### 10.2 Facial expressions need geometry AND renderer support — **Body ⇄ Renderer**
 
 Task 8.20 (seven blendable expression presets) is fully designed with no code. The body is
 now an imported artist mesh, so the old blocker — "the parametric head is featureless" — is
@@ -291,7 +352,7 @@ order: **face geometry and morph deltas on the template** (body session), then *
 support in the skinned draw path** (renderer). Neither session can finish it alone, and
 writing the API first would be designing against a shape nobody has.
 
-### 9.3 Masking granularity must match coverage — **Body ⇄ Wearables**
+### 10.3 Masking granularity must match coverage — **Body ⇄ Wearables**
 
 `CoverBits` (torso, arms, legs, feet, scalp) is the whole vocabulary for "this garment hides
 that". A finer-grained body — separate forearms, a neck, individual feet — makes garments
@@ -299,7 +360,7 @@ able to *describe* coverage the body cannot *suppress*, and the mismatch shows u
 clipping. Any change to body-part segmentation is a seam change and must extend `CoverBits`
 in the same ruling.
 
-## 10. Review cadence
+## 11. Review cadence
 
 The architect checks, on every merge and at every dictation:
 

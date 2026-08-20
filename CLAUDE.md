@@ -22,7 +22,12 @@ which files, the seams between areas, and the charters. The non-negotiables:
   a mechanism is not a policy. Propose adjacent work; don't ship it uninvited.
 - **Only the architect publishes the review board.** Hand it evidence — real output, real
   captures, test names — not prose.
-- **ADR numbers are reserved by the architect**, never self-assigned.
+- **ADR numbers are reserved by the architect**, never self-assigned. (0005 has now been
+  minted twice by two sessions; it cost a renumbering and then a second correction.)
+- **`claude/android-game-engine-design-blsmnw` is the integration branch.** Merge it into
+  your branch before you start and again before you finish; push your own branch and say
+  it is ready. The architect merges into integration, verifies, and pushes — nobody else
+  does, and nobody rewrites shared history.
 - Verify before pushing: `scripts/verify.sh` green, and the host runner still printing
   `steady-state heap allocations: 0`.
 
