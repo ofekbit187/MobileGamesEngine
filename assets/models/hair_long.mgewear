@@ -1,0 +1,11 @@
+# Long hair, falling past the nape.
+
+version       1
+
+id            hair_long
+name          Long hair
+mesh          garment_hair_long
+layer         1
+covers        none
+thickness_mm  5
+color         0.30 0.22 0.14 1

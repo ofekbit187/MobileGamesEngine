@@ -342,4 +342,11 @@ const SkinnedMeshData& sharedGarment(WearableKind kind);
 struct GarmentBinding;
 const GarmentBinding& sharedGarmentBinding(WearableKind kind);
 
+// The same three, addressed by CATALOGUE INDEX rather than by the enum that
+// names the shipped six (task 13.12). A garment added as data has an index and
+// no enumerator, so this is the path that does not require a code change.
+const SkinnedMeshData& sharedGarmentById(size_t index);
+const GarmentBinding& sharedGarmentBindingById(size_t index);
+uint32_t garmentCoverageById(size_t index);
+
 }  // namespace mge

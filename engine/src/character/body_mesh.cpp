@@ -1,5 +1,6 @@
 #include "mge/character/body_mesh.h"
 #include "mge/character/garment_binding.h"
+#include "mge/character/wearable_catalogue.h"
 
 #include <cmath>
 #include <cstring>
@@ -57,18 +58,10 @@ bool loadBinding(const char* name, GarmentBinding& out) {
     return true;
 }
 
-const char* garmentAsset(WearableKind kind) {
-    switch (kind) {
-        case WearableKind::Tunic: return "garment_tunic";
-        case WearableKind::Armor: return "garment_armour";
-        case WearableKind::Pants: return "garment_trousers";
-        case WearableKind::Boots: return "garment_boots";
-        case WearableKind::HairShort: return "garment_hair_short";
-        case WearableKind::HairLong: return "garment_hair_long";
-        case WearableKind::Sword: return nullptr;  // held items are rigid, not fitted
-    }
-    return nullptr;
-}
+// The catalogue row for a shipped kind, or null when no `.mgewear` declares
+// it. Garments are DATA now (task 13.12): this is a lookup, not a switch, and
+// a garment the engine has never heard of resolves exactly the same way.
+const WearableDef* defFor(WearableKind kind) { return wearableCatalogue().def(kind); }
 
 // Copies `src` into `out`, keeping only the parts whose region survives the
 // mask. Masking is a triangle-range decision on the shared vertex buffer:
@@ -147,33 +140,64 @@ const std::vector<SkinnedMeshData>& sharedTemplateLods() {
     return lods;
 }
 
-const SkinnedMeshData& sharedGarment(WearableKind kind) {
-    static const std::vector<SkinnedMeshData> garments = [] {
-        std::vector<SkinnedMeshData> loaded(8);
-        for (size_t k = 0; k < loaded.size(); ++k) {
-            const char* name = garmentAsset(static_cast<WearableKind>(k));
-            if (name != nullptr) loadAsset(name, loaded[k]);
+namespace {
+
+// Meshes and bindings, one slot per catalogue row, loaded on first use and
+// shared process-wide — the P1 claim of the whole design is that a crowd of
+// characters costs ONE copy of each garment however many wear it.
+const std::vector<SkinnedMeshData>& garmentMeshes() {
+    static const std::vector<SkinnedMeshData> loaded = [] {
+        const WearableCatalogue& catalogue = wearableCatalogue();
+        std::vector<SkinnedMeshData> meshes(catalogue.size());
+        for (size_t i = 0; i < catalogue.size(); ++i) {
+            const WearableDef& def = catalogue.at(i);
+            if (!def.held && !def.mesh.empty()) loadAsset(def.mesh.c_str(), meshes[i]);
         }
-        return loaded;
+        return meshes;
     }();
-    const size_t k = static_cast<size_t>(kind);
-    return garments[k < garments.size() ? k : 0];
+    return loaded;
+}
+
+const std::vector<GarmentBinding>& garmentBindings() {
+    static const std::vector<GarmentBinding> loaded = [] {
+        const WearableCatalogue& catalogue = wearableCatalogue();
+        std::vector<GarmentBinding> bindings(catalogue.size());
+        for (size_t i = 0; i < catalogue.size(); ++i) {
+            const WearableDef& def = catalogue.at(i);
+            if (!def.held && !def.mesh.empty()) loadBinding(def.mesh.c_str(), bindings[i]);
+        }
+        return bindings;
+    }();
+    return loaded;
+}
+
+const SkinnedMeshData& emptyMesh() {
+    static const SkinnedMeshData empty;
+    return empty;
+}
+
+}  // namespace
+
+const SkinnedMeshData& sharedGarmentById(size_t index) {
+    const std::vector<SkinnedMeshData>& meshes = garmentMeshes();
+    return index < meshes.size() ? meshes[index] : emptyMesh();
+}
+
+const GarmentBinding& sharedGarmentBindingById(size_t index) {
+    static const GarmentBinding none;
+    const std::vector<GarmentBinding>& bindings = garmentBindings();
+    return index < bindings.size() ? bindings[index] : none;
+}
+
+const SkinnedMeshData& sharedGarment(WearableKind kind) {
+    return sharedGarmentById(wearableCatalogue().indexOf(kind));
 }
 
 // The baked surface binding for a garment (ADR 0008, task 13.2). Absent when
 // the garment has not been through `mge_garment_fit` — the character still
 // renders, it just cannot follow morph-driven shape.
 const GarmentBinding& sharedGarmentBinding(WearableKind kind) {
-    static const std::vector<GarmentBinding> bindings = [] {
-        std::vector<GarmentBinding> loaded(8);
-        for (size_t k = 0; k < loaded.size(); ++k) {
-            const char* name = garmentAsset(static_cast<WearableKind>(k));
-            if (name != nullptr) loadBinding(name, loaded[k]);
-        }
-        return loaded;
-    }();
-    const size_t k = static_cast<size_t>(kind);
-    return bindings[k < bindings.size() ? k : 0];
+    return sharedGarmentBindingById(wearableCatalogue().indexOf(kind));
 }
 
 void buildTemplateBody(const BodyBuildDesc& desc, SkinnedMeshData& out) {
@@ -198,16 +222,16 @@ void buildGarmentMesh(const GarmentBuildDesc& desc, SkinnedMeshData& out) {
 }
 
 uint32_t garmentCoverage(WearableKind kind) {
-    switch (kind) {
-        case WearableKind::Tunic:
-        case WearableKind::Armor: return regionBit(BodyRegion::Torso);
-        case WearableKind::Pants: return kRegionsLegs;
-        case WearableKind::Boots: return kRegionsFeet;
-        case WearableKind::HairShort:
-        case WearableKind::HairLong:
-        case WearableKind::Sword: return 0;
-    }
-    return 0;
+    const WearableDef* def = defFor(kind);
+    return def != nullptr ? def->covers : 0u;
+}
+
+// The same answer for a garment that has no enumerator because it was added
+// as data (task 13.12). Everything downstream — masking, the layer cascade,
+// the hidden-inner-geometry rule — goes through this.
+uint32_t garmentCoverageById(size_t index) {
+    const WearableCatalogue& catalogue = wearableCatalogue();
+    return index < catalogue.size() ? catalogue.at(index).covers : 0u;
 }
 
 // ------------------------------------------------------------- morphs ------
