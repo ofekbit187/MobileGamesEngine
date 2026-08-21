@@ -2,16 +2,55 @@
 
 **Session:** session_01TiRzQ9qPRKyvVbtW9akJLV
 **Branch:** `claude/animation-layered-poses`
-**State:** idle
-**Updated:** 2026-08-21 by the architect (seeding the ledger; this session updates it from now on)
+**State:** working
+**Updated:** 2026-08-21 — session started, docs read, baseline measured
 
 ## Now
-**Job 1: task 14.1 — layered poses with masks.** Locomotion drives the lower body while an action drives the upper body, composed by a joint mask on the existing 17-joint palette. This is the enabling capability that Phase 14, the facial expressions (8.20) and every future overlay all ride on: **a character cannot currently swing a sword while walking**, because locomotion owns the whole skeleton.
+**Job 1: task 14.1 — layered poses with masks.** Building.
 
-Then 14.2 (the nine use archetypes, parameterized by grip/reach/weight), 14.3 (phase-addressable wind-up/strike/recovery), 14.4 (interruption blending), 14.5 (archetype data on `ItemUse`), 14.6 (six items, zero per-item animation authoring — the P12 proof).
+**Design, before code (so the architect can object early).** Layering composes in **pose
+space** — local joint rotations — *before* `evaluatePose`. Base pose (locomotion) and overlay
+layers are blended per joint by a `JointMask`, producing **one** `Pose`, which then goes down
+the existing path unchanged. This satisfies the three hard constraints by construction rather
+than by care:
+
+- **One pose evaluation, one palette upload, one skin pass** — because layering finishes
+  before `evaluatePose` is called at all. Nothing downstream of the composer can tell a
+  layered character from an unlayered one.
+- **Allocation-free** — `Pose` is 17 quaternions by value and `JointMask` is 17 floats by
+  value; the layer stack is a fixed-capacity member array that refuses past its cap and
+  returns `false` rather than growing. No heap on the frame path.
+- **No rig change, so no seam request.** Layering rides entirely on top of the existing
+  `Joint` enum, `Skeleton`, bind offsets and the 17-joint palette. I do not need to add or
+  rename a joint, and I am not touching `humanoid.h`'s rig, `character.h`, or
+  `garment_fit.*`. New code lands in files this area owns:
+  `engine/{include/mge,src}/character/animation.*` and `tests/test_animation.cpp`.
 
 ## Needs from the architect
-Nothing yet. The rig is a seam: joint identity and the 17-joint count belong to the character asset pipeline, so any need to add or rename a joint gets raised here rather than taken.
+Nothing blocking. Two things flagged for visibility, neither of which stops me:
+
+1. **One line in the root `CMakeLists.txt`** to register a new capture tool
+   (`tools/anim_preview`, which is mine under AGENTS.md §3 "`tools/<demo>/**` — whoever the
+   demo demonstrates"). The tool directory is unambiguously mine; the one-line
+   `add_subdirectory` registration is the only thing outside it. Flagging rather than
+   asking, since without it the tool cannot build. Say the word if you want it elsewhere.
+2. **`Quat` has no `slerp`/`nlerp`** in `engine/include/mge/core/math.h`. Rather than extend
+   a shared core header, I am keeping the blend helper private to the animation module. If
+   you would prefer it promoted to `math.h` later, that is your call, not mine to take.
 
 ## Last landed
-Nothing. What exists today (procedural idle/walk/run with speed blending, GPU skinning, one shared palette) came from Phase 8 and predates this area having an owner.
+Nothing yet.
+
+## Baseline measured this session (● real output, host, llvmpipe)
+Integration `e657131` builds clean and is green before I touch it:
+
+```
+100% tests passed, 0 tests failed out of 2
+steady-state: 600 frames in 4.10 ms (6.8 us/frame)
+steady-state heap allocations: 0  (target: 0)
+```
+
+Note for whoever runs this environment next: the container had no Vulkan, so every GPU demo
+was being skipped. `apt-get install libvulkan-dev mesa-vulkan-drivers` brings up llvmpipe and
+`mge_vk_smoke` then reports `pixels verified: 65536, wrong: 0`. Captures are therefore
+possible here, which is what makes a visual proof of 14.1 possible.
