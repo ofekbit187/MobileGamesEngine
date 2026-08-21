@@ -434,3 +434,223 @@ MGE_TEST(draw_pulls_the_off_hand_back_while_the_lead_arm_holds) {
     MGE_CHECK((offAtDraw - jointAt(bow, p.windUp, Joint::Head)).length() < 0.55f);
     MGE_CHECK((offAtRelease - offAtDraw).length() > 0.15f);
 }
+
+// ---------------------------------------------------------------------------
+// Playing an archetype (14.3 phase addressability, 14.4 interruption).
+// ---------------------------------------------------------------------------
+
+MGE_TEST(the_strike_moment_fires_exactly_once) {
+    UseMotion sword;
+    sword.archetype = UseArchetype::Swing;
+    sword.reach = 1.05f;
+    sword.weight = 1.40f;
+
+    UsePlayer player;
+    player.start(sword);
+    int fired = 0;
+    for (int f = 0; f < 600 && player.active(); ++f) {
+        if (player.update(1.0f / 60.0f)) ++fired;
+    }
+    MGE_CHECK(fired == 1);
+    MGE_CHECK(!player.active());
+
+    // ...and exactly once even when one long dt steps clean over the moment,
+    // which is how a hitch would otherwise drop a hit entirely.
+    UsePlayer coarse;
+    coarse.start(sword);
+    fired = 0;
+    while (coarse.active()) {
+        if (coarse.update(0.9f)) ++fired;
+    }
+    MGE_CHECK(fired == 1);
+}
+
+MGE_TEST(a_heavier_weapon_lands_its_blow_later) {
+    // The Phase 12 action model tunes a delay by hand. This is the replacement:
+    // the damage instant IS the motion's own geometry.
+    UseMotion dagger;
+    dagger.archetype = UseArchetype::Swing;
+    dagger.reach = 0.30f;
+    dagger.weight = 0.35f;
+    UseMotion maul;
+    maul.archetype = UseArchetype::Swing;
+    maul.reach = 1.15f;
+    maul.weight = 7.50f;
+
+    UsePlayer light, heavy;
+    light.start(dagger);
+    heavy.start(maul);
+    MGE_CHECK(heavy.strikeMoment() > light.strikeMoment() * 1.5f);
+    MGE_CHECK(light.timeUntilStrike() > 0.0f);
+
+    // Nobody tuned those two numbers to agree — they come from `weight`.
+    MGE_CHECK_NEAR(light.strikeMoment(),
+                   (light.phases().windUp + light.phases().strike) * light.phases().duration,
+                   1e-6);
+}
+
+MGE_TEST(phases_are_addressable_through_the_motion) {
+    UseMotion axe;
+    axe.archetype = UseArchetype::Chop;
+    axe.reach = 0.85f;
+    axe.weight = 2.60f;
+
+    UsePlayer player;
+    MGE_CHECK(player.phase() == UsePhase::Idle);
+    player.start(axe);
+
+    bool sawWindUp = false, sawStrike = false, sawRecovery = false;
+    UsePhase previous = UsePhase::WindUp;
+    while (player.active()) {
+        const UsePhase p = player.phase();
+        if (p == UsePhase::WindUp) sawWindUp = true;
+        if (p == UsePhase::Strike) sawStrike = true;
+        if (p == UsePhase::Recovery) sawRecovery = true;
+        // Phases only ever move forward.
+        MGE_CHECK(static_cast<int>(p) >= static_cast<int>(previous));
+        previous = p;
+        const float f = player.phaseFraction();
+        MGE_CHECK(f >= -1e-4f && f <= 1.0f + 1e-4f);
+        player.update(1.0f / 120.0f);
+    }
+    MGE_CHECK(sawWindUp && sawStrike && sawRecovery);
+    MGE_CHECK(player.phase() == UsePhase::Idle);
+}
+
+MGE_TEST(an_interrupted_action_never_lands_its_blow) {
+    UseMotion sword;
+    sword.archetype = UseArchetype::Swing;
+    UsePlayer player;
+    player.start(sword);
+    // Run into the wind-up, then take a hit.
+    while (player.phase() == UsePhase::WindUp) player.update(1.0f / 60.0f);
+    player.interrupt(0.15f);
+    MGE_CHECK(player.interrupted());
+
+    int fired = 0;
+    for (int f = 0; f < 600 && player.active(); ++f) {
+        if (player.update(1.0f / 60.0f)) ++fired;
+    }
+    MGE_CHECK(fired == 0);
+    MGE_CHECK(!player.active());
+    MGE_CHECK_NEAR(player.weight(), 0.0f, 1e-6);
+}
+
+// The headline of 14.4, measured rather than asserted: interruption BLENDS.
+MGE_TEST(interruption_blends_out_instead_of_snapping) {
+    const Skeleton skeleton = rig();
+    UseMotion axe;
+    axe.archetype = UseArchetype::Chop;
+    axe.reach = 0.85f;
+    axe.weight = 2.60f;
+    const JointMask mask = useArchetypeMask(skeleton, axe);
+
+    // Run the same interruption twice: once through the blend, once dropping
+    // the layer dead at the same instant. Measure the WORST single-frame jump
+    // of the composed pose in each.
+    // Three runs, identical up to the hit: never interrupted, interrupted with
+    // the blend, interrupted by dropping the layer dead. `mode` picks which.
+    enum class Mode { NoHit, Blend, Snap };
+    const auto worstJump = [&](Mode mode) {
+        LocomotionAnimator walk;
+        for (int f = 0; f < 180; ++f) walk.update(1.0f / 60.0f, 1.6f);
+
+        UsePlayer player;
+        player.start(axe, 0.08f);
+        // Get mid-swing before anything happens to us.
+        while (player.phase() != UsePhase::Strike) {
+            player.update(1.0f / 60.0f);
+            walk.update(1.0f / 60.0f, 1.6f);
+        }
+
+        Pose previous;
+        bool havePrevious = false;
+        float worst = 0.0f;
+        bool hit = false;
+        for (int f = 0; f < 240; ++f) {
+            Pose basePose;
+            walk.samplePose(basePose);
+            LayeredPose layered;
+            layered.reset(basePose);
+            if (player.active()) {
+                Pose action;
+                player.samplePose(action);
+                // `blend` uses the player's ramped weight; the other drops the
+                // layer outright the moment the hit lands, which is the
+                // behaviour 14.4 exists to remove.
+                const float w = mode == Mode::Blend ? player.weight()
+                                : (mode == Mode::Snap && hit) ? 0.0f
+                                                              : 1.0f;
+                layered.addLayer(action, mask, w);
+            }
+            if (havePrevious) {
+                const float jump = poseDistance(previous, layered.result());
+                if (jump > worst) worst = jump;
+            }
+            previous = layered.result();
+            havePrevious = true;
+
+            if (f == 2 && mode != Mode::NoHit) {  // the hit arrives
+                player.interrupt(0.15f);
+                hit = true;
+            }
+            player.update(1.0f / 60.0f);
+            walk.update(1.0f / 60.0f, 1.6f);
+        }
+        return worst;
+    };
+
+    const float baseline = worstJump(Mode::NoHit);
+    const float blended = worstJump(Mode::Blend);
+    const float snapped = worstJump(Mode::Snap);
+    printf("  interrupt worst frame-to-frame jump: uninterrupted %.3f rad, blended %.3f, "
+           "snapped %.3f\n",
+           baseline, blended, snapped);
+
+    // The right question is not "is the blend smooth in absolute terms" — a
+    // heavy chop's strike legitimately moves ~30 degrees per frame on its own,
+    // and an interrupt in the middle of it cannot be gentler than the motion
+    // it is interrupting. The question is how much discontinuity the
+    // INTERRUPTION ADDS.
+    MGE_CHECK(baseline > 0.0f);
+    // Snapping adds a large jump on top of the motion...
+    MGE_CHECK(snapped > baseline * 2.5f);
+    // ...while blending stays in the neighbourhood of the motion's own speed.
+    MGE_CHECK(blended < baseline * 1.6f);
+    MGE_CHECK(blended < snapped * 0.5f);
+}
+
+MGE_TEST(starting_an_action_ramps_in_rather_than_popping) {
+    // A layer that appears at full strength pops exactly as visibly as one
+    // that vanishes, so the same ramp runs at both ends.
+    UseMotion torch;
+    torch.archetype = UseArchetype::Raise;
+    UsePlayer player;
+    player.start(torch, 0.10f);
+    MGE_CHECK_NEAR(player.weight(), 0.0f, 1e-6);
+
+    float previous = player.weight();
+    bool reachedFull = false;
+    for (int f = 0; f < 12; ++f) {
+        player.update(1.0f / 60.0f);
+        MGE_CHECK(player.weight() >= previous - 1e-6f);  // monotone
+        previous = player.weight();
+        if (player.weight() >= 1.0f - 1e-6f) reachedFull = true;
+    }
+    MGE_CHECK(reachedFull);
+
+    // Interrupting DURING the ramp-in still takes the full fade time rather
+    // than vanishing early.
+    UsePlayer early;
+    early.start(torch, 0.40f);
+    early.update(1.0f / 60.0f);
+    const float partial = early.weight();
+    MGE_CHECK(partial > 0.0f && partial < 1.0f);
+    early.interrupt(0.20f);
+    int frames = 0;
+    while (early.active() && frames < 200) {
+        early.update(1.0f / 60.0f);
+        ++frames;
+    }
+    MGE_CHECK(frames >= 11);  // ~0.20 s at 60 Hz, not one frame
+}

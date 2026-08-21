@@ -382,4 +382,125 @@ JointMask useArchetypeMask(const Skeleton& skeleton, const UseMotion& motion,
     return mask;
 }
 
+// ------------------------------------------- playing one (14.3, 14.4) -----
+
+const char* usePhaseName(UsePhase phase) {
+    switch (phase) {
+        case UsePhase::Idle:     return "idle";
+        case UsePhase::WindUp:   return "wind-up";
+        case UsePhase::Strike:   return "strike";
+        case UsePhase::Recovery: return "recovery";
+    }
+    return "?";
+}
+
+void UsePlayer::start(const UseMotion& motion, float blendInSeconds) {
+    motion_ = clampUseMotion(motion);
+    phases_ = usePhases(motion_);
+    state_ = State::Playing;
+    time_ = 0.0f;
+    blendIn_ = blendInSeconds > 0.0f ? blendInSeconds : 0.0f;
+    // Ramping in from 0 rather than snapping to 1 matters for the same reason
+    // blending out does: a layer that appears at full strength pops just as
+    // visibly as one that vanishes.
+    weight_ = blendIn_ > 0.0f ? 0.0f : 1.0f;
+    blendOutRate_ = 0.0f;
+    strikeFired_ = false;
+}
+
+bool UsePlayer::update(float dt) {
+    if (state_ == State::Idle || dt <= 0.0f) return false;
+
+    if (state_ == State::BlendingOut) {
+        weight_ -= blendOutRate_ * dt;
+        if (weight_ <= 0.0f) {
+            weight_ = 0.0f;
+            state_ = State::Idle;
+        }
+        // The motion keeps advancing underneath the fade, so the limb carries
+        // on along its arc while it hands control back — that is what makes it
+        // a blend and not a freeze.
+        time_ += dt;
+        return false;  // an interrupted action never lands its blow
+    }
+
+    const float before = time_;
+    time_ += dt;
+
+    if (blendIn_ > 0.0f && weight_ < 1.0f) {
+        weight_ += dt / blendIn_;
+        if (weight_ > 1.0f) weight_ = 1.0f;
+    } else {
+        weight_ = 1.0f;
+    }
+
+    const float strikeAt = strikeMoment();
+    bool crossed = false;
+    if (!strikeFired_ && before < strikeAt && time_ >= strikeAt) {
+        // Fires exactly once, even if one long dt steps clean over it.
+        strikeFired_ = true;
+        crossed = true;
+    }
+
+    if (time_ >= phases_.duration) {
+        time_ = phases_.duration;
+        state_ = State::Idle;
+        weight_ = 0.0f;
+    }
+    return crossed;
+}
+
+void UsePlayer::interrupt(float seconds) {
+    if (state_ != State::Playing) return;  // already fading, or nothing to stop
+    state_ = State::BlendingOut;
+    if (seconds <= 0.0f) {
+        weight_ = 0.0f;
+        state_ = State::Idle;
+        return;
+    }
+    // Rate is set from the CURRENT weight, so an action interrupted during its
+    // blend-in still takes the full `seconds` to disappear rather than
+    // vanishing early.
+    blendOutRate_ = weight_ / seconds;
+}
+
+UsePhase UsePlayer::phase() const {
+    if (state_ == State::Idle) return UsePhase::Idle;
+    const float t = normalizedTime();
+    if (t < phases_.windUp) return UsePhase::WindUp;
+    if (t < phases_.windUp + phases_.strike) return UsePhase::Strike;
+    return UsePhase::Recovery;
+}
+
+float UsePlayer::normalizedTime() const {
+    if (phases_.duration <= 0.0f) return 0.0f;
+    const float t = time_ / phases_.duration;
+    return t < 0.0f ? 0.0f : (t > 1.0f ? 1.0f : t);
+}
+
+float UsePlayer::phaseFraction() const {
+    const float t = normalizedTime();
+    switch (phase()) {
+        case UsePhase::WindUp:
+            return phases_.windUp > 0.0f ? t / phases_.windUp : 1.0f;
+        case UsePhase::Strike:
+            return phases_.strike > 0.0f ? (t - phases_.windUp) / phases_.strike : 1.0f;
+        case UsePhase::Recovery: {
+            const float span = 1.0f - phases_.windUp - phases_.strike;
+            return span > 0.0f ? (t - phases_.windUp - phases_.strike) / span : 1.0f;
+        }
+        case UsePhase::Idle:
+            break;
+    }
+    return 0.0f;
+}
+
+float UsePlayer::strikeMoment() const {
+    return (phases_.windUp + phases_.strike) * phases_.duration;
+}
+
+float UsePlayer::timeUntilStrike() const { return strikeMoment() - time_; }
+
+void UsePlayer::samplePose(Pose& out) const { sampleUseArchetype(motion_, normalizedTime(), out); }
+
 }  // namespace mge

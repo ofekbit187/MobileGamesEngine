@@ -347,10 +347,11 @@ int main(int argc, char** argv) {
     }
     // The damage moment gameplay will hang on `strike` (task 14.3), in
     // seconds, so a maul landing late is the motion saying so.
-    printf("strike moment (s from start): ");
+    printf("strike moment (s from start, = full extension): ");
     for (size_t i = 0; i < kCatalogCount; ++i) {
-        const UsePhases p = usePhases(catalogMotion(i));
-        printf("%s %.3f  ", kCatalog[i].name, p.windUp * p.duration);
+        UsePlayer player;
+        player.start(catalogMotion(i));
+        printf("%s %.3f  ", kCatalog[i].name, player.strikeMoment());
     }
     printf("\n");
 
@@ -554,6 +555,56 @@ int main(int argc, char** argv) {
         camera.aspect = aspect;
         ok = capture(renderer, camera, items, outDir + "/anim_catalog.ppm") && ok;
         for (GpuLodMesh& mesh : bare.gpu) renderer.destroyLodMesh(mesh);
+    }
+
+    // ---- 5. Interruption (14.4): a chop taking a hit mid-strike ----------
+    // Five consecutive frames straddling the hit. The arm eases back toward
+    // the walk instead of teleporting to it, and the legs never stop.
+    {
+        std::vector<DrawItem> items;
+        items.push_back(prop(&ground, {0, 0, 0}, 0.44f, 0.48f, 0.37f));
+
+        UseMotion axe;
+        axe.archetype = UseArchetype::Chop;
+        axe.reach = 0.85f;
+        axe.weight = 2.60f;
+        const JointMask mask = useArchetypeMask(rig.skeleton, axe);
+
+        LocomotionAnimator walk;
+        for (int f = 0; f < 180; ++f) walk.update(1.0f / 60.0f, 1.6f);
+        UsePlayer player;
+        player.start(axe, 0.08f);
+        while (player.phase() != UsePhase::Strike) {
+            player.update(1.0f / 60.0f);
+            walk.update(1.0f / 60.0f, 1.6f);
+        }
+        player.interrupt(0.22f);
+        printf("  interrupt strip: hit taken during %s, blending out over 0.22s\n",
+               usePhaseName(player.phase()));
+
+        // Sample every third frame so five stills span the whole fade.
+        for (int i = 0; i < 5; ++i) {
+            Pose basePose;
+            walk.samplePose(basePose);
+            LayeredPose layered;
+            layered.reset(basePose);
+            if (player.active()) {
+                Pose action;
+                player.samplePose(action);
+                layered.addLayer(action, mask, player.weight());
+            }
+            printf("    frame %d: weight %.2f\n", i, player.active() ? player.weight() : 0.0f);
+            emitRig(items, rig, layered.result(), {-2.4f + 1.2f * i, 0, 0}, kPi * 0.5f);
+            for (int k = 0; k < 3; ++k) {
+                player.update(1.0f / 60.0f);
+                walk.update(1.0f / 60.0f, 1.6f);
+            }
+        }
+        Camera camera;
+        camera.eye = {0.0f, 1.35f, 5.0f};
+        camera.target = {0.0f, 1.05f, 0.0f};
+        camera.aspect = aspect;
+        ok = capture(renderer, camera, items, outDir + "/anim_interrupt.ppm") && ok;
     }
 
     for (GpuLodMesh& mesh : rig.gpu) renderer.destroyLodMesh(mesh);
