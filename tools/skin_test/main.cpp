@@ -24,6 +24,7 @@
 #include "mge/character/body_mesh.h"
 #include "mge/core/memory.h"
 #include "mge/graphics/renderer.h"
+#include "mge/graphics/texture_io.h"
 #include "mge/graphics/vulkan_device.h"
 
 using namespace mge;
@@ -48,6 +49,99 @@ double meanAbsDifference(const std::vector<uint8_t>& a, const std::vector<uint8_
         }
     }
     return n > 0 ? sum / n : 0.0;
+}
+
+// A test sheet whose colour is a known function of the UV it sits at: a
+// coloured gradient with a fine grid ruled over it. It is not skin — the
+// authored sheet is the textures session's — it is a PROBE. Two properties
+// earn it that role:
+//   * every texel differs from its neighbours, so a body that sampled ONE
+//     texel (the bug this job closes: no UV reached the fragment stage) comes
+//     out flat and unmissable;
+//   * colour is a function of position on the chart, so CPU and GPU agreeing
+//     pixel-for-pixel means they agree about the CHART, not merely about
+//     geometry.
+TextureData makeChartProbe(uint32_t size) {
+    TextureData texture;
+    texture.width = size;
+    texture.height = size;
+    texture.format = TextureFormat::Rgba8;
+    texture.colorSpace = ColorSpace::Srgb;
+    texture.usage = TextureUsage::Albedo;
+
+    std::vector<uint8_t> level(static_cast<size_t>(size) * size * 4);
+    for (uint32_t y = 0; y < size; ++y) {
+        for (uint32_t x = 0; x < size; ++x) {
+            uint8_t* p = &level[(static_cast<size_t>(y) * size + x) * 4];
+            const bool rule = (x % 32 == 0) || (y % 32 == 0);
+            p[0] = static_cast<uint8_t>(rule ? 20 : 60 + (x * 180) / size);
+            p[1] = static_cast<uint8_t>(rule ? 20 : 60 + (y * 180) / size);
+            p[2] = static_cast<uint8_t>(rule ? 20 : 140);
+            p[3] = 255;
+        }
+    }
+    // A full chain to 1x1, as the standard requires of every texture; the
+    // levels below mip 0 are a box filter of it, which is enough for a probe.
+    uint32_t w = size, h = size;
+    std::vector<uint8_t> current = level;
+    for (uint32_t i = 0; i < fullMipCount(size, size); ++i) {
+        TextureMip mip;
+        mip.width = w;
+        mip.height = h;
+        mip.offset = texture.pixels.size();
+        mip.size = mipByteSize(TextureFormat::Rgba8, w, h);
+        texture.pixels.insert(texture.pixels.end(), current.begin(), current.end());
+        texture.mips.push_back(mip);
+        const uint32_t nw = w > 1 ? w / 2 : 1, nh = h > 1 ? h / 2 : 1;
+        std::vector<uint8_t> next(static_cast<size_t>(nw) * nh * 4);
+        for (uint32_t yy = 0; yy < nh; ++yy) {
+            for (uint32_t xx = 0; xx < nw; ++xx) {
+                for (int c = 0; c < 4; ++c) {
+                    uint32_t sum = 0;
+                    for (int j = 0; j < 2; ++j) {
+                        for (int k = 0; k < 2; ++k) {
+                            const uint32_t sx = w > 1 ? xx * 2 + k : 0;
+                            const uint32_t sy = h > 1 ? yy * 2 + j : 0;
+                            sum += current[(static_cast<size_t>(sy) * w + sx) * 4 + c];
+                        }
+                    }
+                    next[(static_cast<size_t>(yy) * nw + xx) * 4 + c] =
+                        static_cast<uint8_t>(sum / 4);
+                }
+            }
+        }
+        current.swap(next);
+        w = nw;
+        h = nh;
+    }
+    return texture;
+}
+
+// Spread of CHROMATICITY — R/(R+G+B) — across the silhouette, x1000.
+//
+// Deliberately not brightness spread: lighting already varies brightness a
+// great deal across a lit body, so a bright-and-dark untextured body would
+// score higher than a textured one and prove nothing. Chromaticity divides
+// the lighting out. A body sampling a single texel has ONE chromaticity
+// everywhere, whatever the shading does to it; a body reading its chart takes
+// its hue from where each point sits on the sheet. So this separates "the UV
+// reached the fragment stage" from "the body is lit", which brightness cannot.
+double chromaticitySpread(const std::vector<uint8_t>& rgba) {
+    double sum = 0, sumSq = 0;
+    size_t n = 0;
+    for (size_t i = 0; i + 3 < rgba.size(); i += 4) {
+        if (rgba[i] == 135 && rgba[i + 1] == 168 && rgba[i + 2] == 214) continue;  // sky
+        const double total = static_cast<double>(rgba[i]) + rgba[i + 1] + rgba[i + 2];
+        if (total < 12.0) continue;  // near-black: chromaticity is pure noise there
+        const double chroma = rgba[i] / total;
+        sum += chroma;
+        sumSq += chroma * chroma;
+        ++n;
+    }
+    if (n == 0) return 0;
+    const double mean = sum / n;
+    const double variance = sumSq / n - mean * mean;
+    return (variance > 0 ? std::sqrt(variance) : 0) * 1000.0;
 }
 
 bool writePpm(const std::string& path, const std::vector<uint8_t>& rgba, uint32_t w, uint32_t h) {
@@ -190,6 +284,56 @@ int main(int argc, char** argv) {
            morphedAgainstTemplate);
     writePpm(outDir + "/skin_cpu.ppm", cpuPixels, config.width, config.height);
     writePpm(outDir + "/skin_gpu.ppm", gpuPixels, config.width, config.height);
+
+    // --- Path D: the SAME comparison with a texture on. Until this job the
+    //     skinned path could not sample one at all: skinned.vert read inUv and
+    //     never output it, and SkinnedDrawItem carried no material, so every
+    //     character in the engine was untexturable while every wall was not.
+    //
+    //     The CPU reference textures through the lit pipeline from the UVs
+    //     skinMesh() now writes; the GPU path textures from the body's own
+    //     chart in the vertex stream. Agreeing to 0.000 means both sample the
+    //     SAME texel for the same point on the body.
+    TextureData probeData = makeChartProbe(512);
+    GpuTexture probeTexture;
+    if (!renderer.uploadTexture(probeData, probeTexture)) {
+        fprintf(stderr, "FAIL: could not upload the chart probe\n");
+        return 1;
+    }
+    GpuMaterial probeMaterial;
+    if (!renderer.createMaterial(&probeTexture, nullptr, probeMaterial)) {
+        fprintf(stderr, "FAIL: could not create the probe material\n");
+        return 1;
+    }
+
+    // CPU reference, textured.
+    std::vector<DrawItem> texturedCpuItems = cpuItems;
+    texturedCpuItems[0].surface = &probeMaterial;
+    for (int c = 0; c < 4; ++c) texturedCpuItems[0].baseColor[c] = 1.0f;
+    if (!renderer.renderFrame(camera, texturedCpuItems.data(), texturedCpuItems.size())) return 1;
+    std::vector<uint8_t> texturedCpu(pixelBytes);
+    if (!renderer.readback(texturedCpu.data(), texturedCpu.size())) return 1;
+
+    // GPU skinning, textured — the thing that did not exist this morning.
+    std::vector<SkinnedDrawItem> texturedGpuItems = skinnedItems;
+    texturedGpuItems[0].surface = &probeMaterial;
+    for (int c = 0; c < 4; ++c) texturedGpuItems[0].baseColor[c] = 1.0f;
+    if (!renderer.renderFrame(camera, nullptr, 0, nullptr, nullptr, nullptr, 0,
+                              texturedGpuItems.data(), texturedGpuItems.size())) {
+        return 1;
+    }
+    std::vector<uint8_t> texturedGpu(pixelBytes);
+    if (!renderer.readback(texturedGpu.data(), texturedGpu.size())) return 1;
+
+    const double texturedDifference = meanAbsDifference(texturedCpu, texturedGpu);
+    const double texturedSpread = chromaticitySpread(texturedGpu);
+    const double untexturedSpread = chromaticitySpread(gpuPixels);
+    writePpm(outDir + "/skin_textured_cpu.ppm", texturedCpu, config.width, config.height);
+    writePpm(outDir + "/skin_textured_gpu.ppm", texturedGpu, config.width, config.height);
+    printf("TEXTURED CPU vs GPU: mean channel difference %.3f / 255\n", texturedDifference);
+    printf("  chromaticity spread across the body: %.1f textured vs %.1f flat-shaded"
+           " (x1000) — the chart reaches the fragment stage\n",
+           texturedSpread, untexturedSpread);
 
     // --- Path C: a DRESSED character, exactly as the device draws one:
     //     uncovered body regions as index ranges on the shared mesh, plus a
@@ -343,6 +487,8 @@ int main(int argc, char** argv) {
         if (garment.valid()) renderer.destroySkinnedMesh(garment);
     }
     for (GpuLodMesh& piece : pieceMeshes) renderer.destroyLodMesh(piece);
+    renderer.destroyMaterial(probeMaterial);
+    renderer.destroyTexture(probeTexture);
     renderer.destroySkinnedMesh(gpuMesh);
     renderer.destroyLodMesh(cpuMesh);
     renderer.shutdown();
@@ -354,16 +500,23 @@ int main(int argc, char** argv) {
     // ...and the morph must have moved the surface enough to be worth having:
     // a whole body's worth of shape that shifted fewer pixels than a rounding
     // error means the deltas never reached the shader.
+    // The textured comparison holds to the same bar as the untextured one —
+    // and the spread check is what makes it meaningful: a body sampling one
+    // texel for its whole surface would still agree with itself, so agreement
+    // alone proves nothing without evidence the chart actually varied.
     const bool ok = difference < 1.0 && dressedDifference < 1.0 &&
+                    texturedDifference < 1.0 && texturedSpread > 4.0 * untexturedSpread &&
                     morphedAgainstTemplate > 0.5 && dressedMorphEffect > 0.1 &&
                     bodyPixels > pixelBytes / 4 / 20 && crowdStats.drawn == kCrowd &&
                     residual == 0;
     if (!ok) {
         fprintf(stderr,
-                "FAIL: difference=%.3f dressed=%.3f morphEffect=%.3f dressedMorphEffect=%.3f"
-                " bodyPixels=%zu crowdDrawn=%u residual=%zu\n",
-                difference, dressedDifference, morphedAgainstTemplate, dressedMorphEffect,
-                bodyPixels, crowdStats.drawn, residual);
+                "FAIL: difference=%.3f dressed=%.3f textured=%.3f spread=%.1f/%.1f"
+                " morphEffect=%.3f dressedMorphEffect=%.3f bodyPixels=%zu crowdDrawn=%u"
+                " residual=%zu\n",
+                difference, dressedDifference, texturedDifference, texturedSpread,
+                untexturedSpread, morphedAgainstTemplate, dressedMorphEffect, bodyPixels,
+                crowdStats.drawn, residual);
         return 1;
     }
     printf("OK\n");

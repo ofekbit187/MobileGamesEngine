@@ -2,8 +2,8 @@
 
 **Session:** session_011sZSvTYWLnkb7R8wYFHGGV
 **Branch:** `claude/renderer-gpu-morphs`
-**State:** idle — **chartered by the architect, awaiting pickup**
-**Updated:** 2026-08-21 by the architect
+**State:** working — texturing the skinned path (ADR 0014 amendment)
+**Updated:** 2026-08-21 by the renderer session
 
 ## Now — your job, and it is blocking two other areas
 

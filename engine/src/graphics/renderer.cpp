@@ -43,6 +43,16 @@ static_assert(sizeof(DrawPush) == 112, "push constant layout is a shader contrac
 // are the same kind of thing — the small per-character data that turns the one
 // shared mesh into this character (ADR 0009).
 constexpr VkDeviceSize kSkinSlotBytes = sizeof(Mat4) * kJointCount + 16 * sizeof(float);
+// GLSL cannot import kJointCount, so skinned.vert hardcodes it — and the
+// morph weights sit immediately after the palette, so a rig that grew would
+// have the shader reading its weights out of the last joint's matrix with no
+// error anywhere. ADR 0019 takes the rig 17 -> 19 for the clavicles; when it
+// lands, update `kJointCount` in engine/shaders/skinned.vert to match, re-run
+// scripts/compile-shaders.sh, and change the number here. Failing the build is
+// the point.
+static_assert(kJointCount == 17,
+              "rig changed: update kJointCount in engine/shaders/skinned.vert and re-run "
+              "scripts/compile-shaders.sh, then update this assert");
 constexpr VkDeviceSize kSkinSlotWeightOffset = sizeof(Mat4) * kJointCount;
 static_assert(kMorphCount <= 16, "morph weights are packed into four vec4s");
 
@@ -1423,10 +1433,14 @@ void Renderer::recordSkinnedItems(const Camera& camera, const SkinnedDrawItem* i
         vkCmdBindDescriptorSets(commandBuffer_, VK_PIPELINE_BIND_POINT_GRAPHICS,
                                 pipelineLayout_, 0, 1, &descriptorSet_, 2, offsets);
 
-        if (defaultMaterial_.set != boundMaterial) {
+        // This piece's material — a skin sheet, a garment's cloth, or the
+        // default white. Consecutive draws sharing one bind it once.
+        const GpuMaterial* surface =
+            item.surface != nullptr && item.surface->valid() ? item.surface : &defaultMaterial_;
+        if (surface->set != boundMaterial) {
             vkCmdBindDescriptorSets(commandBuffer_, VK_PIPELINE_BIND_POINT_GRAPHICS,
-                                    pipelineLayout_, 2, 1, &defaultMaterial_.set, 0, nullptr);
-            boundMaterial = defaultMaterial_.set;
+                                    pipelineLayout_, 2, 1, &surface->set, 0, nullptr);
+            boundMaterial = surface->set;
         }
 
         // The mesh's shared deltas. A crowd on one mesh binds this once.
@@ -1442,12 +1456,10 @@ void Renderer::recordSkinnedItems(const Camera& camera, const SkinnedDrawItem* i
         memcpy(push.model, item.model.m, sizeof(push.model));
         memcpy(push.baseColor, item.baseColor, sizeof(push.baseColor));
         push.params[0] = morphed ? 1.0f : 0.0f;  // run the shape pass
-        // Characters are not textured yet — the body's UV chart is refused
-        // (docs/research/uv-audit.md) — so they draw against the default white
-        // material and their base colour, exactly as before.
-        push.material[0] = defaultMaterial_.roughness;
-        push.material[1] = defaultMaterial_.ao;
-        push.material[3] = 1.0f;
+        push.material[0] = surface->roughness;
+        push.material[1] = surface->ao;
+        push.material[2] = surface->packed != nullptr && surface->packed->valid() ? 1.0f : 0.0f;
+        push.material[3] = surface->uvScale;
         vkCmdPushConstants(commandBuffer_, pipelineLayout_,
                            VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 0,
                            sizeof(push), &push);

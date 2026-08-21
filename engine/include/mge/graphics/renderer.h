@@ -145,6 +145,9 @@ struct SkinnedDrawItem {
     float baseColor[4] = {1, 1, 1, 1};
     uint32_t firstIndex = 0;
     uint32_t indexCount = 0;
+    // Null draws untextured against the 1x1 white default, the same way an
+    // unsurfaced DrawItem does — one pipeline serves both.
+    const GpuMaterial* surface = nullptr;
 };
 
 struct RenderStats {
