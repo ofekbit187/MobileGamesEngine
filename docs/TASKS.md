@@ -289,10 +289,17 @@ Anything that allocates a texture per character is a defect, not a budget line.*
   ours is a per-island affine we wrote and can invert**; and tileable detail applies in tangent
   space regardless of chart. **If nothing suitable is sourceable, that is a finding to bring
   back — not a licence to fall back to generating**, which would reinstate a reversed ruling
-  without anyone deciding it
+  without anyone deciding it — *in progress. One input is already measured: the Face island
+  carries 483 px/m, which makes a 4 mm pupil 1.9 texels wide, so face resolution is an
+  acquisition criterion rather than a later polish item (docs/status/textures.md)*
 - [ ] **15.1** **One face, rendered, for the owner's eye** — a single imported skin on the shipped
   body, before any system exists. First deliberately: it **retires ADR 0012's provisional Face
-  waiver**, whose condition is "the owner judges the first authored face texture"
+  waiver**, whose condition is "the owner judges the first authored face texture" — *not started
+  under the current ruling. A GENERATED face was built and rendered against ADR 0014 before the
+  reversal (commit `67bcf5d`, `tools/skin_preview`, captures in `docs/status/evidence/textures/`);
+  it is kept as evidence about the chart and the render path, NOT as a content route. The render
+  harness, the mesh→chart rasterizer, the linear-space mip/dilate/validate path and the AO bake
+  are route-independent and carry over; the colour model and procedural features do not*
 - [ ] **15.2** The import path: re-projection through the inverse repack transform, plus the
   conformance gates against `assets/standards/skin_texture.mgestd` — the tool, not the content
 - [ ] **15.3** Phenotype binding: melanin depth, undertone, weathering and per-person blemish
