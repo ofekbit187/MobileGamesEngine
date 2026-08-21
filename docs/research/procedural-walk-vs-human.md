@@ -99,10 +99,19 @@ travels **236 mm against the human's 42 mm**. Its slowest moment while in ground
 estimator's own noise floor. The bottom-right panel shows it plainly: the human's toe holds a
 flat plateau for the first third of the cycle, and the engine's has no plateau at all.
 
-Reading the curve gives the precise version: the engine's foot is genuinely still for roughly
-the first 20% of the cycle, keeps sliding for the remaining ~30% of its ground contact, and is
-then stationary again *while airborne* between 85% and 100%. The foot is planted at the wrong
-times.
+Reading the cycle-averaged curves gives the precise version. Taking "planted" to mean the foot
+is both **down** (within 20 mm of its lowest) and **still** (under 15% of its own peak forward
+speed):
+
+| | planted | down but sliding | still, but airborne |
+|---|---|---|---|
+| human | **0–54%** of the cycle | 55–58% (toe-off, as it should be) | 94–99% |
+| engine | **4–22%** | **23–52%** | 79–92% |
+
+The human's foot is planted for 54% of the cycle and moves only through toe-off. The engine's is
+planted for 18%, slides for a further 30% while still on the ground, and then holds still for
+13% *while in the air*. It is not that our foot slides a bit more — **it is planted at the wrong
+times.**
 
 This is task 18.4's problem statement, now with a number attached, and it is the one to fix
 first — it is the defect a player sees without being able to name it.

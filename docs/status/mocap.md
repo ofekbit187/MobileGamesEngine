@@ -40,9 +40,14 @@ Both sides driven at the measured human speed, 1.355 m/s. Worst first:
 **On the feet sliding — the comment in `update()` is not wrong, it is narrower than it reads.**
 "Phase is distance-driven … so feet never slide" guarantees the cycle freezes when the character
 stands still, and it does. It does not imply a foot stays planted *within* a cycle, and the
-measurement says it does not: the engine's foot is genuinely still for about the first 20% of the
-cycle, slides through the remaining ~30% of its ground contact, and is then stationary again
-while airborne.
+measurement says it does not. Taking "planted" as both down and still:
+
+| | planted | down but sliding | still, but airborne |
+|---|---|---|---|
+| human | **0–54%** of cycle | 55–58% (toe-off) | 94–99% |
+| engine | **4–22%** | **23–52%** | 79–92% |
+
+Not "our foot slides a bit more" — **it is planted at the wrong times.**
 
 **These are the character asset pipeline's to fix, not mine.** `LocomotionAnimator` lives in
 `engine/src/character/humanoid.cpp`. I have not touched it. Everything needed to re-measure any
