@@ -257,12 +257,12 @@ Status legend: `[ ]` not started · `[~]` in progress · `[x]` done
 
 *Sequenced after Phase 13's fitting pipeline — same area (body & animation) and the layering work below is also what facial expressions and future overlays ride on.*
 
-- [ ] **14.1** Layered poses with masks: locomotion drives the lower body while an action archetype drives the upper body — the enabling capability everything else depends on (a character swings *while walking*)
-- [ ] **14.2** Archetype library v1: the nine archetypes as parameterized procedural motions (grip selects arms/torso involvement; reach sets arc radius and lean; weight sets wind-up/strike/recovery timing)
-- [ ] **14.3** Phase-addressable timeline: wind-up / strike / recovery exposed as fractions, and the Phase 12 action model's damage moment hung on `strike` instead of a tuned delay
-- [ ] **14.4** Interruption: hit/stagger/death blend out mid-action, never snap
-- [ ] **14.5** Item data: archetype + reach + weight on `ItemUse`; `animKey` narrows to the bespoke-clip escape hatch
-- [ ] **14.6** Proof by catalog: sword, spear, axe, hammer, torch, apple — six items, zero per-item animation authoring, visibly distinct motion
+- [x] **14.1** Layered poses with masks: locomotion drives the lower body while an action archetype drives the upper body — the enabling capability everything else depends on (a character swings *while walking*) — *`engine/*/character/animation.*`: `JointMask` (per-joint weights, built by walking `Skeleton::parent` rather than restating the hierarchy), `blendPose`, and a fixed-capacity `LayeredPose` composer. Layering happens in POSE SPACE before `evaluatePose`, so it produces one ordinary `Pose` and cannot multiply the frame's work: one pose evaluation, one palette, one skin pass, unchanged downstream. Measured on 64 characters x 600 frames: **0 heap allocations**, 0.607 us per character-frame to compose + evaluate, `LayeredPose` 280 bytes as shared scratch (not per-character state), `JointMask` 68 bytes. `maskUpperBody` feathers the spine at 0.5 so the waist spreads the difference over two joints instead of shearing through one. Legs under an upper-body layer measure 0.0 degrees of change — locomotion keeps them bit-identically. 8 tests in `tests/test_animation.cpp`; captures from `tools/anim_preview`. NO rig change and no seam request was needed — it rides entirely on the existing 17-joint palette. The action driving the overlay in the capture is a STAND-IN living in the demo, not the engine: the archetype library is 14.2*
+- [x] **14.2** Archetype library v1: the nine archetypes as parameterized procedural motions (grip selects arms/torso involvement; reach sets arc radius and lean; weight sets wind-up/strike/recovery timing) — *`engine/*/character/use_archetypes.*`: `UseArchetype` (the nine), `UseMotion` (archetype + grip + reach + weight + handedness), `sampleUseArchetype`, `usePhases`, `useArchetypeMask`. Nine procedural shapes, not nine clips. **Grip decides the MASK as well as the motion**: a one-handed use leaves the off arm to locomotion so it keeps swinging with the walk, two-handed puts both hands on the haft and counter-rotates the torso 1.35x, and draw/aim are two-armed whatever the grip says. Reach widens the arc and the lean; weight sets both the phase fractions and the absolute duration. Item data is CLAMPED, never rejected (same stance as ADR 0009). 13 tests in `tests/test_use_archetypes.cpp`, five of which pin the SEMANTICS to geometry — raise ends above the head, consume brings the hand to it, thrust advances where swing crosses, chop clears the head then drives 0.56 m down, draw holds the bow arm still while the off hand pulls. Those five caught three real bugs rendering alone would have let through: `Raise` pointed the torch backward-horizontal, the torso twist drove the lead shoulder AWAY at full extension (a thrust that retreated), and the bow arm reached out sideways to the hip. Measured: the closest pair of the shipped six is 82.2 degrees apart at its widest*
+- [~] **14.3** Phase-addressable timeline: wind-up / strike / recovery exposed as fractions, and the Phase 12 action model's damage moment hung on `strike` instead of a tuned delay — *the animation half is done: `UsePhases` exposes the three as fractions plus a duration in seconds, and `UsePlayer` (`phase()`, `phaseFraction()`, `strikeMoment()`, `timeUntilStrike()`) makes them addressable at runtime. `UsePlayer::update()` returns true on the single frame the damage instant is crossed — the edge gameplay hangs the blow on — and it fires exactly once even when one long dt steps clean over the moment, so a hitch cannot silently drop a hit. Measured: the same `swing` lands at 0.233 s for a dagger (0.445 s long, 34.5% wind-up) and 0.729 s for a maul (1.169 s long, 49.0% wind-up), with nobody tuning either number. **What is missing:** actually hanging the action model's damage on it. That code is in `engine/*/framework/` and is gameplay's, behind the same `ItemUse` seam as 14.5 — raised in `docs/status/animation.md`, not taken*
+- [~] **14.4** Interruption: hit/stagger/death blend out mid-action, never snap — *`UsePlayer::interrupt(seconds)` ramps the layer weight out instead of dropping it, and the motion keeps travelling underneath the fade so the limb carries on along its arc rather than freezing. An interrupted action never reports its strike. The same ramp runs at the START too, since a layer that appears at full strength pops exactly as visibly as one that vanishes; interrupting during the ramp-in still takes the full fade time. **Measured, comparing three identical runs** (`interruption_blends_out_instead_of_snapping`): worst frame-to-frame pose jump is 0.650 rad uninterrupted, 0.549 rad blended, 2.172 rad snapped — so blending adds NO discontinuity beyond the motion's own speed while snapping adds 3.3x. The absolute-smoothness question is the wrong one: a heavy chop's strike legitimately moves ~30 degrees per frame, and an interrupt cannot be gentler than the motion it interrupts. Capture: `anim_interrupt.ppm`. **What is missing:** the hit/stagger/death events that should CALL `interrupt()` live in gameplay's character and action code — the mechanism is here and complete, the triggering is across the seam*
+- [ ] **14.5** Item data: archetype + reach + weight on `ItemUse`; `animKey` narrows to the bespoke-clip escape hatch — *NOT STARTED AND NOT MINE TO START. `ItemUse`/`ItemUseRegistry` are in `engine/include/mge/framework/items.h`, owned by gameplay mechanics, and "Item use" is a listed seam (AGENTS.md §4) binding Gameplay, UI and People. The animation side is ready and waiting: `UseMotion` is exactly the parameter block `ItemUse` would need to carry. Seam request raised in `docs/status/animation.md` under Needs*
+- [~] **14.6** Proof by catalog: sword, spear, axe, hammer, torch, apple — six items, zero per-item animation authoring, visibly distinct motion — *the MECHANISM is proven and measured: each of the six is an archetype plus four numbers, no clip, no per-item code, no `.cpp` and no `CMakeLists` touched per item. Distinctness is measured across whole timelines rather than at one frame (a thrust, a chop and a hammer blow all END with the arm forward — the path there is what separates them): closest pair 82.2 degrees apart. Test `the_six_item_catalog_needs_no_per_item_animation`; capture `anim_catalog.ppm` from `tools/anim_preview`, rendered bare-handed on purpose because item meshes beyond the parametric sword do not exist and putting one in the apple-eater's hand would claim otherwise. **What is missing:** the six live in the test and the demo, not in shipped item data, because `archetype`/`reach`/`weight` cannot go onto `ItemUse` until the 14.5 seam is ruled. Closing 14.6 properly means declaring these six in the item registry, which is one small step after that ruling*
 
 ## Phase 15 — Imported skin (ADR 0014 + its reversal, owner dictation 2026-08-21)
 
@@ -329,9 +329,34 @@ across that same joint. **A preview that cannot fail is not evidence.***
   session inheriting it while the migration is queued*
 - [ ] **16.1** Migrate `tools/template_game`, `tools/people_demo` and `tools/humanoid_demo` to
   `buildPosedCharacter` — **owner: whoever the demo demonstrates** (`AGENTS.md` §3)
-- [ ] **16.2** `tools/anim_preview` onto the real skinned body, and **re-verify the 14.1 upper-body
-  mask through skinning** — the check the box rig could not perform. Expect the mask boundary to
-  need feathering across the joint rather than a hard cut — **owner: animation**
+- [x] **16.2** `tools/anim_preview` onto the real skinned body, and **re-verify the 14.1 upper-body
+  mask through skinning** — the check the box rig could not perform — **owner: animation** —
+  *`anim_preview` now renders through `buildPosedCharacter`; every capture is the imported artist
+  body. The mask was re-verified on it by measuring PER-EDGE STRAIN on the CPU — how far each mesh
+  edge's length moves from bind, which is what tearing and pinching physically are — so the gate
+  needs no picture. New permanent test:
+  `layering_does_not_shear_the_real_skinned_body`.*
+
+  ***Layering is clean.*** *The number that matters is what layering ADDS over the two poses it
+  blends: `strain(layered) - max(strain(walk), strain(action))`. Worst case **0.216**, against
+  locomotion's own worst of **0.311** — blending two poses distorts this skin less than the walk
+  cycle already does by itself. The mask boundary is not what breaks the picture.*
+
+  ***The predicted fix is not the fix.*** *The expectation written into this task was that the
+  boundary would need feathering rather than a hard cut. Measured across 180 pose pairs (5
+  archetypes x 9 timeline points x 4 walk phases), feathering makes it very slightly WORSE, not
+  better — worst excess 0.198 at feather 0.00, 0.206 at 0.50, 0.228 at 1.00, monotone. The spine
+  and chest weights already blend properly, so the skin absorbs the difference either way. The
+  `spineFeather` knob is a look control (how much torso joins the action) and its header comment
+  has been corrected to stop claiming otherwise.*
+
+  ***What DOES break the picture is the shoulder, and it is not this area's.*** *Measured on the
+  naked body with nothing layered and no archetype playing — one joint rotated: 30 deg puts 5
+  edges over 50% strain, 60 deg puts 23 over 50% and 6 over 100%, 140 deg puts 71 over 50%.
+  Locomotion stays inside ~35 deg and never puts a single edge over 50%, which is why eight
+  phases of walking never exposed it. Every use archetype needs 60-140 deg. Raised in
+  `docs/status/animation.md` for the character asset pipeline; captures
+  `anim_shoulder_envelope.ppm` and `anim_walk_vs_layered.ppm`.*
 - [ ] **16.3** Delete `buildHumanoidVisual` and `tests/test_humanoid.cpp`'s coverage of it once
   16.1 and 16.2 land — dead code that renders is worse than dead code that does not
 
