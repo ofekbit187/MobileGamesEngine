@@ -16,6 +16,7 @@ add_executable(mge_tests
     test_save.cpp
     test_fulfillment.cpp
     test_character.cpp
+    test_animation.cpp
     test_humanoid.cpp
     test_people.cpp
     test_audio.cpp
