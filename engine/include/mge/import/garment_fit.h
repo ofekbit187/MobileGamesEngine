@@ -90,6 +90,11 @@ struct FitReport {
     char message[256] = {};
 };
 
+// Closest point on a triangle to `p`, with its barycentric coordinates — the
+// primitive both the fitting bake and the acceptance gates measure with.
+Vec3 closestPointOnTriangle(const Vec3& p, const Vec3& a, const Vec3& b, const Vec3& c,
+                            float& outU, float& outV);
+
 // Which body regions a garment vertex of `region` is allowed to bind to: its
 // own region plus the ones it legitimately meets at a seam. This is the
 // "vertex group" constraint of ADR 0008 expressed against the region table the

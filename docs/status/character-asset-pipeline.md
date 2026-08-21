@@ -3,13 +3,19 @@
 **Session:** session_01PeC37FrSvon7V7BMAViaJS
 **Branch:** `claude/character-asset-pipeline-v3`
 **State:** working
-**Updated:** 2026-08-21 by the architect (seeding the ledger; this session updates it from now on)
+**Updated:** 2026-08-21 — started 13.8
 
 ## Now
-Task **13.7a** — `B-9`'s authored hairline loop, funded by ADR 0012's LOD0 cap raise to 2 400, carrying the `body_mesh_has_human_proportions` fix. Then **13.7b**, the stretch waiver mechanism (recorded seam exception). Then 13.8, then 13.9.
+**Task 13.8** — the hem-loop table (`B-11`) and per-region vertex groups (`B-25`).
+Landing it also flips the wearables `Hem-loop table` gate from BLOCKED to checked.
 
 ## Needs from the architect
-Nothing. ADR 0012 answered all three open questions.
+Nothing yet. One likely seam request is coming and I am naming it early so it is not a
+surprise: `gateHemLoops` in `engine/src/import/wearable_gates.cpp` is hard-coded
+`Blocked` and is the wearables session's file. I can publish the table, but I cannot
+wire their gate to it. Details will land here under `Needs:` when the table exists.
 
 ## Last landed
-**13.7** (`8dd2403`) — real `Face` shell on all three LODs, twelve of twelve regions owning geometry, body hash `c4f91ac3fa2fcff5`. Closed the B-8 debt. Found and fixed a morph-target duplication bug that would have moved half a jaw, invisibly, on any multi-material body.
+**13.7a + 13.7b** (`69e3d38`, merged to integration as `e528028`) — body hash
+`1067c74324b6e091` (2097 verts, 2388 tris). `mge_uv_report --gate` reads
+**CONFORMS (with waivers)** and exits 0, for the first time.

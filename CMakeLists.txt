@@ -31,6 +31,7 @@ endif()
 if(TARGET mge_import)
     add_subdirectory(tools/asset_import)
     add_subdirectory(tools/garment_fit)
+    add_subdirectory(tools/wearable_gates)
 endif()
 
 if(TARGET mge_graphics)
