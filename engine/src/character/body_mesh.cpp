@@ -479,6 +479,15 @@ void skinMesh(const SkinnedMeshData& mesh, const Mat4 palette[kJointCount],
         }
         out.vertices[i].position = position;
         out.vertices[i].normal = normal.lengthSq() > 0.0f ? normal.normalized() : Vec3{0, 1, 0};
+        // Task 16.5. Skinning moves a vertex; it does not move the vertex's
+        // place on the texture sheet, so the UV is copied through unchanged.
+        // Leaving it at {0,0} — which is what happened until now — makes a
+        // CPU-skinned body sample ONE texel for its entire surface, so every
+        // textured character comes out flat-coloured no matter how good the
+        // chart underneath it is. It blocked the first face texture, and that
+        // blocks retiring ADR 0012's provisional Face waiver.
+        out.vertices[i].uv[0] = static_cast<float>(sv.uv[0]) * (1.0f / 65535.0f);
+        out.vertices[i].uv[1] = static_cast<float>(sv.uv[1]) * (1.0f / 65535.0f);
     }
     out.computeBounds();
 }
