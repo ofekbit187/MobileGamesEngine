@@ -281,7 +281,8 @@ far lived in platform glue that headless tests could not reach — closing that 
   | 0013 | Pit clearance (B-24) and covered rims (§9.1) | in use |
   | 0014 | Skin is imported, not painted (owner dictation + reversal) | in use |
   | 0015 | The shoulder: reweight before a rig-version event | in use |
-  | 0016+ | — | available on request |
+  | 0016 | A body is for moving — B-31 posed integrity | in use |
+  | 0017+ | — | available on request |
 - **CMake source lists**: one file per line, alphabetical. Both-added lines are the most
   common merge conflict in this repo.
 - **Shared headers**: append at the documented seam point, don't reorganize. A tidy-up of

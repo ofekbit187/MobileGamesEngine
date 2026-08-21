@@ -120,6 +120,18 @@ body's vertices by index. Consequence:
   (existing gate). For wearables this is load-bearing, not cosmetic: a
   collapsing knee collapses every trouser layered on it.
 
+- **B-31 (MUST, added by ADR 0016)** — **Posed integrity.** Under the rotation
+  range the engine actually asks of it, no bending joint may tear: at each
+  joint's working range, **zero edges over 100 % strain**, with the count over
+  50 % reported. Locomotion measures zero-over-50 %, and that is the target
+  rather than a bar to squeak under. This clause exists because `B-15`'s 50/50
+  joint weighting and `B-16`'s joint-extreme integrity were both **already
+  MUSTs that nothing measured** — the shipped body violated both at the
+  shoulder (53 of 195 `UpperArmR` vertices at weight exactly 1.00, adjacent to
+  49 % `Spine`) through four contract-version events without any gate noticing.
+  Automatic weighting (`ARMATURE_AUTO` bone heat) is a **draft**, not a
+  deliverable, and must pass this clause before it ships.
+
 ## 4. Bind pose, rig fit, and attachment points
 
 - **B-17 (MUST)** — Model **in the rig's bind pose**; never bake a pose into
@@ -259,7 +271,13 @@ delivered body:
    is byte-identical (B-14).
 6. **Groups & anchors** — region vertex groups cover 100 % of vertices with
    no overlap (B-25); all attachment points present and sanely placed (B-19).
-7. **Existing gates** — closed/wound, proportions, budgets, LOD silhouettes,
+7. **Posed integrity** (§9.8, `B-31`) — **the body is posed and measured**, not
+   just inspected at rest. Per-edge strain across every bending joint's working
+   range; zero edges over 100 %. **A body that has not been posed has not been
+   accepted.** Every other gate in this list validates a body standing still,
+   which is how a torn shoulder survived eight phases of walking, twelve variant
+   renders, six garments and four contract-version events.
+8. **Existing gates** — closed/wound, proportions, budgets, LOD silhouettes,
    weight validity, joint extremes (B-15/16), and the render review: front,
    three-quarter, side, back, head and hip close-ups — *looked at*, dressed
    and bare.
