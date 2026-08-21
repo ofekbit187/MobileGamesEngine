@@ -52,7 +52,18 @@ import humanoid_morphs
 import repack_uv
 
 HEIGHT = 1.75
-LOD_TRIANGLES = (2200, 1200, 560)
+# Triangles the hairline loop costs, measured: 74 for the hairline plane and
+# 128 for the ear plane, plus a little slack because the exact count depends on
+# where the planes fall through the decimated head. LOD0 is decimated to its
+# cap MINUS this, so the loop is paid for out of the 200 ADR 0012 added rather
+# than out of the body.
+FACE_CUT_HEADROOM = 215
+LOD_TRIANGLES = (2400 - FACE_CUT_HEADROOM, 1200, 560)   # decimation targets
+# B-5's caps, which LOD0's is no longer equal to: ADR 0012 raised LOD0 to 2 400
+# to fund B-9's hairline loop, leaving LOD1/LOD2 alone because the crowd draws
+# those and they are the budget P1 defends. The body still DECIMATES to 2 200 —
+# the extra 200 are the boundary loop, not licence to decimate less carefully.
+LOD_BUDGET = (2400, 1300, 650)
 BASE_OBJECT = "GEO-body_male_realistic"
 
 # The cap/face boundary (B-9: "the hairline ... is an authored loop, not an
@@ -524,24 +535,46 @@ def split_face_shell(obj, arm, landmarks):
         off the widest band of the skull), because everything behind it is
         cranium and nape — hair territory, not face.
 
-    The boundary is CLASSIFIED, not cut: each head face goes to Face or Scalp
-    whole, by which side of the planes its centre falls on. B-9 asks for the
-    hairline to be a real authored loop, and this is not one — it is a boundary
-    one face wide that steps around whichever way each triangle happened to
-    fall. That deviation is deliberate and it is reported, not hidden.
-
-    Bisecting the two planes to get the loop was implemented and measured, and
-    it costs about 200 triangles (74 for the hairline, 128 for the ear plane) on
-    a LOD0 whose B-5 budget is 2 200 and which already sits at it. Paying for
-    them by decimating to 1 990 first fails `body_mesh_has_human_proportions`:
-    the Torso region stops reaching into the 0.82-0.88 m band the gate samples
-    and the measured hip width drops from 0.347 m to 0.146 m. Measured across
-    targets, that collapse is discrete — 2 200 passes, 2 100 and 1 990 do not —
-    so the loop cannot be bought out of this budget without either a bigger
-    LOD0 cap (B-5, an architect ruling) or spending the head's own triangles on
-    it. Both are budget decisions above this session's pay grade, so what ships
-    is the region, which is what task 13.7 is for, and the loop is raised.
+    The boundary is CUT, then classified — B-9's authored loop (task 13.7a).
+    Bisecting the two planes costs about 200 triangles, measured: 74 for the
+    hairline and 128 for the ear plane. Task 13.7 shipped without them because
+    LOD0 sat exactly on B-5's old 2 200 cap and buying them by decimating first
+    collapsed `body_mesh_has_human_proportions`. ADR 0012 funded them by raising
+    the LOD0 cap to 2 400 and holding LOD1/LOD2 where they were, so the body
+    still decimates to 2 200 and the extra 200 are the loop itself.
     """
+    # Cut the boundary before classifying it, so it is a real edge loop rather
+    # than a staircase one face wide (B-9). Only the head is cut: the ear plane
+    # crosses the whole body, so bisecting globally would slice the torso, both
+    # arms and both legs and spend the budget on nothing.
+    planes = [((0.0, HAIRLINE_Y, 0.0), (0.0, -1.0, 0.0)),
+              ((0.0, 0.0, landmarks.ear_z), (0.0, 0.0, -1.0))]
+    for point, normal in planes:
+        head = {i for i, r in enumerate(repack_uv.face_regions(obj, REGION_OF_BONE))
+                if r == "Scalp"}
+        bm = bmesh.new()
+        bm.from_mesh(obj.data)
+        bm.faces.ensure_lookup_table()
+        # bisect_plane rejects a geom list with any element repeated, and
+        # neighbouring faces share verts and edges by definition.
+        picked = [f for f in bm.faces if f.index in head]
+        verts, edges = set(), set()
+        for f in picked:
+            verts.update(f.verts)
+            edges.update(f.edges)
+        bmesh.ops.bisect_plane(bm, geom=picked + list(verts) + list(edges), dist=1e-6,
+                               plane_co=to_blender(point), plane_no=to_blender_dir(normal))
+        bm.to_mesh(obj.data)
+        bm.free()
+
+    # The bisect interpolates weights onto the vertices it creates, which can
+    # reintroduce both the fifth influence and the long-range leakage this body
+    # was cleaned of — measured, one violation. Re-run both cleanups exactly as
+    # `duplicate_reduced` does after its own decimation, and BEFORE the regions
+    # are read, since pruning changes which bone moves a vertex most.
+    clamp_influences(obj)
+    prune_far_influences(obj, arm)
+
     regions = repack_uv.face_regions(obj, REGION_OF_BONE)
     hairline_b = to_blender((0.0, HAIRLINE_Y, 0.0))
     ear_b = to_blender((0.0, 0.0, landmarks.ear_z))
@@ -1159,9 +1192,9 @@ def main():
         lods[0], arm, humanoid_morphs.Landmarks(
             [humanoid_morphs.to_engine(v.co) for v in lods[0].data.vertices]))
     health(lods[0], "LOD0 + face")
-    if triangles(lods[0]) > LOD_TRIANGLES[0]:
-        raise RuntimeError("LOD0 is %d triangles after the face split, over the %d "
-                           "budget (B-5)" % (triangles(lods[0]), LOD_TRIANGLES[0]))
+    if triangles(lods[0]) > LOD_BUDGET[0]:
+        raise RuntimeError("LOD0 is %d triangles after the face cut, over B-5's %d "
+                           "budget" % (triangles(lods[0]), LOD_BUDGET[0]))
     uv = repack_uv.repack_by_region(lods[0], REGION_OF_BONE, regions=lod0_regions)
     print("   uv chart: %d regions, %.1f%% of the tile used, %.0f px/m at "
           "1024^2, %d loops outside, %.1f%% of the halves' texels shared"

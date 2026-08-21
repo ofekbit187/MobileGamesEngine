@@ -41,6 +41,47 @@ density_tolerance   0.15
 # circle reads as an ellipse on the body.
 stretch_max         1.50
 
+# -------------------------------------------------------------- waivers ----
+# A waiver is NOT a pass, and the gate never prints it as one. It records that
+# ONE named asset misses ONE rule in ONE region, by a measured amount, for a
+# stated reason, with the condition that retires it written beside it. The rule
+# above does not move: `stretch_max` stays 1.50 for everything this project
+# commissions, and this body's failure to meet it stays visible in every report.
+#
+# Format:
+#   waive <asset> <rule> <region> <measured> | <reason> | <retires when>
+#
+# Two safety properties, both deliberate. A waiver names a REGION, so waiving
+# the arms says nothing about the face. And it stops applying if the measured
+# value drifts past what is recorded here, so a waiver granted for 2.08x can
+# never quietly absorb a later regression it was not granted for.
+#
+# Ruled in docs/adr/0012-face-stretch-waiver-and-lod0-budget.md. The stretch
+# these cover is the CC0 source's own authored unwrap distortion: it is not
+# introduced by our processing and it cannot be improved by packing, only by
+# re-unwrapping — which per ADR 0011 rides an existing contract-version event
+# rather than causing one.
+
+# The seven non-face regions: waived outright (ADR 0012 Ruling 1a). Small or
+# rarely-scrutinised surfaces, inherited distortion, no cheap remedy.
+waive humanoid_template_lod0 stretch_above_max ArmL  1.57 | inherited from the CC0 source unwrap; cannot be improved by packing | a commissioned re-unwrap rides a later contract-version event
+waive humanoid_template_lod0 stretch_above_max ArmR  1.74 | inherited from the CC0 source unwrap; cannot be improved by packing | a commissioned re-unwrap rides a later contract-version event
+waive humanoid_template_lod0 stretch_above_max HandL 1.96 | inherited from the CC0 source unwrap; the hand is the smallest thing on screen | a commissioned re-unwrap rides a later contract-version event
+waive humanoid_template_lod0 stretch_above_max HandR 1.61 | inherited from the CC0 source unwrap; the hand is the smallest thing on screen | a commissioned re-unwrap rides a later contract-version event
+waive humanoid_template_lod0 stretch_above_max LegL  1.63 | inherited from the CC0 source unwrap; cannot be improved by packing | a commissioned re-unwrap rides a later contract-version event
+waive humanoid_template_lod0 stretch_above_max LegR  1.69 | inherited from the CC0 source unwrap; cannot be improved by packing | a commissioned re-unwrap rides a later contract-version event
+waive humanoid_template_lod0 stretch_above_max FootR 1.53 | inherited from the CC0 source unwrap; marginally over and usually shod | a commissioned re-unwrap rides a later contract-version event
+
+# The face: waived PROVISIONALLY, and its retirement condition is a person, not
+# a number (ADR 0012 Ruling 1b). 2.08x sits on the one surface a player looks at
+# and the surface every part of Dictation 5 depends on — unique people,
+# hereditary features, faces that read as individual rather than as slider
+# positions. Whether that distortion is acceptable is an aesthetic judgment, and
+# by AGENTS.md 6.2 the owner is the aesthetic gate: "never this session's
+# judgment, never a number". So it does not block authoring, and the first skin
+# texture painted on the face is the test.
+waive humanoid_template_lod0 stretch_above_max Face  2.08 | PROVISIONAL: the worst distortion on the body, on the surface the owner will look at hardest | the owner judges the first authored face texture; if it reads, a face-only re-unwrap (301 triangles, sourced not originated) rides the next contract-version event
+
 # --------------------------------------------------------------- charts ----
 # Rules the body's UV chart must satisfy before ANY texture is authored on it.
 # These are the acceptance gates for B-27/B-28 in docs/BODY_CONTRACT.md.
