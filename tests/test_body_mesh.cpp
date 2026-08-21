@@ -1019,6 +1019,159 @@ MGE_TEST(region_vertex_groups_cover_every_vertex_exactly_once) {
            counted, kBodyRegionCount);
 }
 
+// -------------------------------------------------------- posed integrity ---
+//
+// BODY_CONTRACT.md §9.8 / B-31, added by ADR 0016. Every other gate in this
+// file validates a body STANDING STILL — masking, pits, hems, the scalp cap,
+// the hash, region groups, proportions, budgets. Not one of them posed it, and
+// that is how a torn shoulder survived eight phases of walking, twelve variant
+// renders, six garments and four contract-version events.
+//
+// A body that has not been posed has not been accepted.
+
+namespace {
+
+struct EdgeSet {
+    std::vector<std::pair<uint32_t, uint32_t>> edges;
+    std::vector<float> bindLength;
+
+    explicit EdgeSet(const SkinnedMeshData& mesh) {
+        std::set<std::pair<uint32_t, uint32_t>> unique;
+        const auto add = [&](uint32_t a, uint32_t b) {
+            unique.insert({std::min(a, b), std::max(a, b)});
+        };
+        for (size_t t = 0; t + 2 < mesh.indices.size(); t += 3) {
+            add(mesh.indices[t], mesh.indices[t + 1]);
+            add(mesh.indices[t + 1], mesh.indices[t + 2]);
+            add(mesh.indices[t + 2], mesh.indices[t]);
+        }
+        edges.assign(unique.begin(), unique.end());
+        bindLength.resize(edges.size());
+        for (size_t i = 0; i < edges.size(); ++i) {
+            bindLength[i] = (mesh.vertices[edges[i].first].position -
+                             mesh.vertices[edges[i].second].position)
+                                .length();
+        }
+    }
+};
+
+struct StrainResult {
+    float worst = 0;
+    int over50 = 0;
+    int over100 = 0;
+};
+
+// The animation session's metric, deliberately: how far each mesh edge's length
+// moves from bind, which is what tearing and pinching physically ARE. Measured
+// with one joint rotated and nothing else, so a failure names its own cause.
+StrainResult strainAt(const SkinnedMeshData& mesh, const EdgeSet& es, Joint joint,
+                      float degrees) {
+    Pose pose{};
+    pose.rotation[static_cast<size_t>(joint)] =
+        Quat::fromAxisAngle({1, 0, 0}, degrees * 3.14159265f / 180.0f);
+    Mat4 palette[kJointCount];
+    buildSkinPalette(templateVariant(), pose, palette);
+    MeshData posed;
+    skinMesh(mesh, palette, posed);
+
+    StrainResult r;
+    for (size_t i = 0; i < es.edges.size(); ++i) {
+        if (es.bindLength[i] < 1e-6f) continue;
+        const float len = (posed.vertices[es.edges[i].first].position -
+                           posed.vertices[es.edges[i].second].position)
+                              .length();
+        const float s = std::fabs(len / es.bindLength[i] - 1.0f);
+        r.worst = std::fmax(r.worst, s);
+        if (s > 0.5f) r.over50++;
+        if (s > 1.0f) r.over100++;
+    }
+    return r;
+}
+
+}  // namespace
+
+MGE_TEST(every_bending_joint_survives_its_working_range) {
+    // B-31. The ranges are what the engine actually asks for: locomotion stays
+    // inside about 35 degrees of shoulder rotation, which is why walking never
+    // exposed this, but every use archetype needs 60-140.
+    struct Case {
+        const char* name;
+        Joint joint;
+        float degrees;
+    };
+    const Case cases[] = {
+        {"shoulder_r", Joint::UpperArmR, 140.0f}, {"shoulder_l", Joint::UpperArmL, 140.0f},
+        {"elbow_r", Joint::ForearmR, 140.0f},     {"elbow_l", Joint::ForearmL, 140.0f},
+        {"hip_r", Joint::ThighR, 110.0f},         {"hip_l", Joint::ThighL, 110.0f},
+        {"knee_r", Joint::ShinR, 130.0f},         {"knee_l", Joint::ShinL, 130.0f},
+        {"ankle_r", Joint::FootR, 45.0f},         {"ankle_l", Joint::FootL, 45.0f},
+        {"wrist_r", Joint::HandR, 70.0f},         {"wrist_l", Joint::HandL, 70.0f},
+        {"neck", Joint::Neck, 50.0f},             {"spine", Joint::Spine, 35.0f},
+        {"chest", Joint::Chest, 30.0f},
+    };
+
+    const SkinnedMeshData mesh = body();
+    const EdgeSet es(mesh);
+    int torn = 0;
+    for (const Case& c : cases) {
+        const StrainResult r = strainAt(mesh, es, c.joint, c.degrees);
+        printf("  %-11s %3.0f deg: worst %.3f, %d edges >50%%, %d >100%%%s\n", c.name,
+               c.degrees, r.worst, r.over50, r.over100, r.over100 ? "   <-- TEARS" : "");
+        const bool shoulder = c.joint == Joint::UpperArmL || c.joint == Joint::UpperArmR;
+        if (!shoulder) {
+            // Every joint but the shoulder already passes B-31 outright, and
+            // that is a measurement rather than an assumption: ADR 0016 widened
+            // the scope on the reasonable suspicion that elbows, knees, hips,
+            // neck and wrists came out of the same automatic bind and had never
+            // been posed either. They had not. They also do not tear. The
+            // closest is the hip at 0.999 worst — one thousandth under, which
+            // is worth knowing before someone widens a hip range.
+            MGE_CHECK(r.over100 == 0);
+        }
+        torn += r.over100;
+    }
+    printf("  B-31: %d edges over 100%% strain across every bending joint\n", torn);
+
+    // THE SHOULDER IS A RECORDED B-31 VIOLATION, pinned rather than asserted
+    // away, and it is the owner's first priority.
+    //
+    // It is pinned because it cannot be fixed by weighting alone, and that is
+    // measured, not argued. Strain under linear blending follows
+    // `worst ~= K * 2*sin(theta/2)`, where K is what weighting controls: across
+    // 40-140 degrees on the shipped body that ratio is flat at 1.32-1.87.
+    // Reweighting drives K from 1.87 down to 0.84 — the 1.00-weight cliff goes
+    // from 53 vertices to 5 — but zero-over-100% at 140 degrees needs K < 0.53,
+    // and band widths from 6 cm to 45 cm and 4 to 20 smoothing rounds all
+    // plateau well above it. Adding triangles does not help either: the same
+    // weights on the full-resolution 21582-triangle body come out WORSE, since
+    // strain is a ratio and a denser mesh has shorter edges to divide by.
+    //
+    // What does work is carrying the rotation on two joints instead of one,
+    // which is what a clavicle is. Measured at 140 degrees total, splitting it
+    // 70/70 across UpperArm and Chest — Chest standing in for the clavicle the
+    // rig does not have:
+    //
+    //     shipped weights, one joint    32 edges over 100%
+    //     shipped weights, split 70/70  20
+    //     reweighted,      one joint    18
+    //     reweighted,      split 70/70   1
+    //
+    // Neither half reaches zero alone; together they take it from 32 to 1, and
+    // Chest is a poor stand-in because it swings the whole torso where a real
+    // clavicle carries only the shoulder girdle. That is the clean evidence
+    // ADR 0015 asked for before spending a rig-version event.
+    //
+    // This assertion holds the line at the shipped body's measured value so the
+    // shoulder cannot quietly get worse while the ruling is open. It retires
+    // when B-31 is met and the `!shoulder` exception above is deleted.
+    const StrainResult right = strainAt(mesh, es, Joint::UpperArmR, 140.0f);
+    const StrainResult left = strainAt(mesh, es, Joint::UpperArmL, 140.0f);
+    MGE_CHECK(right.over100 <= 32);
+    MGE_CHECK(left.over100 <= 26);
+    printf("  shoulder: RECORDED B-31 VIOLATION, pinned at %d/%d edges over 100%% "
+           "(retires when the clavicle ruling lands)\n", right.over100, left.over100);
+}
+
 // ------------------------------------------------------------------ cost ---
 
 MGE_TEST(body_mesh_stays_inside_the_mobile_budget) {

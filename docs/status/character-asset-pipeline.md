@@ -3,72 +3,77 @@
 **Session:** session_01PeC37FrSvon7V7BMAViaJS
 **Branch:** `claude/character-asset-pipeline-v3`
 **State:** blocked
-**Updated:** 2026-08-21 — 16.5 landed; 16.4 measured and held, needs a ruling
+**Updated:** 2026-08-21 — 16.6 landed; 16.4 measured to a conclusion, needs the clavicle ruling
 
 ## Now
-**16.5 is landed.** **16.4 is built, measured and deliberately NOT landed** — it misses its
-acceptance number and it has a consequence ADR 0015 did not scope. I need a ruling before
-either landing it or going further, so I am `blocked` rather than `working`. 13.9 is next
-once this is settled.
+**16.6 landed.** **16.4 is measured to a conclusion and held.** The owner's priority is the
+shoulder, and I can now say precisely what closes it — but the last step is a rig-version
+event, which is yours. I am `blocked` on that one ruling, not on work.
 
 ## Needs from the architect
 
-**1. 16.4 reweighting: land it, or hold it for the clavicle?** The reweight works and is not
-enough:
+### 1. The clavicle. ADR 0015's condition is met, and here are the numbers.
 
-- worst edge strain at 140 deg: **3.513 -> 1.578**; vertices at weight exactly 1.00: **53 -> 5**
-- at 30 deg (locomotion's range): edges over 50% **5 -> 0**; the animation session's own
-  layering test reports locomotion worst **0.311 -> 0.265**
-- **acceptance was zero edges over 100% at 140 deg. It reaches 18.**
+ADR 0015: *"if a properly weighted shoulder still tears at 140 deg, that is a clean
+measurement that one joint cannot carry the rotation."* **It is properly weighted now, and it
+still tears.**
 
-I stopped tuning on evidence, not fatigue: band widths 6-26 cm and rounds 4-20 are flat at
-11 edges over 100% at 90 deg, smoothing the decimated LOD makes it *worse* (hops are 1.3 cm
-upstream and 3 cm on LOD0 — ADR 0013's lesson again), and the same weights on the
-**full-resolution 21 582-triangle body are worse still** (5.151 / 66), so it is not a
-density limit either.
+**Weighting alone cannot close it, and that is measured, not argued.** Sweeping the shipped
+body 40–140 deg, worst strain divided by the rotation's own kinematic factor is nearly
+constant — `worst ~= K * 2*sin(theta/2)`, ratio 1.32–1.87. K is what weighting controls.
+Reweighting drives **K from 1.87 to 0.84** (the 1.00-weight cliff falls 53 vertices -> 5), but
+zero-over-100% at 140 deg needs **K < 0.53**, and every configuration plateaus above it: band
+widths 6–45 cm, 4–20 smoothing rounds, tapered and hard prunes, dense and decimated meshes.
+
+The reason is geometric and it is why widening the band never helped: a vertex at radius `r`
+from the joint displaces by `2r*sin(theta/2)`, so spreading the band to radius `R` gives it
+gradient `1/R` and displacement proportional to `R` — **the two cancel. Strain is
+scale-invariant in the band width.**
+
+**Two joints do close it.** 140 deg of total rotation, carried two ways, `Chest` standing in
+for the clavicle the rig does not have:
+
+| | one joint (140 arm) | split 70 arm + 70 chest |
+|---|---|---|
+| shipped weights | 3.513 worst, **32** edges >100% | 1.672, **20** |
+| reweighted | 1.578, **18** | 1.197, **1** |
+
+**Neither half reaches zero alone; together they take it 32 -> 1.** `Chest` is a poor stand-in
+— it swings the whole torso where a real clavicle carries only the shoulder girdle — so a real
+one should do better.
 
 ```
-SEAM: Skin weights ⇄ region segmentation ⇄ wearables gates
-NEED: A ruling on how a reweighting may move region boundaries, and whether 16.4 lands now.
-      `regionOf()` reads the bone that moves a vertex most, so a reweight IS a
-      re-segmentation: the Face/Neck/Torso boundaries move with the weights. It surfaced as
-      the wearables `pit_measurement...` test failing its `jaw` assertion — "the tightest
-      spot on the template is under the jaw; if this stops being true the body's head
-      changed shape". The head did not change shape; the region partition did. ADR 0015
-      scoped 16.4 as "data: no Joint enum edit, no shader change" — true of the weights,
-      not true of their consequences.
-BREAKS: Any reweight fails that assertion and re-cuts every region seam, which moves the UV
-      chart's region boxes and the garment cut boundaries with them. It also currently
-      produces degenerate triangles: the face-split bisect works on the set of faces the
-      region rule calls "head", that set moved, and the plane now grazes faces it used to
-      miss, making needle slivers that `dissolve_degenerate` cannot catch.
-PROPOSAL: (i) hold 16.4 until the clavicle is decided and land ONE change — a reweight alone
-      is a contract-version event re-baking six garments for a partial win, and ADR 0011's
-      own rule is that such work rides an existing event rather than causing its own; or
-      (ii) land it now and dispatch the wearables `jaw` assertion to be re-baselined. I lean
-      (i), because of the next item.
+SEAM: The rig (Joint enum, 17 -> 18) — ADR 0015 left this door open on evidence
+NEED: A ruling on adding clavicle joints. Reweighting alone cannot meet B-31 at 140 deg; the
+      arithmetic above says why, and the split experiment says what does.
+BREAKS: 17 -> 18 joints breaks every garment binding and the skinning shader's palette size,
+      exactly as ADR 0015 says. It is a rig-version event.
+PROPOSAL: Rule the clavicle, then land reweighting + clavicle + garment re-bake as ONE
+      contract-version event and delete the pin in the new gate. I have deliberately NOT
+      landed the reweighting on its own: it would spend a contract-version event and six
+      garment re-bakes on a partial fix, and ADR 0011's own rule is that such work rides an
+      existing event rather than causing its own. If you would rather have the partial
+      improvement now, say so and I will land it — it is built and measured.
 ```
 
-**2. The clavicle, on the evidence ADR 0015 asked for.** ADR 0015: *"If a properly weighted
-shoulder still tears at 140 deg, that is a clean measurement that one joint cannot carry the
-rotation."* The shoulder is now properly weighted — no cliff, a real falloff band — **and it
-still tears: 18 edges over 100%.** Under linear blending
-`|dp| ~= dw * 2r * sin(theta/2)`; at 140 deg near the deltoid that is `dw * 0.30 m`, so a
-2.7 cm edge needs `dw <= 0.09` between neighbours, which needs ~11 steps across a band that
-has ~5 vertices. Adding triangles is measured not to help. **A clavicle halves theta per
-joint and `sin(theta/2)` is where the term lives: 2*sin(35) = 1.15 against 2*sin(70) = 1.88,
-a 39% reduction for the same weights.** I have not implemented it and am not ruling on it.
-Numbers and full search space: `docs/research/shoulder-reweight.md`.
+### 2. Two things reweighting drags with it, when it does land
+- **It re-cuts the region partition.** `regionOf()` reads the dominant bone, so a reweight is
+  a re-segmentation; it fails the wearables `jaw` pit assertion on a body whose head did not
+  change shape. Needs their re-baseline.
+- **Degenerate triangles.** The face-split bisect works on the set of faces the region rule
+  calls "head"; that set moves with the weights and the plane then grazes faces it used to
+  miss, making needle slivers `dissolve_degenerate` cannot catch (a needle has long edges and
+  no area).
 
-**3. Still open from 13.8** (not blocking me): where B-11's `shoulder` and `mid_upper_arm`
-loops sit, and one line to wire the wearables `gateHemLoops` to `fitHemLoop`.
+### 3. Still open, not blocking: 13.8's `shoulder`/`mid_upper_arm` loop positions, and one
+line to wire the wearables `gateHemLoops` to `fitHemLoop`.
 
 ## Last landed
-**16.5** — `skinMesh()` now writes UVs. One line, and it blocked every textured character: a
-CPU-skinned body left `Vertex::uv` at {0,0} and sampled one texel for its whole surface.
-Verified on the shipped body: skinned UVs span u 0.005..0.888, v 0.005..0.995 with **0 of
-2097 vertices at (0,0)**, where before all 2097 were. Unblocks the first face texture and so
-the retirement of ADR 0012's provisional Face waiver. No asset changed; body hash still
-`1067c74324b6e091`. ctest 13/13, heap 0.
+**16.6** (§9.8 / B-31 executable gate) and **16.5** (`skinMesh` writes UVs) — `9c26494` and
+this push. The gate poses the body at fifteen joint cases. **Measured across all of them, only
+the shoulders tear**; elbows, knees, hips, ankles, wrists, neck, spine and chest are already at
+zero, the hip closest at 0.999 worst — worth knowing before anyone widens a hip range. ADR
+0016's suspicion that the other joints shared the shoulder's fate was right to check and the
+check says otherwise.
 
-**Before that: 13.8** — hem-loop table and region vertex groups.
+No asset changed; body hash still `1067c74324b6e091`. ctest 13/13, heap 0.
