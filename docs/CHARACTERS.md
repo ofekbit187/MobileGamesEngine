@@ -272,6 +272,30 @@ by gameplay. `ItemUse::animKey` in the Phase 12 action model is the placeholder 
 replaces — a free-form string the game presented itself. When archetypes land, the engine
 plays the motion and `animKey` narrows to the bespoke-clip escape hatch.
 
+### 6.3 Authored clips — the opt-in hero path (Dictation 8, ADR 0018)
+
+The nine use archetypes make a new weapon cost **no animation work at all**, and that stays the
+default. Alongside them, a clip **authored in a DCC against the published rig** can be imported and
+played wherever an archetype would be — the escape hatch `ItemUse::animKey` was always reserved
+for, now with a real path behind it.
+
+The deliverable is the **round trip**, not the importer: get the rig out, animate it, put it back,
+see it in the game, repeatedly, without an engineer in the loop. Two tools, one contract between
+them — `mge_rig_export` publishes the skeleton with canonical bone names, the bind pose, the body
+and the engine's own procedural locomotion baked in as reference; `mge_anim_import` validates and
+bakes, refusing with a reason a non-engineer can act on.
+
+Three properties the contract turns on:
+
+- **Clips are in-place.** Locomotion is distance-driven, so a clip carrying root translation fights
+  it. Root travel is *measured and reported* at import, never silently dropped.
+- **A clip records the rig it was authored against** and refuses on mismatch, exactly as a garment
+  binding records its body hash. Authored animation is content, and content addressed to a
+  skeleton breaks when the skeleton moves.
+- **Clips are shared; only the cursor is per-character.** Immutable, resident once, sampled by
+  everyone, on a budget whose cap refuses.
+
+
 ## 7. Basic AI (v1)
 
 The engine ships a **basic AI now, designed to be expanded later**. The `AIController` attachment point (§2) is the stable contract; the machinery behind it will grow without touching characters or games.
