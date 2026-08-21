@@ -10,10 +10,6 @@
 
 namespace mge {
 
-namespace {
-
-// ------------------------------------------------------------- geometry ----
-
 // Closest point on a triangle to `p`, with its barycentric coordinates.
 // The standard region-based solution: test the vertex regions, then the edge
 // regions, then the interior — no iteration, no failure cases.
@@ -76,6 +72,10 @@ Vec3 closestPointOnTriangle(const Vec3& p, const Vec3& a, const Vec3& b, const V
     outV = v;
     return a + ab * u + ac * v;
 }
+
+namespace {
+
+// ------------------------------------------------------------- geometry ----
 
 struct TriangleFrame {
     Vec3 axis[3];  // 0 = tangent, 1 = bitangent, 2 = normal

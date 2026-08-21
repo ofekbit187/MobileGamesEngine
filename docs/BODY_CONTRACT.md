@@ -165,12 +165,39 @@ Garments sit at their layer's offset from the body: **base ≈ 8 mm, mid
 ≈ 19 mm, outer ≈ 30 mm** (current engine values; each layer additionally
 clears the layers beneath).
 
-- **B-24 (MUST)** — In every wearable-coverable area, the body surface must
-  tolerate a **normal offset up to ~35 mm without self-intersection** — on
-  the template *and* at the variant extremes (max bulk, min height, max
-  shoulders). Watch the classic pits: armpit, crotch, neck/chin, elbow and
-  knee creases, between the fingers if the hand gains fingers. A pit the
-  offset surface can't clear becomes a place every coat clips forever.
+- **B-24 (MUST, corrected 2026-08-21)** — The body must not close a **pit**
+  — two surfaces that are far apart *along the body* but near in space — to
+  the point of self-intersection, on the template *and* at the shape
+  extremes. The classic pits: armpit, crotch, neck/chin, elbow and knee
+  creases, between the fingers if the hand gains fingers.
+
+  > **This clause originally read "tolerate a normal offset up to ~35 mm
+  > without self-intersection", and that was wrong.** Measured against the
+  > delivered body it fails everywhere for a reason that is not a defect: a
+  > 35 mm offset folds around any feature whose curvature radius is under
+  > 35 mm, so a nose, a thumb and a pair of lips all "fail" while being
+  > perfectly dressable — garments bridge such features rather than
+  > conforming to them. The clause now states the property it always
+  > *meant*, which is the one the named examples point at.
+  >
+  > Two ways of measuring it also give confident wrong answers, both of
+  > which this session tried first: comparing triangle **centroids**
+  > invents gaps that are not there (it produced a fictitious 11.7 mm
+  > armpit), and measuring between **regions** returns 0 mm everywhere,
+  > because the delivered body is one shell whose regions share their
+  > boundary edges. The measurement that means something excludes points
+  > within a **geodesic radius** (120 mm along the surface) and keeps the
+  > rest — implemented in `measurePits()`, gated by `gatePitClearance()`.
+
+  **Measured on the shipped body**, minimum across template and both shape
+  extremes: inner thigh **1.0 mm** at max shape (thighs nearly touch — real
+  anatomy, and the shape range is clamped just short of intersecting), under
+  the jaw **14.7 mm**, thumb-to-palm **16.5 mm**, armpit **38.8 mm**. These
+  are *published constraints, not defects*: a modeller cannot open them
+  without making the body stop looking like a person. What they mean for
+  wearables is that **two independent layers cannot both sit across a pit** —
+  a garment covering both sides must span it as one surface, the way real
+  trousers span a crotch.
 - **B-25 (MUST)** — **Vertex groups per region** exported with the body: each
   body vertex tagged with its region name. This is MakeHuman's guard applied
   to our pipeline — a garment vertex may only bind to body triangles of its
@@ -213,11 +240,17 @@ The existing MODELING.md definition of done applies in full
 these gates, which the wearables session will implement as tests against the
 delivered body:
 
-1. **Mask integrity** — dropping every region (and every combination a
-   garment can cause) leaves no hole and no exposed backface, template and
-   extremes, posed.
-2. **Offset-shell test** — a +35 mm normal-offset shell over each coverable
-   region does not self-intersect, on template and extremes (B-24).
+1. **Mask integrity** — the rim a mask opens is **covered by the outfit that
+   opened it**. (Corrected: this clause said "leaves no hole", which assumed
+   the per-region closed shells of the ADR 0007 v2 body. The delivered body
+   is **one shell** whose regions partition its triangles, so masking a
+   region necessarily *opens* a boundary — closed is unachievable and
+   covered is the property that matters. Judged per outfit, not per garment:
+   armour is an outer layer meant to sit over a tunic, and a trouser hem is
+   met by a boot cuff.)
+2. **Pit clearance** — no pit closes to self-intersection, and every recorded
+   pit still measures what was recorded, on template and both shape extremes
+   (B-24, corrected above).
 3. **Hem-loop table** — every named loop exists, closed, at its declared
    height (B-11).
 4. **Scalp-cap fallback** — the body renders acceptably with all hair hidden
