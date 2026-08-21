@@ -34,37 +34,16 @@
 
 #include "mge/character/animation.h"
 #include "mge/character/humanoid.h"
+#include "mge/framework/items.h"
+#include "mge/framework/use_archetype.h"
 
 namespace mge {
 
-// The nine kinds of use (CHARACTERS.md §6.2). Extending this set is a design
-// change, not a content change — the whole point is that items pick from it
-// rather than bringing their own motion.
-enum class UseArchetype : uint8_t {
-    Swing = 0,  // arcing horizontal/diagonal melee — sword, axe, club, staff
-    Thrust,     // straight-line stab — spear, dagger, rapier
-    Chop,       // overhead descending — axe, pick, maul
-    Work,       // repeated, sustained tool motion — hammer, saw, shovel
-    Draw,       // charge-and-release — bow, sling
-    Aim,        // raise, steady, release — crossbow
-    Raise,      // lift and hold a pose — torch, lantern, shield, banner
-    Consume,    // bring to the mouth — food, drink, potion
-    Gesture,    // free-hand motion, no object — spellcasting, pointing
-    Count,
-};
-constexpr size_t kUseArchetypeCount = static_cast<size_t>(UseArchetype::Count);
-
-// Human-readable name, for logs and demo sheets.
-const char* useArchetypeName(UseArchetype archetype);
-
-// How the item is held (CHARACTERS.md §6.1). Grip is item data; this is the
-// animation's view of it. `Versatile` animates as one-handed — a caller that
-// knows the item is currently held in both hands passes `TwoHanded`.
-enum class ItemGrip : uint8_t {
-    OneHanded = 0,
-    TwoHanded,
-    Versatile,
-};
+// `UseArchetype`, `kUseArchetypeCount`, `useArchetypeName` and `ItemGrip` now
+// live in `framework/use_archetype.h` and are gameplay's (ADR 0017): the
+// archetype vocabulary is design language that an ITEM declares, and this
+// area implements it. They are included above, so every name below still
+// resolves for anyone including this header.
 
 // Everything an item declares about using it. Four numbers and an enum —
 // that is the whole cost of a new weapon.
@@ -86,6 +65,19 @@ extern const VariantRange kUseReachRange;   // 0.20 .. 2.60 m
 extern const VariantRange kUseWeightRange;  // 0.10 .. 8.00 kg
 
 UseMotion clampUseMotion(const UseMotion& motion);
+
+// The bridge across the seam (14.5): what an item declares, as something the
+// engine can animate. This is the whole of "no engineer in the content loop"
+// — an item is four numbers, and this turns them into a motion.
+//
+// `leftHanded` is the CHARACTER's handedness, not the item's, so it is passed
+// in rather than read from the item.
+UseMotion motionFromItemUse(const ItemUse& use, bool leftHanded = false);
+
+// True when the item has opted into a bespoke clip instead of the archetype
+// (CHARACTERS.md §6.2). Almost nothing should: it is the hero-item luxury,
+// and the engine animates the archetype for everything else.
+bool usesBespokeClip(const ItemUse& use);
 
 // ------------------------------------------------ the phase timeline -------
 //

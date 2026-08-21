@@ -18,6 +18,7 @@ add_library(mge_core STATIC
     src/framework/interaction.cpp
     src/framework/ai.cpp
     src/character/animation.cpp
+    src/character/animation_clip.cpp
     src/character/humanoid.cpp
     src/character/use_archetypes.cpp
     src/character/body_mesh.cpp
