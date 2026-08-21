@@ -248,3 +248,74 @@ partition.
 
 **Recommendation: rule the clavicle, then land reweighting + clavicle + re-bake as one
 contract-version event, and delete the pin.**
+
+---
+
+# Second addendum — I was wrong about the mechanism, and the clavicle does not fix the tear
+
+**This corrects the evidence I supplied for ADR 0019.** I implemented the clavicle, measured it,
+and the result contradicts the inference I drew from the `Chest` stand-in. Reporting before
+spending the contract-version event, because the event breaks every garment binding and the
+shader palette and is not worth spending on a premise that has since failed.
+
+## What I claimed, and why it was wrong
+
+I measured that splitting 140° of shoulder rotation across `UpperArm` and `Chest` took the tear
+from 32 edges to 1, and inferred that a clavicle would do the same *only better*, on the grounds
+that `Chest` "swings the whole torso where a real clavicle carries only the shoulder girdle".
+
+**That reasoning was backwards.** Being localised is precisely why the clavicle does not help.
+The tear is at the **arm/torso boundary**, and relieving it needs the *torso side of the seam* to
+move. `Chest` moves it. A clavicle does not.
+
+## The control, on one body, one pose split
+
+19-joint reweighted body, 140° total shoulder rotation, only the second joint changed:
+
+| | worst | edges >100 % |
+|---|---|---|
+| arm 70 + **clavicle** 70 | 1.561 | **18** |
+| arm 70 + **Chest** 70 | 1.187 | **1** |
+| arm 93 + clavicle 47 (2:1 rhythm) | 1.561 | 18 |
+| arm 93 + **Chest** 47 | 1.387 | **1** |
+
+The clavicle is not inert — it carries 214/192 vertices and ~35 units of weight mass per side. It
+simply does not relieve this seam.
+
+## And the clavicle alone changes nothing at all
+
+Three bodies, same pipeline, B-31 across all fifteen joint cases:
+
+| body | shoulders >100 % | hips | knees | B-31 total |
+|---|---|---|---|---|
+| shipped, 17 joints, automatic weights | 32 + 26 | 0 | 0 | **58** |
+| **clavicle, 19 joints, automatic weights** | 33 + 28 | 0 | 0 | **61** |
+| clavicle + reweighting, 19 joints | 20 + 11 | 4 | 1 | **36** |
+
+**The clavicle on its own is 58 → 61 — no better, marginally worse within re-decimation noise.**
+Every bit of the improvement comes from the reweighting, and the reweighting brings a regression
+with it: hips and one knee start tearing (0 → 5) from the same far-end-of-band mechanism recorded
+in section 2 of this note.
+
+## What this means
+
+**The clavicle does not fix the shoulder tear. Torso participation does.** A 140° arm raise with a
+rigid chest is not a pose a real body makes, and it is not one the engine's archetypes need to
+make either — thoracic extension is part of the motion. That points the fix at how the pose is
+driven rather than at the rig, which lands it next to the animation session's layered-pose work
+rather than in a rig-version event.
+
+**ADR 0019's second argument is untouched and still stands on its own.** Captured human motion
+contains shoulder-girdle rotation, and on a 17-joint rig it has nowhere to go. That is a real
+requirement, it comes from the owner, and it justifies the clavicle independently — it just is
+not a fix for the tearing, and ADR 0019 says it is.
+
+**Recommendation.** Do not spend the contract-version event on the tearing argument. Decide the
+clavicle on the motion-capture requirement alone, where the case is sound. And measure whether a
+torso-participating shoulder pose closes B-31 before treating the tear as a body defect at all —
+if it does, the body needs the reweighting (with its hip/knee regression fixed) and nothing more.
+
+Everything above is reproducible: `tools/model/humanoid_template.py` variants are saved in this
+session's scratch as `clav_only.py.keep` (rig change alone) and `clav_reweight.py.keep` (both),
+and the engine-side edits are five — `Joint` enum, `buildSkeleton`, `mirrored`, `jointName`,
+`skinned.vert`'s palette constant.
