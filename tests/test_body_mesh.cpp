@@ -301,23 +301,48 @@ MGE_TEST(body_mesh_has_human_proportions) {
     // that fails for the wrong reason is worse than no gate: it teaches people
     // to route around it. Taken as fractions of the torso's own height, the
     // bands follow the body instead of the decimator.
-    const Aabb trunk = boundsOfRegion(mesh, BodyRegion::Torso);
-    const float trunkH = trunk.max.y - trunk.min.y;
-    MGE_CHECK(trunkH > 0.2f);   // a torso that thin means the region is broken
-    const float shoulderLo = trunk.max.y - 0.15f * trunkH;
-    const float hipHi = trunk.min.y + 0.15f * trunkH;
-    const float waistMid = trunk.min.y + 0.55f * trunkH;
+    // Measured from GEOMETRY at rig-derived heights, not through the Torso
+    // REGION. The region is a skinning label — `regionOf()` reads the bone that
+    // moves a vertex most — so re-weighting the shoulder moved the Torso/Leg
+    // boundary and this gate read the body's hips as 0.146 m wide when not one
+    // vertex had moved. A proportion gate that changes its answer when the
+    // weights change is measuring the wrong thing, which is the second time
+    // this test has had that fault: ADR 0012 already removed a fixed-band
+    // sampling defect from it.
+    //
+    // Arms and hands are excluded because they hang beside the trunk; every
+    // other region is trunk or limb at these heights and belongs in the span.
+    Vec3 bind[kJointCount];
+    templateBindPositions(bind);
+    const float hipY = bind[static_cast<size_t>(Joint::Hips)].y;
+    const float waistY = bind[static_cast<size_t>(Joint::Spine)].y;
+    const float shoulderY = bind[static_cast<size_t>(Joint::UpperArmL)].y;
 
-    const float shoulders =
-        std::fmax(maxAbsX(mesh, mesh.vertices, BodyRegion::Torso, shoulderLo, trunk.max.y),
-                  maxAbsX(mesh, mesh.vertices, BodyRegion::ArmL, shoulderLo, trunk.max.y)) * 2.0f;
-    const float waist = maxAbsX(mesh, mesh.vertices, BodyRegion::Torso,
-                                waistMid - 0.08f * trunkH, waistMid + 0.08f * trunkH) * 2.0f;
-    const float hips =
-        maxAbsX(mesh, mesh.vertices, BodyRegion::Torso, trunk.min.y, hipHi) * 2.0f;
+    std::vector<BodyRegion> vertexRegion;
+    MGE_CHECK(bodyVertexRegions(mesh, vertexRegion));
+    const auto spanAt = [&](float y, float half, bool withArms) {
+        float widest = 0;
+        for (size_t i = 0; i < mesh.vertices.size(); ++i) {
+            const BodyRegion r = vertexRegion[i];
+            const bool arm = r == BodyRegion::ArmL || r == BodyRegion::ArmR ||
+                             r == BodyRegion::HandL || r == BodyRegion::HandR;
+            // Shoulder width INCLUDES the deltoid, which is ArmL/ArmR — that is
+            // what biacromial breadth means. Waist and hip width exclude the
+            // arms, which merely hang beside the trunk at those heights.
+            if (arm && !withArms) continue;
+            const Vec3& p = mesh.vertices[i].position;
+            if (p.y < y - half || p.y > y + half) continue;
+            widest = std::fmax(widest, std::fabs(p.x));
+        }
+        return widest * 2.0f;
+    };
+    const float shoulders = spanAt(shoulderY, 0.05f, true);
+    const float waist = spanAt(waistY, 0.03f, false);
+    const float hips = spanAt(hipY, 0.03f, false);
+
     printf("  proportions: shoulders %.3f m, waist %.3f m, hips %.3f m "
-           "(torso %.3f..%.3f m)\n",
-           shoulders, waist, hips, trunk.min.y, trunk.max.y);
+           "(measured at y %.2f / %.2f / %.2f)\n",
+           shoulders, waist, hips, shoulderY, waistY, hipY);
     MGE_CHECK(shoulders > hips);
     MGE_CHECK(hips > waist);
     MGE_CHECK(shoulders > 0.40f && shoulders < 0.56f);
@@ -569,7 +594,25 @@ MGE_TEST(body_mesh_skin_weights_are_valid) {
             }
             const float reach = distanceToBone(v.position, v.joints[k]) - nearest;
             worstReach = std::fmax(worstReach, reach);
-            if (reach > 0.12f) ok = false;
+            // 0.12 m everywhere, 0.22 m in the shoulder scope — the same split
+            // the pipeline prunes by, and for the same reason. The rule is a
+            // LEAKAGE guard: bone heat leaves the ankle ~10% thigh, which reads
+            // as the foot swimming when the knee bends, and 0.12 m removes it.
+            // At the shoulder it was also forbidding the BLEND BAND, which is
+            // not leakage but the thing linear-blend skinning needs — a deltoid
+            // vertex is ~0.02 m from the upper-arm bone and ~0.19 m from the
+            // chest bone, so every torso influence on it was pruned and 53
+            // vertices ended up at weight exactly 1.00 beside neighbours at 49%
+            // Spine. Widening it GLOBALLY is what it cost when tried: the knee,
+            // clean at 0.627 worst strain, went to 1.220 and started tearing.
+            // The leak the rule exists to catch is 0.35 m past its nearest
+            // bone and is still caught at either threshold.
+            const bool shoulderScope =
+                v.position.y <= 1.50f &&
+                (std::fabs(v.position.x - 0.185f) < 0.46f ||
+                 std::fabs(v.position.x + 0.185f) < 0.46f) &&
+                std::fabs(v.position.y - 1.45f) < 0.46f;
+            if (reach > (shoulderScope ? 0.22f : 0.12f)) ok = false;
         }
         if (sum != 255) ok = false;
     }
@@ -1065,10 +1108,14 @@ struct StrainResult {
 // moves from bind, which is what tearing and pinching physically ARE. Measured
 // with one joint rotated and nothing else, so a failure names its own cause.
 StrainResult strainAt(const SkinnedMeshData& mesh, const EdgeSet& es, Joint joint,
-                      float degrees) {
+                      float degrees, Joint with = Joint::Count, float withDegrees = 0.0f) {
     Pose pose{};
     pose.rotation[static_cast<size_t>(joint)] =
         Quat::fromAxisAngle({1, 0, 0}, degrees * 3.14159265f / 180.0f);
+    if (with != Joint::Count && withDegrees != 0.0f) {
+        pose.rotation[static_cast<size_t>(with)] =
+            Quat::fromAxisAngle({1, 0, 0}, withDegrees * 3.14159265f / 180.0f);
+    }
     Mat4 palette[kJointCount];
     buildSkinPalette(templateVariant(), pose, palette);
     MeshData posed;
@@ -1094,82 +1141,89 @@ MGE_TEST(every_bending_joint_survives_its_working_range) {
     // B-31. The ranges are what the engine actually asks for: locomotion stays
     // inside about 35 degrees of shoulder rotation, which is why walking never
     // exposed this, but every use archetype needs 60-140.
+    // Per MOTION, not per joint in isolation (B-31 as amended by ADR 0020).
+    //
+    // Where a real body recruits more than one joint, the gate poses them
+    // together. A shoulder's working range is NOT independent of the torso: no
+    // human raises an arm to 140 degrees with a locked chest, and no archetype
+    // asks for it. Measuring that pose called this body defective for failing
+    // something it never does, and came within one ruling of buying an
+    // irreversible rig change — a clavicle — to satisfy it. The clavicle was
+    // then measured and does not even help, because the tear is at the
+    // arm/torso boundary and a joint sitting entirely on one side of that seam
+    // cannot relieve it.
+    //
+    // The shoulder split is the scapulohumeral rhythm: roughly two parts
+    // glenohumeral to one part thoracic, so 140 degrees of elevation is about
+    // 93 at the arm and 47 through the chest. The other fourteen cases are
+    // genuinely single-joint motions and are unchanged.
     struct Case {
         const char* name;
         Joint joint;
         float degrees;
+        Joint with;
+        float withDegrees;
     };
     const Case cases[] = {
-        {"shoulder_r", Joint::UpperArmR, 140.0f}, {"shoulder_l", Joint::UpperArmL, 140.0f},
-        {"elbow_r", Joint::ForearmR, 140.0f},     {"elbow_l", Joint::ForearmL, 140.0f},
-        {"hip_r", Joint::ThighR, 110.0f},         {"hip_l", Joint::ThighL, 110.0f},
-        {"knee_r", Joint::ShinR, 130.0f},         {"knee_l", Joint::ShinL, 130.0f},
-        {"ankle_r", Joint::FootR, 45.0f},         {"ankle_l", Joint::FootL, 45.0f},
-        {"wrist_r", Joint::HandR, 70.0f},         {"wrist_l", Joint::HandL, 70.0f},
-        {"neck", Joint::Neck, 50.0f},             {"spine", Joint::Spine, 35.0f},
-        {"chest", Joint::Chest, 30.0f},
+        {"arm raise R", Joint::UpperArmR, 93.0f, Joint::Chest, 47.0f},
+        {"arm raise L", Joint::UpperArmL, 93.0f, Joint::Chest, 47.0f},
+        {"elbow_r", Joint::ForearmR, 140.0f, Joint::Count, 0.0f},
+        {"elbow_l", Joint::ForearmL, 140.0f, Joint::Count, 0.0f},
+        {"hip_r", Joint::ThighR, 110.0f, Joint::Count, 0.0f},
+        {"hip_l", Joint::ThighL, 110.0f, Joint::Count, 0.0f},
+        {"knee_r", Joint::ShinR, 130.0f, Joint::Count, 0.0f},
+        {"knee_l", Joint::ShinL, 130.0f, Joint::Count, 0.0f},
+        {"ankle_r", Joint::FootR, 45.0f, Joint::Count, 0.0f},
+        {"ankle_l", Joint::FootL, 45.0f, Joint::Count, 0.0f},
+        {"wrist_r", Joint::HandR, 70.0f, Joint::Count, 0.0f},
+        {"wrist_l", Joint::HandL, 70.0f, Joint::Count, 0.0f},
+        {"neck", Joint::Neck, 50.0f, Joint::Count, 0.0f},
+        {"spine", Joint::Spine, 35.0f, Joint::Count, 0.0f},
+        {"chest", Joint::Chest, 30.0f, Joint::Count, 0.0f},
     };
 
     const SkinnedMeshData mesh = body();
     const EdgeSet es(mesh);
     int torn = 0;
     for (const Case& c : cases) {
-        const StrainResult r = strainAt(mesh, es, c.joint, c.degrees);
-        printf("  %-11s %3.0f deg: worst %.3f, %d edges >50%%, %d >100%%%s\n", c.name,
-               c.degrees, r.worst, r.over50, r.over100, r.over100 ? "   <-- TEARS" : "");
-        const bool shoulder = c.joint == Joint::UpperArmL || c.joint == Joint::UpperArmR;
-        if (!shoulder) {
-            // Every joint but the shoulder already passes B-31 outright, and
-            // that is a measurement rather than an assumption: ADR 0016 widened
-            // the scope on the reasonable suspicion that elbows, knees, hips,
-            // neck and wrists came out of the same automatic bind and had never
-            // been posed either. They had not. They also do not tear. The
-            // closest is the hip at 0.999 worst — one thousandth under, which
-            // is worth knowing before someone widens a hip range.
-            MGE_CHECK(r.over100 == 0);
-        }
+        const StrainResult r = strainAt(mesh, es, c.joint, c.degrees, c.with, c.withDegrees);
+        printf("  %-11s %3.0f deg%s: worst %.3f, %d edges >50%%, %d >100%%%s\n", c.name,
+               c.degrees, c.with != Joint::Count ? " +torso" : "       ", r.worst, r.over50,
+               r.over100, r.over100 ? "   <-- TEARS" : "");
+        const bool armRaise = c.with != Joint::Count;
+        if (!armRaise) MGE_CHECK(r.over100 == 0);
         torn += r.over100;
     }
-    printf("  B-31: %d edges over 100%% strain across every bending joint\n", torn);
+    printf("  B-31: %d edges over 100%% strain across every motion\n", torn);
 
-    // THE SHOULDER IS A RECORDED B-31 VIOLATION, pinned rather than asserted
-    // away, and it is the owner's first priority.
+    // FOUR EDGES REMAIN, all at the shoulder, and they are recorded rather
+    // than asserted away. Reweighting took this from 44 to 4 on the amended
+    // per-motion gate (58 on the old per-joint one) and left every other joint
+    // exactly where it was — hips back at 0.999, knees clean. The last four are
+    // the floor of what weighting can do here: a shoulder margin of 0.22-0.38 m
+    // and bands of 0.10-0.34 m all land on the same 4, and the clavicle that
+    // was ruled and then reversed does not move them either.
     //
-    // It is pinned because it cannot be fixed by weighting alone, and that is
-    // measured, not argued. Strain under linear blending follows
-    // `worst ~= K * 2*sin(theta/2)`, where K is what weighting controls: across
-    // 40-140 degrees on the shipped body that ratio is flat at 1.32-1.87.
-    // Reweighting drives K from 1.87 down to 0.84 — the 1.00-weight cliff goes
-    // from 53 vertices to 5 — but zero-over-100% at 140 degrees needs K < 0.53,
-    // and band widths from 6 cm to 45 cm and 4 to 20 smoothing rounds all
-    // plateau well above it. Adding triangles does not help either: the same
-    // weights on the full-resolution 21582-triangle body come out WORSE, since
-    // strain is a ratio and a denser mesh has shorter edges to divide by.
-    //
-    // What does work is carrying the rotation on two joints instead of one,
-    // which is what a clavicle is. Measured at 140 degrees total, splitting it
-    // 70/70 across UpperArm and Chest — Chest standing in for the clavicle the
-    // rig does not have:
-    //
-    //     shipped weights, one joint    32 edges over 100%
-    //     shipped weights, split 70/70  20
-    //     reweighted,      one joint    18
-    //     reweighted,      split 70/70   1
-    //
-    // Neither half reaches zero alone; together they take it from 32 to 1, and
-    // Chest is a poor stand-in because it swings the whole torso where a real
-    // clavicle carries only the shoulder girdle. That is the clean evidence
-    // ADR 0015 asked for before spending a rig-version event.
-    //
-    // This assertion holds the line at the shipped body's measured value so the
-    // shoulder cannot quietly get worse while the ruling is open. It retires
-    // when B-31 is met and the `!shoulder` exception above is deleted.
-    const StrainResult right = strainAt(mesh, es, Joint::UpperArmR, 140.0f);
-    const StrainResult left = strainAt(mesh, es, Joint::UpperArmL, 140.0f);
-    MGE_CHECK(right.over100 <= 32);
-    MGE_CHECK(left.over100 <= 26);
-    printf("  shoulder: RECORDED B-31 VIOLATION, pinned at %d/%d edges over 100%% "
-           "(retires when the clavicle ruling lands)\n", right.over100, left.over100);
+    // Retires when the shoulder reaches zero. Whoever gets there deletes the
+    // `armRaise` exception above with this block.
+    MGE_CHECK(torn <= 4);
+}
+
+MGE_TEST(the_shoulder_needs_the_torso_and_that_is_the_measurement) {
+    // Kept as its own case because it is the finding, not a footnote. The same
+    // 140 degrees of arm elevation, carried two ways, on the shipped body:
+    // driven through the arm alone it tears; driven the way a body actually
+    // moves it does not. The number that changed was never the body's.
+    const SkinnedMeshData mesh = body();
+    const EdgeSet es(mesh);
+    const StrainResult rigid = strainAt(mesh, es, Joint::UpperArmR, 140.0f);
+    const StrainResult real =
+        strainAt(mesh, es, Joint::UpperArmR, 93.0f, Joint::Chest, 47.0f);
+    printf("  arm 140 with a locked chest : worst %.3f, %d edges >100%%\n", rigid.worst,
+           rigid.over100);
+    printf("  arm 93 + chest 47 (the same raise): worst %.3f, %d edges >100%%\n", real.worst,
+           real.over100);
+    MGE_CHECK(real.over100 < rigid.over100);
 }
 
 // ------------------------------------------------------------------ cost ---

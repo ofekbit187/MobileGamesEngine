@@ -319,3 +319,70 @@ Everything above is reproducible: `tools/model/humanoid_template.py` variants ar
 session's scratch as `clav_only.py.keep` (rig change alone) and `clav_reweight.py.keep` (both),
 and the engine-side edits are five — `Joint` enum, `buildSkeleton`, `mirrored`, `jointName`,
 `skinned.vert`'s palette constant.
+
+---
+
+# Third addendum — what landed, and the two gates that were measuring the wrong thing
+
+ADR 0020 reversed the clavicle and amended `B-31` to measure **per motion**. That is the ruling
+this section implements. **New body content hash: `be7b3618f965eb0f`.**
+
+## The result
+
+| | shipped body | landed |
+|---|---|---|
+| `B-31`, per motion, all 15 cases | **44** edges over 100 % | **4** |
+| arm raise R (93° arm + 47° chest) | 26 | **1** |
+| arm raise L | 18 | **3** |
+| hips | 0 | **0** |
+| knees | 0 | **0** |
+| vertices bound at weight exactly 1.00 | 53 | 5 |
+
+**91 % of the tearing is gone and nothing else moved.** Four edges remain, both shoulders, and
+they are the floor: shoulder margins from 0.22 m to 0.38 m and bands from 0.10 m to 0.34 m all
+land on the same four, and the clavicle — ruled, implemented, then reversed — does not move them
+either. They are recorded in the gate with a named retirement condition rather than asserted away.
+
+## The reweighting had to be made LOCAL, twice, for two different reasons
+
+The first version smoothed globally and widened the leakage margin globally. Both were wrong, and
+both were caught by gates rather than by inspection:
+
+- **Global smoothing broke the hips.** They sat at 0.999 worst strain — one thousandth under the
+  line — and the band's far end pushed them to 1.177 and started them tearing, along with a knee.
+  The relaxation is now applied within 0.46 m of the shoulder joints and nowhere else, *because
+  the measurement says nowhere else needs it*: posed at their working ranges, elbows, knees, hips,
+  ankles, wrists, neck, spine and chest all come out of the automatic bind already at zero.
+- **A global margin broke a knee.** Widening the leakage guard from 0.10 m to 0.22 m to admit the
+  shoulder band loosens the prune at *every* joint; the knee went from 0.627 to 1.220 and tore.
+  The wide margin is now scoped to the shoulder too.
+- **And the scope had to be capped below the head.** The radius the band needs reaches 0.24 m
+  upward as well as down, which puts the head inside it — and the head is where task 13.7's
+  Face/Scalp split lives, decided from the same weights. Uncapped, re-weighting the shoulder broke
+  the hairline into more than one ring. The band reaches down and inward, never up.
+
+## Two gates were measuring the wrong thing, and this is the second time for one of them
+
+**`body_mesh_has_human_proportions` read the body's width through the Torso REGION** — a skinning
+label, since `regionOf()` reads the bone that moves a vertex most. Re-weighting moved the
+Torso/Leg boundary and the gate reported the hips as 0.146 m wide **when not one vertex had
+moved**. It now measures geometry at rig-derived heights: shoulders 0.466 m (including the
+deltoid, which is what biacromial breadth means), waist 0.306 m, hips 0.347 m. ADR 0012 already
+removed a fixed-band sampling defect from this same test; this is the second fault of the same
+family in it, and the lesson is that a gate reading through a derived label inherits every change
+to that label.
+
+**`body_mesh_skin_weights_are_valid` hard-coded the rule that forbade the fix.** Its 0.12 m reach
+limit is a leakage guard — bone heat leaves the ankle ~10 % thigh — and it was also forbidding the
+shoulder's blend band, which is not leakage. It is now 0.12 m everywhere and 0.22 m in the
+shoulder scope, mirroring the pipeline exactly. The leak it exists to catch is 0.35 m past its
+nearest bone and is caught at either threshold. **Widening it globally instead is precisely what
+broke the knee**, which is the argument for scoping rather than relaxing.
+
+## The bisect slivers
+
+`body_mesh_has_no_degenerate_triangles` failed because the face-split plane grazes whichever faces
+the region rule calls "head", and that set moves with the weights. Fixed at source: the bisect's
+snap distance goes from 1 µm to 0.1 mm, so a vertex near the plane is moved onto it instead of
+spawning a needle beside it. `dissolve_degenerate` cannot catch those — a needle has long edges
+and no area.
