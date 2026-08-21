@@ -264,7 +264,39 @@ Status legend: `[ ]` not started · `[~]` in progress · `[x]` done
 - [ ] **14.5** Item data: archetype + reach + weight on `ItemUse`; `animKey` narrows to the bespoke-clip escape hatch
 - [ ] **14.6** Proof by catalog: sword, spear, axe, hammer, torch, apple — six items, zero per-item animation authoring, visibly distinct motion
 
-## Phase 15 and beyond — held for further dictation
+## Phase 15 — Procedural skin (ADR 0014, owner dictation 2026-08-21)
+
+*Goal: skin is produced by a generator parameterized by the phenotype the DNA module already
+produces, not painted by hand. Not a staffing workaround — a painted skin is one skin, and
+Dictation 5 dictates that every person is unique with hereditary features, which no finite set of
+painted skins can deliver. Same P5/P12 pattern as virtual models and family trees, applied to the
+one surface that had been waiting for a human.*
+
+*The P1 constraint is ruled up front and is not negotiable: **texture memory is O(1) in crowd
+size.** A small shared set of base maps, baked once; per-person variation rides as material
+parameters fed from the phenotype. Adding the fifty-first villager costs zero texture bytes.
+Anything that allocates a texture per character is a defect, not a budget line.*
+
+- [ ] **15.1** **One face, rendered, for the owner's eye** — a single generated skin on the
+  shipped body, put in front of the owner before any system exists. This is deliberately first:
+  it is the cheapest test of the one failure mode measurement cannot catch (output that passes
+  every numeric gate and reads as plastic), and it **retires ADR 0012's provisional Face waiver**,
+  whose condition is "the owner judges the first authored face texture"
+- [ ] **15.2** Generator v1: the base map set from `TEXTURING.md` Part I, conforming to
+  `assets/standards/skin_texture.mgestd` and packed against the frozen chart (`B-27`)
+- [ ] **15.3** Phenotype binding: melanin depth, undertone, weathering and blemish seeds driven
+  from the `Genome`'s phenotype (ADR 0009), evaluated in-shader against the shared maps — **never
+  as per-person texture allocation**
+- [ ] **15.4** The `.mgetex` baker and its gates: colour space, mip chain, island padding,
+  compression PSNR, deterministic rebuild — the five rules `mge_uv_report` currently reports as
+  "not checkable here (no textures exist yet)"
+- [ ] **15.5** Crowd proof: a village of hereditarily-related, individually-distinct faces at a
+  fixed texture cost, measured — the number that proves Ruling 1 rather than asserting it
+
+**Exit criteria:** a crowd in which no two people share a face, drawn from one shared map set, at
+a texture cost that does not move when the crowd grows.
+
+## Phase 16 and beyond — held for further dictation
 
 Deliberately not planned yet; known candidates awaiting direction:
 
@@ -276,8 +308,8 @@ Deliberately not planned yet; known candidates awaiting direction:
   list — P12: one line of data, not a code change, tightens a rule). The
   texture **runtime** (sampling, GPU upload, materials, formats on the device)
   belongs to the renderer area, not here. Engine-side prerequisites: TEXTURING
-  §13. Awaiting the owner's verdict on two proposals (textures as generators;
-  virtual textures on the P5 pattern)
+  §13. **Textures as generators is now ruled — ADR 0014, Phase 15 above.** The
+  second proposal (virtual textures on the P5 pattern) remains undecided
 - **UNBLOCKED (ADR 0010/0011/0012) — a skin texture may now be authored.** `mge_uv_report --gate` passes six of its seven checkable rules; `stretch_above_max` is the lone refusal and ADR 0012 waives it — outright for the seven non-face regions, provisionally for the **Face at 2.09×, whose retirement condition is the owner's eye on the first authored face texture** rather than a threshold. Nothing has been painted yet. *Historical, for the record:* `mge_uv_report`
   (in `ctest`; `--gate` for pass/fail) measures 89.7 % of the body's triangles
   with zero UV area and 91.1 % of its vertices pinned to a tile edge: the source
