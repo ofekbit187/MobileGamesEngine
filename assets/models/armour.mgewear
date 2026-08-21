@@ -1,0 +1,11 @@
+# Armour — outer-layer cuirass with pauldrons. Worn over a tunic.
+
+version       1
+
+id            armour
+name          Armour
+mesh          garment_armour
+layer         2
+covers        torso
+thickness_mm  14
+color         0.42 0.44 0.48 1

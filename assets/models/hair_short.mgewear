@@ -1,0 +1,12 @@
+# Short hair. Masks nothing: the scalp stays drawn underneath, which is what
+# lets a helmet hide the hair and still leave a head (B-9).
+
+version       1
+
+id            hair_short
+name          Short hair
+mesh          garment_hair_short
+layer         1
+covers        none
+thickness_mm  4
+color         0.24 0.17 0.12 1

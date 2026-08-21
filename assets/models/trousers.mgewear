@@ -1,0 +1,15 @@
+# Trousers — mid-layer legs, reaching the ankle so a boot cuff can meet them.
+#
+# The hem matters: the leg regions are masked away under this garment, so
+# wherever the trousers stop, something has to cover the rim (the wearables
+# mask-integrity gate measures exactly that).
+
+version       1
+
+id            trousers
+name          Trousers
+mesh          garment_trousers
+layer         1
+covers        legs
+thickness_mm  11
+color         0.34 0.30 0.26 1

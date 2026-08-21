@@ -17,6 +17,7 @@
 
 #include "mge/character/body_mesh.h"
 #include "mge/character/garment_binding.h"
+#include "mge/character/wearable_catalogue.h"
 #include "mge/graphics/mesh_io.h"
 #include "mge/import/garment_fit.h"
 
@@ -27,19 +28,6 @@ namespace {
 #ifndef MGE_ASSET_MODEL_DIR
 #define MGE_ASSET_MODEL_DIR "assets/models"
 #endif
-
-struct Shipped {
-    const char* asset;
-    uint8_t layer;
-};
-
-// The catalogue as it stands. A garment is data: adding one here is a data
-// change, and adding one to the ENGINE is not required at all (P12) — this
-// list exists only so "re-bake everything" has something to iterate.
-const Shipped kShipped[] = {
-    {"garment_tunic", 1},   {"garment_trousers", 1}, {"garment_boots", 1},
-    {"garment_hair_short", 1}, {"garment_hair_long", 1}, {"garment_armour", 2},
-};
 
 std::string modelPath(const std::string& dir, const std::string& name, const char* ext) {
     return dir + "/" + name + ext;
@@ -88,12 +76,26 @@ int main(int argc, char** argv) {
     std::printf("body: %zu vertices, %zu triangles, hash %016llx\n", body.vertices.size(),
                 body.triangleCount(),
                 static_cast<unsigned long long>(skinnedMeshContentHash(body)));
-    std::printf("baking %zu garment bindings into %s\n\n",
-                sizeof kShipped / sizeof kShipped[0], dir.c_str());
+    std::printf("baking the wearable catalogue in %s\n\n", dir.c_str());
 
-    bool ok = true;
-    for (const Shipped& item : kShipped) bakeOne(dir, body, item.asset, item.layer, ok);
+    // The catalogue IS the list (task 13.12). Adding a garment means dropping
+    // a `.mgewear` next to its mesh — this tool needs no entry for it, which
+    // is the whole point: a new wearable is a data change end to end.
+    const WearableCatalogue& catalogue = wearableCatalogue();
+    if (catalogue.size() == 0) {
+        std::printf("no .mgewear files in %s - nothing to bake\n", dir.c_str());
+        return 1;
+    }
+    for (const std::string& refusal : catalogue.refusals()) {
+        std::printf("  REFUSED %s\n", refusal.c_str());
+    }
 
+    bool ok = catalogue.refusals().empty();
+    for (size_t i = 0; i < catalogue.size(); ++i) {
+        const WearableDef& def = catalogue.at(i);
+        if (def.held || def.mesh.empty()) continue;  // held items attach rigidly
+        bakeOne(dir, body, def.mesh, def.layer, ok);
+    }
     std::printf("\n%s\n", ok ? "all bindings baked" : "SOME BINDINGS FAILED");
     return ok ? 0 : 1;
 }

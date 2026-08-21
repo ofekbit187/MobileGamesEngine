@@ -1,0 +1,18 @@
+# Tunic — everyday mid-layer torso garment.
+#
+# `covers torso` and not `torso arms`: the sleeves are short, so masking the
+# arm regions would cut away forearm the tunic does not reach. The mask gate
+# measures exactly that and refused it when this file first said otherwise.
+#
+# Format: one `key value...` per line, `#` comments, blank lines ignored —
+# the same convention as assets/standards/skin_texture.mgestd.
+
+version       1
+
+id            tunic
+name          Tunic
+mesh          garment_tunic
+layer         1
+covers        torso
+thickness_mm  11
+color         0.55 0.42 0.28 1

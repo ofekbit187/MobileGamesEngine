@@ -23,6 +23,7 @@ add_executable(mge_tests
     test_actions.cpp
     test_body_mesh.cpp
     test_garment_binding.cpp
+    test_wearable_catalogue.cpp
     test_engine.cpp
 )
 

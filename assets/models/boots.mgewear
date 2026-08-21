@@ -1,0 +1,11 @@
+# Boots — feet, with a cuff up the lower shin to meet the trouser hem.
+
+version       1
+
+id            boots
+name          Boots
+mesh          garment_boots
+layer         1
+covers        feet
+thickness_mm  11
+color         0.28 0.20 0.15 1
