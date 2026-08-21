@@ -373,7 +373,55 @@ across that same joint. **A preview that cannot fail is not evidence.***
 - [ ] **16.3** Delete `buildHumanoidVisual` and `tests/test_humanoid.cpp`'s coverage of it once
   16.1 and 16.2 land — dead code that renders is worse than dead code that does not
 
-## Phase 17 and beyond — held for further dictation
+## Phase 17 — Authored animation, round trip (Dictation 8, ADR 0018)
+
+*Owner, 2026-08-21: "i want you to add a capebility to import animations that were made for our
+models externally, (i want to animate some of the models myself using blender) i want that it will
+be easy — i will get the rigged model from the engine and i will create animation specifically
+for it."*
+
+*The deliverable is **the round trip**, not the importer: get the rig out → animate it in Blender →
+put it back → see it in the game, repeatedly, with no engineer in the loop. That is P12 applied to
+animation. Nothing of it exists today — no clip structure, no `.mgeanim`, no glTF animation import,
+and every animation in the engine is procedural. The one thing that does exist is `jointName()` and
+a canonical name→index map in the importer, which is the naming half of the contract already built.*
+
+*The nine procedural archetypes are **not** replaced. They stay the zero-cost default that makes a
+new weapon free; authored clips are the opt-in hero path `ItemUse::animKey` was reserved for.*
+
+- [ ] **17.1** `AnimationClip` + `.mgeanim`: quantized rotations, a registered budget whose cap
+  refuses, and a recorded **rig version hash**. **The clip is immutable, resident once and sampled
+  by everyone; only the playback cursor is per-character** — a keyframe array per character is the
+  shape that blows a crowd budget (ADR 0018 Ruling 3) — *owner: animation*
+- [ ] **17.2** Clip playback and blending into the existing layer stack, so an authored clip and a
+  procedural archetype are interchangeable to everything downstream — *owner: animation*
+- [ ] **17.3** `mge_anim_import`: glTF animation → `.mgeanim`, with **pass/fail and a reason a
+  non-engineer can act on** (P12). Must catch: renamed/missing/extra bone, bind pose differing from
+  the published rig, non-uniform joint scale (linear-blend skinning cannot represent it), keys on
+  joints that do not exist, duration or rate over budget. Root translation is **measured and
+  reported, never silently dropped** — "I removed 2.4 m of root travel" (Ruling 1) — *owner:
+  character asset pipeline*
+- [ ] **17.4** `mge_rig_export`: one `.glb` the owner opens in Blender — skeleton with canonical
+  bone names, bind pose, body bound to it, and **the engine's procedural locomotion baked in as
+  reference clips** so authored motion can match the timing that already exists. **Does not publish
+  until the clavicle question is closed** (see below) — *owner: character asset pipeline*
+- [ ] **17.5** The round trip proven end to end: a clip authored in Blender against the published
+  rig, imported, and playing on a character in the game — *owner: character asset pipeline +
+  animation*
+- [ ] **17.6** A written page for the owner: how to get the rig, what the tool will refuse and why,
+  how to import. If it needs an engineer to explain, it is not done (P12)
+
+**Sequencing warning (ADR 0018).** Two changes would invalidate every clip authored against the
+rig: **adding or renaming a joint, and changing the bind pose.** The clavicle is currently an open
+question — ADR 0015 left it undecided pending 16.4's reweight measurements, and 17 → 18 joints
+would break every hand-authored clip. So 17.1–17.3 build now, and **17.4 publishes the rig once,
+deliberately, after the joint list is final.** The reweight itself is *not* a threat: skin weights
+are not part of the skeleton, so clips authored against today's joint list survive it untouched.
+
+**Exit criteria:** the owner exports the rig, animates it in Blender, imports it, and watches it
+play on a character — without asking anyone how.
+
+## Phase 18 and beyond — held for further dictation
 
 Deliberately not planned yet; known candidates awaiting direction:
 
