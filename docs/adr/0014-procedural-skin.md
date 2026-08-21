@@ -176,3 +176,55 @@ chart.
 **If nothing suitable is sourceable, that is a finding to bring back — not a licence to fall back
 to generating.** Falling back silently would reinstate the reversed ruling without anyone deciding
 it.
+
+---
+
+# AMENDMENT — the reversal named two routes; both were wrong for the actual need
+
+**Date:** 2026-08-21 · **Raised by:** the textures session, task 15.0 · **Status:** accepted
+
+I reversed this ADR on the owner's instruction and listed two ways an imported skin could reach
+our chart. **The session measured both and neither answers 15.1.** Every number below is a file it
+downloaded and measured or a licence it read at source.
+
+- **Route 1 — re-project through the inverse of our repack.** Correct, and we do own the
+  transform. **But its input set is empty.** Blender Studio's Human Base Meshes bundle — our
+  body's source — ships base meshes with UV maps and *no textures at all*. There is nothing
+  authored against that layout to apply the inverse to. A capability held in reserve, not a way to
+  obtain a skin.
+- **Route 2 — tileable detail in tangent space.** Real: ShareTextures `human_skin_4`, CC0, 4096²
+  across 7 maps. It supplies pore and micro-detail over the whole body and needs no transfer.
+  **But a tiling material has no layout, so it cannot place an eye.** It supplies skin, not a face,
+  and 15.1 needs a face.
+
+**The answer is a third route I did not list.** MakeHuman's system asset pack is CC0 and holds 22
+complete human skins across age, ethnicity and sex — the session read the 268 MB zip's central
+directory by byte range rather than downloading it, then pulled one entry the same way:
+`young_caucasian_male`, 2048², photographic, a full-body layout with a real face. Authored for
+MakeHuman's mesh, so **our affine says nothing about it and the transfer is mesh-to-mesh.**
+
+**That changes what 15.2 builds** — a mesh-to-mesh transfer, not an inverse-affine re-projection.
+Ruled: build that. The two earlier routes stay available and are worth keeping: Route 2 layers
+detail over whatever base wins, and Route 1 remains the path for anything ever authored against
+the Blender layout.
+
+Recorded plainly because it is the second time this ADR has been corrected by measurement, both
+times against something I asserted without one.
+
+## Ruling — the Face island repack rides the clavicle event
+
+The session also measured that **the face carries 483 px/m and needs ~965 to render a legible
+pupil**, with both renders committed. Repacking the Face island 2× inside the existing 1024²
+sheet is a `B-27` contract-version event.
+
+**Ruled: it rides the ADR 0019 event.** That ruling already says everything pending goes into the
+one rig-version event we are paying for; this qualifies exactly, and a chart change afterwards
+would cost a second full garment re-bake for nothing. Added to that event's contents.
+
+## Ruling — the skinned draw path cannot sample a texture at all, and that is the renderer's
+
+`SkinnedDrawItem` carries no material, and `skinned.vert` reads `inUv` at location 2 and never
+outputs it. **An imported skin is as useless on that path as a generated one would have been** —
+which means the texture work has been aimed at a path that cannot display its output. Mirror what
+`DrawItem` already does: same set 2, same `lit.frag`, same 1×1-white default so one pipeline serves
+textured and untextured. Renderer-owned, and it is that area's charter after a day idle.
