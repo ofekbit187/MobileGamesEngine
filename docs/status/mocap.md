@@ -2,7 +2,7 @@
 
 **Session:** session_01XF3PqLgmSojSaKWKFtUmyF
 **Branch:** `claude/mocap-from-video`
-**State:** working
+**State:** blocked — on the approach ruling below. 18.1 is complete and merge-ready.
 **Updated:** 2026-08-21 by the mocap session
 
 ## Last landed
@@ -214,13 +214,43 @@ rather than pick the more expensive option unilaterally.
 
 ## Now
 
-**Holding at 18.2 for the approach ruling above.** While it is outstanding I am on **18.4**
-(foot contact detection and locking), which is independent of how the 3D is recovered — its
-detector is already written and validated against the engine's own animator phase in 18.1.
+**Stopped, pushed, waiting on the approach ruling.**
 
 ## Blocked on
 
-Nothing.
+**The approach ruling (Needs #1).** I checked whether I could usefully carry on without it and I
+cannot, so I am not going to sit marked `working` while stuck — that is the failure mode
+`AGENTS.md` §4.5 warns about:
+
+- **18.3** is the ruling itself — whether there is a positions→rotations stage at all.
+- **18.4**'s two halves split: contact *detection* is already written and validated (against the
+  engine's own animator phase, ±0.003 of a cycle), but contact *locking* acts on retargeted rig
+  motion, which does not exist until 18.3 does.
+- **18.5** and **18.6** consume 18.3's output.
+
+So the charted line genuinely stops here. What is NOT blocked and is ready for you now: **18.1 in
+full**, the validated held-out protocol, and the spike evidence.
+
+**If you would rather I keep pushing on point triangulation, say so and I will.** I would be
+doing it against a measurement that says averaging is the wrong tool, but the shape of a charted
+task is yours to set, not mine — and I would rather be told I am wrong than proceed on my own
+reading of your ruling.
+
+## Everything on this branch, for review
+
+| commit | what |
+|---|---|
+| `1531704` | 18.1 — the walk measured against the human; `gait_dump.cpp`, `gait_metrics.py`, `gait_compare.py` |
+| `714bf2a` | 18.1 ledger + the root-motion seam request |
+| `9a41bea` | 18.2 — held-out protocol, and fusion beating one view on 0 of 3 folds |
+| `acc58de` | 18.1 correction: foot-contact phase windows re-derived and sharpened |
+| `8b0afac` | spike evidence for the rig-fit proposal |
+
+Two research docs: `docs/research/procedural-walk-vs-human.md` and
+`docs/research/multiview-triangulation.md`. **● real output** throughout — every number was
+produced in this environment by the engine or by the committed tracking data, and the one figure
+is a plot of measurements, not a mockup. Nothing here is a design proposal awaiting the owner's
+eye, so nothing needs the ○ label.
 
 ## Environment note
 
