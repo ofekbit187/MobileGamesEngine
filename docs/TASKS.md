@@ -277,11 +277,21 @@ size.** A small shared set of base maps, baked once; per-person variation rides 
 parameters fed from the phenotype. Adding the fifty-first villager costs zero texture bytes.
 Anything that allocates a texture per character is a defect, not a budget line.*
 
-- [ ] **15.1** **One face, rendered, for the owner's eye** — a single generated skin on the
+- [~] **15.1** **One face, rendered, for the owner's eye** — a single generated skin on the
   shipped body, put in front of the owner before any system exists. This is deliberately first:
   it is the cheapest test of the one failure mode measurement cannot catch (output that passes
   every numeric gate and reads as plastic), and it **retires ADR 0012's provisional Face waiver**,
-  whose condition is "the owner judges the first authored face texture"
+  whose condition is "the owner judges the first authored face texture" — *built and rendered:
+  `tools/skin_preview` generates albedo + packed maps from a melanin/haemoglobin CIELAB model
+  (this skin measures ITA 25.6° → Fitzpatrick IV), rasterizes the body into chart space so the
+  generator evaluates in metres on the body and noise crosses UV seams invisibly, bakes AO by
+  ray-casting the body against itself, and renders the result through the engine's textured lit
+  path. Deterministic: two bakes byte-identical. Captures committed under
+  `docs/status/evidence/textures/`. **The owner's verdict is what closes this** — and with it
+  ADR 0012's Face waiver. Measured alongside: the Face island gets 483 px/m, which makes a 4 mm
+  pupil 1.9 texels; both 483 and 965 px/m renders are committed for the comparison
+  (docs/status/textures.md). Two seam requests are open — `skinMesh()` drops UVs, and the skinned
+  draw path has no material, so 15.1 CPU-skins into the static textured path*
 - [ ] **15.2** Generator v1: the base map set from `TEXTURING.md` Part I, conforming to
   `assets/standards/skin_texture.mgestd` and packed against the frozen chart (`B-27`)
 - [ ] **15.3** Phenotype binding: melanin depth, undertone, weathering and blemish seeds driven
