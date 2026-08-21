@@ -279,7 +279,8 @@ far lived in platform glue that headless tests could not reach — closing that 
   | 0011 | Inherited unwrap stretch; cut-line sequencing | in use |
   | 0012 | Face stretch waiver; LOD0 budget raise | in use |
   | 0013 | Pit clearance (B-24) and covered rims (§9.1) | in use |
-  | 0014+ | — | available on request |
+  | 0014 | Skin is generated, not painted (owner dictation) | in use |
+  | 0015+ | — | available on request |
 - **CMake source lists**: one file per line, alphabetical. Both-added lines are the most
   common merge conflict in this repo.
 - **Shared headers**: append at the documented seam point, don't reorganize. A tidy-up of
