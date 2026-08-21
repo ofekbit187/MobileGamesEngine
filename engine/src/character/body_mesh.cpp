@@ -547,4 +547,275 @@ void buildPosedCharacter(const HumanoidVariant& variant, const WearableInstance*
     }
 }
 
+
+// ============================================================= hem loops ===
+//
+// B-11, task 13.8. Every loop is DERIVED FROM THE RIG, so the table cannot
+// drift away from the skeleton that every garment and animation already binds
+// to. Trunk loops are horizontal planes through the joint that names them;
+// limb loops are perpendicular to the BONE, because the template's arms hang
+// about 21 degrees out and a horizontal plane across one cuts an ellipse
+// rather than a cuff — the same reason the shipped sleeves cut along the bone.
+
+namespace {
+
+// B-11 puts the boot cuff at "ankle + ~0.16 m". Measured up the shin, not up
+// the world: a cuff is a ring around the leg.
+constexpr float kBootCuffHeightM = 0.16f;
+
+Vec3 unit(const Vec3& v) {
+    const float len = std::sqrt(v.x * v.x + v.y * v.y + v.z * v.z);
+    return len > 1e-9f ? Vec3{v.x / len, v.y / len, v.z / len} : Vec3{0, 1, 0};
+}
+
+struct LoopTable {
+    std::vector<std::string> names;  // owns the storage HemLoop::name points at
+    std::vector<HemLoop> loops;
+};
+
+const LoopTable& loopTable() {
+    static const LoopTable table = [] {
+        Vec3 j[kJointCount];
+        templateBindPositions(j);
+        auto at = [&j](Joint who) { return j[static_cast<size_t>(who)]; };
+
+        struct Spec {
+            std::string name;
+            BodyRegion region;
+            Vec3 point;
+            Vec3 normal;
+        };
+        std::vector<Spec> specs;
+        const Vec3 up{0, 1, 0};
+
+        specs.push_back({"neck_base", BodyRegion::Neck, at(Joint::Neck), up});
+        specs.push_back({"waist", BodyRegion::Torso, at(Joint::Spine), up});
+        specs.push_back({"hip", BodyRegion::Torso, at(Joint::ThighL), up});
+
+        struct Side {
+            const char* suffix;
+            Joint shoulder, elbow, hand, thigh, shin, foot;
+            BodyRegion arm, palm, leg, sole;
+        };
+        const Side sides[2] = {
+            {"_l", Joint::UpperArmL, Joint::ForearmL, Joint::HandL, Joint::ThighL,
+             Joint::ShinL, Joint::FootL, BodyRegion::ArmL, BodyRegion::HandL,
+             BodyRegion::LegL, BodyRegion::FootL},
+            {"_r", Joint::UpperArmR, Joint::ForearmR, Joint::HandR, Joint::ThighR,
+             Joint::ShinR, Joint::FootR, BodyRegion::ArmR, BodyRegion::HandR,
+             BodyRegion::LegR, BodyRegion::FootR},
+        };
+        for (const Side& s : sides) {
+            const Vec3 upperArm = unit(at(s.elbow) - at(s.shoulder));
+            const Vec3 forearm = unit(at(s.hand) - at(s.elbow));
+            const Vec3 thigh = unit(at(s.shin) - at(s.thigh));
+            const Vec3 shin = unit(at(s.foot) - at(s.shin));
+            const std::string sfx = s.suffix;
+
+            specs.push_back({"shoulder" + sfx, s.arm, at(s.shoulder), upperArm});
+            specs.push_back({"mid_upper_arm" + sfx, s.arm,
+                             at(s.shoulder) + (at(s.elbow) - at(s.shoulder)) * 0.5f, upperArm});
+            specs.push_back({"elbow" + sfx, s.arm, at(s.elbow), upperArm});
+            specs.push_back({"wrist" + sfx, s.palm, at(s.hand), forearm});
+            specs.push_back({"mid_thigh" + sfx, s.leg,
+                             at(s.thigh) + (at(s.shin) - at(s.thigh)) * 0.5f, thigh});
+            specs.push_back({"knee" + sfx, s.leg, at(s.shin), thigh});
+            specs.push_back({"boot_cuff" + sfx, s.leg,
+                             at(s.foot) - shin * kBootCuffHeightM, shin});
+            specs.push_back({"ankle" + sfx, s.sole, at(s.foot), shin});
+        }
+
+        LoopTable t;
+        t.names.reserve(specs.size());
+        for (const Spec& sp : specs) t.names.push_back(sp.name);
+        t.loops.resize(specs.size());
+        for (size_t k = 0; k < specs.size(); ++k) {
+            t.loops[k].name = t.names[k].c_str();
+            t.loops[k].region = specs[k].region;
+            t.loops[k].point = specs[k].point;
+            t.loops[k].normal = unit(specs[k].normal);
+        }
+        return t;
+    }();
+    return table;
+}
+
+}  // namespace
+
+size_t templateHemLoopCount() { return loopTable().loops.size(); }
+
+const HemLoop& templateHemLoop(size_t index) {
+    const LoopTable& t = loopTable();
+    return t.loops[index < t.loops.size() ? index : 0];
+}
+
+const HemLoop* findHemLoop(const char* name) {
+    if (name == nullptr) return nullptr;
+    for (const HemLoop& l : loopTable().loops) {
+        if (std::strcmp(l.name, name) == 0) return &l;
+    }
+    return nullptr;
+}
+
+// Slice the body with the loop's plane and chain the segments into rings.
+//
+// Measured on the mesh rather than promised by the table: a loop that names a
+// height nothing encircles is worse than no table at all, because a garment
+// authored against it terminates on nothing.
+//
+// The WHOLE shell is sliced and the resulting rings are then attributed to
+// regions, which is the third approach tried here and the first that survives
+// every loop in the table. The two it replaces are worth recording:
+//
+//   * Filtering triangles by distance from the loop's point truncates the ring
+//     itself into open chains — every trunk loop reported two to five.
+//   * Restricting to the loop's own region breaks every loop that sits ON a
+//     region boundary, which is most of the interesting ones: neck base, hip,
+//     shoulder, wrist and ankle all failed, because the ring simply continues
+//     into the neighbouring region.
+//
+// Choosing between the rings is its own trap. A plane through the left upper
+// arm also cuts the trunk, and the trunk's centre is NEARER the shoulder joint
+// than the arm ring's is, so "nearest ring" reported a 1.19 m shoulder — a
+// chest measurement wearing a shoulder's name. Point-in-ring is no better: the
+// rig's knee sits 75 mm forward of the leg's own cross-section centroid, so the
+// joint is genuinely outside the ring it names. What does work is the region
+// the loop already declares: the ring made mostly of THAT region's triangles is
+// the loop, whatever its centre happens to be.
+HemLoopFit fitHemLoop(const SkinnedMeshData& body, const HemLoop& loop) {
+    HemLoopFit fit;
+    if (body.indices.empty() || body.parts.empty()) return fit;
+
+    constexpr float kWeld = 1e-4f;   // metres; endpoint matching
+
+    const Vec3 n = loop.normal;
+    auto side = [&](const Vec3& p) {
+        return (p.x - loop.point.x) * n.x + (p.y - loop.point.y) * n.y +
+               (p.z - loop.point.z) * n.z;
+    };
+
+    struct Seg {
+        Vec3 a, b;
+        bool ofRegion;
+    };
+    std::vector<Seg> segments;
+    for (const MeshPart& part : body.parts) {
+        const bool mine = part.region == loop.region;
+        for (uint32_t k = 0; k + 2 < part.indexCount; k += 3) {
+            const size_t i = part.firstIndex + k;
+            const Vec3 p[3] = {body.vertices[body.indices[i]].position,
+                               body.vertices[body.indices[i + 1]].position,
+                               body.vertices[body.indices[i + 2]].position};
+            const float d[3] = {side(p[0]), side(p[1]), side(p[2])};
+            Vec3 hit[2];
+            int hits = 0;
+            for (int e = 0; e < 3 && hits < 2; ++e) {
+                const int a = e, b = (e + 1) % 3;
+                if ((d[a] > 0.0f) == (d[b] > 0.0f)) continue;
+                const float t = d[a] / (d[a] - d[b]);
+                hit[hits++] = p[a] + (p[b] - p[a]) * t;
+            }
+            if (hits == 2) segments.push_back({hit[0], hit[1], mine});
+        }
+    }
+    if (segments.empty()) return fit;
+
+    // Endpoints weld by POSITION: neighbouring triangles may not share a vertex
+    // index across a region seam, because the body is exported one primitive
+    // per region.
+    const size_t count = segments.size();
+    std::vector<bool> used(count, false);
+    auto same = [&](const Vec3& a, const Vec3& b) {
+        const Vec3 d{a.x - b.x, a.y - b.y, a.z - b.z};
+        return d.x * d.x + d.y * d.y + d.z * d.z <= kWeld * kWeld;
+    };
+    auto dist = [](const Vec3& a, const Vec3& b) {
+        const Vec3 d{a.x - b.x, a.y - b.y, a.z - b.z};
+        return std::sqrt(d.x * d.x + d.y * d.y + d.z * d.z);
+    };
+
+    int bestVotes = 0;
+    for (size_t s = 0; s < count; ++s) {
+        if (used[s]) continue;
+        used[s] = true;
+        const Vec3 start = segments[s].a;
+        Vec3 head = segments[s].b;
+        std::vector<Vec3> pts{start, head};
+        float ring = dist(start, head);
+        int votes = segments[s].ofRegion ? 1 : 0;
+        int total = 1;
+        bool closed = false;
+        for (size_t guard = 0; guard < count; ++guard) {
+            if (same(head, start)) {
+                closed = true;
+                break;
+            }
+            bool extended = false;
+            for (size_t k = 0; k < count; ++k) {
+                if (used[k]) continue;
+                if (same(segments[k].a, head)) {
+                    ring += dist(segments[k].a, segments[k].b);
+                    head = segments[k].b;
+                } else if (same(segments[k].b, head)) {
+                    ring += dist(segments[k].b, segments[k].a);
+                    head = segments[k].a;
+                } else {
+                    continue;
+                }
+                used[k] = true;
+                if (segments[k].ofRegion) votes++;
+                total++;
+                pts.push_back(head);
+                extended = true;
+                break;
+            }
+            if (!extended) break;
+        }
+        if (!closed) {
+            fit.openChains++;
+            continue;
+        }
+        fit.rings++;
+        if (votes <= bestVotes) continue;
+        bestVotes = votes;
+
+        fit.circumference = ring;
+        fit.regionShare = total > 0 ? static_cast<float>(votes) / static_cast<float>(total) : 0.0f;
+        Vec3 sum{0, 0, 0};
+        for (const Vec3& q : pts) sum += q;
+        const Vec3 centre{sum.x / static_cast<float>(pts.size()),
+                          sum.y / static_cast<float>(pts.size()),
+                          sum.z / static_cast<float>(pts.size())};
+        fit.offCentre = dist(centre, loop.point);
+        fit.radius = 0.0f;
+        for (const Vec3& q : pts) fit.radius = std::fmax(fit.radius, dist(q, centre));
+    }
+    return fit;
+}
+
+// ================================================== region vertex groups ===
+//
+// B-25. The regions partition the triangles and the body is exported one
+// primitive per region, so no vertex is shared between two regions and this is
+// a total function. Returning false therefore means the body is malformed —
+// some vertex belongs to no region or to two — not merely that it is untagged.
+bool bodyVertexRegions(const SkinnedMeshData& body, std::vector<BodyRegion>& out) {
+    out.assign(body.vertices.size(), BodyRegion::Count);
+    if (body.vertices.empty()) return false;
+    for (const MeshPart& part : body.parts) {
+        for (uint32_t i = 0; i < part.indexCount; ++i) {
+            const uint32_t v = body.indices[part.firstIndex + i];
+            if (v >= out.size()) return false;
+            if (out[v] != BodyRegion::Count && out[v] != part.region) {
+                return false;  // shared between two regions
+            }
+            out[v] = part.region;
+        }
+    }
+    for (BodyRegion r : out) {
+        if (r == BodyRegion::Count) return false;  // orphaned
+    }
+    return true;
+}
+
 }  // namespace mge

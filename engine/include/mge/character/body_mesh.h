@@ -171,9 +171,11 @@ Joint mirrored(Joint j);
 // ------------------------------------------------------------- building ----
 
 // Three levels decimated from the same base mesh, so the silhouette survives.
-//   Lod0  close-up / player         2200 triangles / 1640 vertices
-//   Lod1  crowd distance            1200 / 1021
-//   Lod2  far crowd, still animated  560 /  573
+//   Lod0  close-up / player         2388 triangles / 2097 vertices
+//   Lod1  crowd distance            1200 / 1279
+//   Lod2  far crowd, still animated  560 /  733
+// (LOD0's cap is 2400 since ADR 0012 funded B-9's hairline loop; LOD1/LOD2 are
+// unchanged at 1300/650, because the crowd is drawn from those.)
 enum class BodyLod : uint8_t { Lod0 = 0, Lod1, Lod2, Count };
 constexpr size_t kBodyLodCount = static_cast<size_t>(BodyLod::Count);
 
@@ -217,6 +219,59 @@ void buildSkinPalette(const HumanoidVariant& variant, const Pose& pose,
 
 // Bind-pose joint positions of the template body — what the mesh is bound to.
 void templateBindPositions(Vec3 out[kJointCount]);
+
+// ----------------------------------------------------------- hem loops ----
+//
+// B-11. A garment terminates its openings on one of these, so that when
+// masking removes the limb underneath, the garment's edge and the body's
+// surviving edge are the same ring and no gap opens between them.
+//
+// Every loop is DERIVED FROM THE RIG, not chosen by eye: a trunk loop is a
+// horizontal plane through a joint, and a limb loop is a plane perpendicular
+// to the bone, because the template's arms hang about 21 degrees out and a
+// horizontal cut across an arm is an ellipse, not a cuff. That also means the
+// table follows the rig if the rig ever moves, instead of drifting away from
+// it silently.
+struct HemLoop {
+    const char* name = "";
+    BodyRegion region = BodyRegion::Torso;
+    Vec3 point{};    // a point on the loop's plane, in bind pose
+    Vec3 normal{};   // unit normal of that plane
+};
+
+size_t templateHemLoopCount();
+const HemLoop& templateHemLoop(size_t index);
+// By name, or nullptr. Names are lower_snake_case, sided ones end _l / _r.
+const HemLoop* findHemLoop(const char* name);
+
+// What the body actually DOES at a declared loop — measured on the mesh, not
+// promised by the table. A loop that names a height nothing encircles is worse
+// than no table, because a garment authored against it terminates on nothing.
+struct HemLoopFit {
+    int rings = 0;              // closed rings the plane cuts near the loop
+    int openChains = 0;         // chains that did not close — should be zero
+    float circumference = 0;    // metres, summed over the rings
+    float radius = 0;           // metres, furthest point from the ring's centre
+    float offCentre = 0;        // metres between the ring's centre and the declared point
+    // How much of the chosen ring is actually made of the loop's own region.
+    // A cuff, an elbow or a knee comes back near 1.0. A low share means the
+    // plane did not separate the part from its neighbour — on this body the
+    // upper arm hangs about 21 degrees out, so a plane perpendicular to its
+    // bone keeps clipping the trunk until roughly 56% of the way down, and a
+    // "shoulder" ring measured above that is mostly chest.
+    float regionShare = 0;
+};
+HemLoopFit fitHemLoop(const SkinnedMeshData& body, const HemLoop& loop);
+
+// ------------------------------------------------- region vertex groups ----
+//
+// B-25. Every body vertex tagged with its region, so the fitting pipeline can
+// refuse to bind a sleeve to the torso. The regions partition the triangles,
+// and since the body is exported one primitive per region no vertex is shared
+// between two of them — so this is a total function, and `bodyVertexRegions`
+// returning false means the body is malformed rather than merely untagged.
+bool bodyVertexRegions(const SkinnedMeshData& body, std::vector<BodyRegion>& out);
+
 
 // The shape half of the variant, as one weight per morph target in [-1, +1].
 // A negative weight applies the stored delta negated, so one authored target

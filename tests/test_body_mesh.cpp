@@ -11,6 +11,7 @@
 #include <functional>
 #include <map>
 #include <set>
+#include <string>
 #include <tuple>
 #include <vector>
 
@@ -122,6 +123,23 @@ float frontOf(const SkinnedMeshData& mesh, const VertexArray& vertices, BodyRegi
         front = std::fmin(front, p.z);  // the character faces -Z
     }
     return -front;
+}
+
+const char* regionNameForTest(BodyRegion r) {
+    switch (r) {
+        case BodyRegion::Scalp: return "Scalp";
+        case BodyRegion::Face: return "Face";
+        case BodyRegion::Neck: return "Neck";
+        case BodyRegion::Torso: return "Torso";
+        case BodyRegion::ArmL: return "ArmL";
+        case BodyRegion::ArmR: return "ArmR";
+        case BodyRegion::HandL: return "HandL";
+        case BodyRegion::HandR: return "HandR";
+        case BodyRegion::LegL: return "LegL";
+        case BodyRegion::LegR: return "LegR";
+        case BodyRegion::FootL: return "FootL";
+        default: return "FootR";
+    }
 }
 
 Aabb boundsOfRegion(const SkinnedMeshData& mesh, BodyRegion region) {
@@ -867,6 +885,138 @@ MGE_TEST(the_variation_scope_costs_almost_nothing_per_character) {
     // carry a delta for most of the body.
     const MorphTarget* jaw = mesh.morph(Morph::FaceJawWidth);
     MGE_CHECK(jaw != nullptr && jaw->deltas.size() * 4 < mesh.vertices.size());
+}
+
+// ------------------------------------------------------------- hem loops ---
+
+MGE_TEST(the_hem_loop_table_names_every_canonical_loop) {
+    // B-11 names eleven canonical loops; the eight limb ones exist per side,
+    // so the table is nineteen entries.
+    const char* trunk[] = {"neck_base", "waist", "hip"};
+    const char* sided[] = {"shoulder", "mid_upper_arm", "elbow",     "wrist",
+                           "mid_thigh", "knee",         "boot_cuff", "ankle"};
+    for (const char* n : trunk) MGE_CHECK(findHemLoop(n) != nullptr);
+    for (const char* n : sided) {
+        MGE_CHECK(findHemLoop((std::string(n) + "_l").c_str()) != nullptr);
+        MGE_CHECK(findHemLoop((std::string(n) + "_r").c_str()) != nullptr);
+    }
+    MGE_CHECK(templateHemLoopCount() == 3 + 2 * 8);
+
+    for (size_t i = 0; i < templateHemLoopCount(); ++i) {
+        const HemLoop& l = templateHemLoop(i);
+        const float len = std::sqrt(l.normal.x * l.normal.x + l.normal.y * l.normal.y +
+                                    l.normal.z * l.normal.z);
+        MGE_CHECK_NEAR(len, 1.0f, 1e-4f);   // a plane needs a unit normal
+        MGE_CHECK(l.point.y > 0.0f && l.point.y < templateVariant().height);
+    }
+}
+
+MGE_TEST(every_hem_loop_closes_on_the_body) {
+    // The gate B-11 exists for: a loop that names a height nothing encircles is
+    // worse than no table, because a garment authored against it terminates on
+    // nothing. The body is a closed shell, so every plane through it must make
+    // closed rings and no open chains.
+    const SkinnedMeshData mesh = body();
+    for (size_t i = 0; i < templateHemLoopCount(); ++i) {
+        const HemLoop& l = templateHemLoop(i);
+        const HemLoopFit fit = fitHemLoop(mesh, l);
+        if (fit.openChains != 0 || fit.rings < 1 || fit.circumference <= 0.0f) {
+            printf("  %s: rings %d, open %d, circumference %.3f\n", l.name, fit.rings,
+                   fit.openChains, fit.circumference);
+        }
+        MGE_CHECK(fit.openChains == 0);
+        MGE_CHECK(fit.rings >= 1);
+        MGE_CHECK(fit.circumference > 0.0f);
+    }
+}
+
+MGE_TEST(hem_loops_measure_the_limb_they_name) {
+    // Circumferences on the template, measured. A garment artist terminating an
+    // opening on one of these is entitled to know it is a ring around the part
+    // it is named after and roughly how big — so the numbers are asserted, not
+    // just printed. Bands are generous; they exist to catch a loop that has
+    // moved onto the wrong part of the body, which is exactly what happened
+    // three times while this was being built.
+    struct Expect {
+        const char* name;
+        float low, high;   // metres of circumference
+        float minShare;    // how much of the ring must be the loop's own region
+    };
+    const Expect expected[] = {
+        {"neck_base", 0.30f, 0.55f, 0.30f},
+        {"waist", 0.70f, 1.00f, 0.90f},
+        {"hip", 0.85f, 1.15f, 0.10f},   // sits on the Torso/Leg seam
+        {"elbow_l", 0.20f, 0.36f, 0.90f},   {"elbow_r", 0.20f, 0.36f, 0.90f},
+        {"wrist_l", 0.18f, 0.34f, 0.40f},   {"wrist_r", 0.18f, 0.34f, 0.40f},
+        {"mid_thigh_l", 0.42f, 0.62f, 0.90f}, {"mid_thigh_r", 0.42f, 0.62f, 0.90f},
+        {"knee_l", 0.28f, 0.42f, 0.90f},    {"knee_r", 0.28f, 0.42f, 0.90f},
+        {"boot_cuff_l", 0.25f, 0.40f, 0.90f}, {"boot_cuff_r", 0.25f, 0.40f, 0.90f},
+        {"ankle_l", 0.18f, 0.30f, 0.40f},   {"ankle_r", 0.18f, 0.30f, 0.40f},
+    };
+    const SkinnedMeshData mesh = body();
+    for (const Expect& e : expected) {
+        const HemLoop* l = findHemLoop(e.name);
+        MGE_CHECK(l != nullptr);
+        if (l == nullptr) continue;
+        const HemLoopFit fit = fitHemLoop(mesh, *l);
+        printf("  %-16s %.3f m around, %.0f%% of it %s\n", e.name, fit.circumference,
+               100.0 * fit.regionShare, regionNameForTest(l->region));
+        MGE_CHECK(fit.circumference > e.low && fit.circumference < e.high);
+        MGE_CHECK(fit.regionShare >= e.minShare);
+    }
+}
+
+MGE_TEST(the_upper_arm_loops_do_not_encircle_the_arm_yet) {
+    // Recorded, not hidden. A plane perpendicular to the upper-arm bone does
+    // NOT separate the arm from the trunk near the shoulder on this body: the
+    // arm hangs about 21 degrees out, so the plane keeps clipping the chest.
+    // Measured by scanning down the bone, the first plane that encircles the
+    // arm alone is 0.18 m along it — 56% of its 0.324 m length. Above that the
+    // ring is the chest wearing a shoulder's name: 1.19 m around, 11% of it
+    // actually ArmL.
+    //
+    // Whether `shoulder` and `mid_upper_arm` should move down to where an
+    // arm-only ring exists is a B-11 question and therefore the architect's,
+    // not this session's. This test pins the measured state so the answer
+    // cannot change silently while it is open.
+    const SkinnedMeshData mesh = body();
+    for (const char* name : {"shoulder_l", "shoulder_r"}) {
+        const HemLoop* l = findHemLoop(name);
+        MGE_CHECK(l != nullptr);
+        if (l == nullptr) continue;
+        const HemLoopFit fit = fitHemLoop(mesh, *l);
+        MGE_CHECK(fit.openChains == 0);       // it still closes
+        MGE_CHECK(fit.circumference > 0.9f);  // ...around the chest, not the arm
+        MGE_CHECK(fit.regionShare < 0.5f);
+    }
+}
+
+// ------------------------------------------------- region vertex groups ---
+
+MGE_TEST(region_vertex_groups_cover_every_vertex_exactly_once) {
+    // B-25, and BODY_CONTRACT.md 9.6: the groups cover 100% of vertices with no
+    // overlap. Since 13.7 the body is exported one primitive per region, so no
+    // vertex is shared and this is a total function — `bodyVertexRegions`
+    // returning false means the body is malformed, not merely untagged.
+    const SkinnedMeshData mesh = body();
+    std::vector<BodyRegion> groups;
+    const bool total = bodyVertexRegions(mesh, groups);
+    MGE_CHECK(total);
+    MGE_CHECK(groups.size() == mesh.vertices.size());
+
+    size_t perRegion[kBodyRegionCount] = {0};
+    for (BodyRegion r : groups) {
+        MGE_CHECK(static_cast<size_t>(r) < kBodyRegionCount);
+        perRegion[static_cast<size_t>(r)]++;
+    }
+    size_t counted = 0;
+    for (size_t r = 0; r < kBodyRegionCount; ++r) {
+        MGE_CHECK(perRegion[r] > 0);   // every region owns vertices, Face included
+        counted += perRegion[r];
+    }
+    MGE_CHECK(counted == mesh.vertices.size());
+    printf("  region groups: %zu vertices across %zu regions, none shared, none orphaned\n",
+           counted, kBodyRegionCount);
 }
 
 // ------------------------------------------------------------------ cost ---
