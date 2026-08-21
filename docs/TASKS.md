@@ -389,12 +389,46 @@ a canonical name→index map in the importer, which is the naming half of the co
 *The nine procedural archetypes are **not** replaced. They stay the zero-cost default that makes a
 new weapon free; authored clips are the opt-in hero path `ItemUse::animKey` was reserved for.*
 
-- [ ] **17.1** `AnimationClip` + `.mgeanim`: quantized rotations, a registered budget whose cap
+- [x] **17.1** `AnimationClip` + `.mgeanim`: quantized rotations, a registered budget whose cap
   refuses, and a recorded **rig version hash**. **The clip is immutable, resident once and sampled
-  by everyone; only the playback cursor is per-character** — a keyframe array per character is the
-  shape that blows a crowd budget (ADR 0018 Ruling 3) — *owner: animation*
-- [ ] **17.2** Clip playback and blending into the existing layer stack, so an authored clip and a
-  procedural archetype are interchangeable to everything downstream — *owner: animation*
+  by everyone; only the playback cursor is per-character** — *`engine/*/character/animation_clip.*`.
+  Rotations are smallest-three at **4 bytes** against 16 for four floats; measured worst error
+  **0.15°**, mean 0.08°, over a sweep of real rotations. `ClipLibrary` charges a registered
+  `animation` budget, refuses past the cap naming the clip and the numbers, and evicts like any
+  other asset; the clip table is fixed at 64 and refuses rather than growing. Measured on the
+  engine's own walk baked to a clip: **4,352 bytes resident once** (17,408 at full float), and a
+  64-character crowd costs **2,048 bytes of players plus that one clip**. Sampling + layering for
+  38,400 character-frames: **0 heap allocations**, 1.460 µs each. The rig hash covers the joint
+  list and the bind pose and deliberately NOT per-variant bone lengths or skin weights — so a clip
+  retargets across every variant for free, and **ADR 0016's reweight of every bending joint
+  invalidates no authored clip**, which is tested. A mismatch is refused with both hashes and the
+  remedy named. Root travel is carried in the header so the importer can report what it removed
+  (Ruling 1)* — *owner: animation*
+- [x] **17.2** Clip playback and blending into the existing layer stack, so an authored clip and a
+  procedural archetype are interchangeable to everything downstream — *`ClipPlayer` mirrors
+  `UsePlayer`'s verbs exactly — same blend-in ramp, same `interrupt()` fade, same edge-triggered
+  strike moment — so a caller swaps one for the other without learning a second vocabulary, and
+  the composer takes poses so it cannot tell them apart at all. Proven the strongest way
+  available: the engine's own procedural archetype baked into a clip and played back. Through the
+  same composer the two differ by **0.15°, which is exactly the quantization error measured
+  independently** — the paths agree to the bit beyond that. Masked-out joints stay bit-identically
+  locomotion's in both* — *owner: animation*
+
+  ***A bug the clip work found in Phase 14, now fixed.*** *Baking an archetype densely exposed a
+  **step discontinuity** in `sampleUseArchetype`: the reach-driven lean was written as
+  `+ 0.20 * r * (lean >= 0 ? 1 : 0)`, so the instant `lean` crossed zero the bonus switched on or
+  off whole and popped the chest **3.9° in a single frame**. Every archetype whose lean changes
+  sign passed through it; `chop` does so on its first frame. It survived Phase 14 because nothing
+  sampled the motion finely enough to see one frame — baking a clip is precisely what does. Now
+  scaled by the lean itself: same magnitude at the extremes, continuous through zero.*
+
+  ***Export-rate guidance, measured, for 17.3 and 17.6.*** *Clip fidelity against its source is
+  dominated by frame rate, not quantization: 24.7° at 16 frames, 4.0° at 32, 3.7° at 128, 1.8° at
+  256. The curve falls steeply and then NOT monotonically, and the worst error sits at **t=0.578
+  for every frame count** — exactly where an archetype's accelerating strike hands over to a
+  recovery starting from rest. That deliberate velocity kink at impact is what a linear
+  interpolation cannot cross cheaply, so the error depends on whether a frame lands on it. A fast
+  strike wants a high export rate, and the error is concentrated at the instant of impact.*
 - [ ] **17.3** `mge_anim_import`: glTF animation → `.mgeanim`, with **pass/fail and a reason a
   non-engineer can act on** (P12). Must catch: renamed/missing/extra bone, bind pose differing from
   the published rig, non-uniform joint scale (linear-blend skinning cannot represent it), keys on

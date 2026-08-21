@@ -17,6 +17,7 @@ add_executable(mge_tests
     test_fulfillment.cpp
     test_character.cpp
     test_animation.cpp
+    test_animation_clip.cpp
     test_humanoid.cpp
     test_use_archetypes.cpp
     test_people.cpp

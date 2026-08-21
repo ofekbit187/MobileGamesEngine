@@ -3,8 +3,82 @@
 **Session:** session_01TiRzQ9qPRKyvVbtW9akJLV
 **Branch:** `claude/animation-layered-poses`
 **State:** ready
-**Updated:** 2026-08-21 — 14.5 built as ruled (ADR 0017). 14.4 and 14.6 close with it. **14.3's
-premise is wrong and I did not act on it — read the first section.**
+**Updated:** 2026-08-21 — 17.1 and 17.2 built. The clip runtime exists, and baking a clip found a
+real bug in my own Phase 14 code.
+
+## 17.1 / 17.2 — the clip runtime, and what building it exposed
+
+**Both done and measured.** `engine/*/character/animation_clip.*`. The numbers ADR 0018 Ruling 3
+actually rests on, from `tools/anim_preview` on the engine's own walk baked to a clip:
+
+```
+clip 'locomotion_walk': 64 frames x 17 joints, 4352 bytes RESIDENT ONCE
+  at full float that would be 17408 bytes; quantized to 4 bytes a rotation
+ClipPlayer: 32 bytes per character (a pointer and a cursor)
+a 64-character crowd therefore costs 2048 bytes of players + ONE 4352-byte clip
+sampling + layering a shared clip, 38400 character-frames:
+  steady-state heap allocations: 0  (target: 0)
+  1.460 us per character-frame
+```
+
+**Quantization measured, not assumed:** smallest-three at 32 bits gives worst 0.15°, mean 0.08°.
+A limb 0.6 m long moves 1.6 mm at that error.
+
+**Interchangeability (17.2) is proven the strongest way I could find:** bake the engine's own
+procedural archetype into a clip, then play both through the same composer. They differ by
+**0.1517°** — against 0.1497° measured independently as pure quantization. The two paths agree to
+the bit beyond the encoding. Masked-out joints stay bit-identically locomotion's in both.
+`ClipPlayer` mirrors `UsePlayer`'s verbs exactly, so a caller swaps one for the other without a
+second vocabulary.
+
+**A design decision I took that nobody specified, flag it if you disagree.** `AnimationClip`
+carries a `strikeFraction`. Without it a clip cannot answer "when does the blow land", which
+`UsePhases::strike` answers for an archetype — and 17.2's requirement is that nothing downstream
+can tell the two apart, which includes gameplay hanging damage on the moment. It is one float,
+defaulted to 0.5 until an importer sets it. Strike it if you would rather 17.3 decide the shape.
+
+### The bug baking a clip found in my own Phase 14 work
+
+`sampleUseArchetype` had a **step discontinuity**. The reach-driven lean was
+`+ 0.20 * r * (lean >= 0 ? 1 : 0)`, so the instant `lean` crossed zero the bonus switched on or
+off whole and popped the chest **3.9° in a single frame**. Every archetype whose lean changes sign
+went through it, and `chop` does so on its first frame.
+
+It survived all of Phase 14 — including the tests I wrote and the captures I checked — because
+nothing sampled the motion finely enough to see one frame. Baking a clip is precisely what does.
+Fixed by scaling with the lean itself: same magnitude at the extremes, continuous through zero.
+
+Worth naming the pattern, because it is the second time on this area: **a defect invisible to the
+instrument I had, revealed the moment a new instrument arrived.** The box rig could not show
+shearing; per-frame sampling could not show a one-frame pop. Both were found by building the next
+thing, not by looking harder at the last one.
+
+### Export-rate guidance, measured — for 17.3's importer and 17.6's page
+
+Clip fidelity is dominated by **frame rate, not quantization**:
+
+| frames | 16 | 32 | 64 | 128 | 256 |
+|---|---|---|---|---|---|
+| worst error | 24.7° | 4.0° | 7.5° | 3.7° | 1.8° |
+
+Not monotonic, and the reason is worth passing to whoever writes the importer: the worst error
+sits at **t=0.578 for every single frame count** — exactly where an archetype's accelerating
+strike hands over to a recovery that starts from rest. That deliberate velocity kink at impact is
+what linear interpolation cannot cross cheaply, so the error depends on whether a frame happens to
+land on it. **A fast strike wants a high export rate, and the error concentrates at the instant of
+impact.** If the importer warns about rate, that is the number to warn against.
+
+### One property I want on the record, because it protects the owner's weekend
+
+The rig hash covers **the joint list and the bind pose, and deliberately nothing else** — not
+per-variant bone lengths, not skin weights. Two consequences, both tested in
+`a_reweighted_body_does_not_invalidate_a_single_clip`:
+
+- **ADR 0016's reweight of every bending joint invalidates no authored clip.** You said as much in
+  the sequencing note; this is the mechanism that makes it true rather than a hope.
+- A clip authored against the template plays on a 2.10 m character and a 1.40 m one, because every
+  variant shares the rig. A hash over the variant's skeleton would have refused that, which would
+  have been wrong.
 
 ## 14.5 landed, and 14.3 needs a correction before anyone builds it
 

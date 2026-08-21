@@ -44,6 +44,7 @@
 #include <algorithm>
 
 #include "mge/character/animation.h"
+#include "mge/character/animation_clip.h"
 #include "mge/character/body_mesh.h"
 #include "mge/character/humanoid.h"
 #include "mge/character/use_archetypes.h"
@@ -364,7 +365,7 @@ int main(int argc, char** argv) {
     // A crowd's worth of characters, composed the way a frame would.
     // ---------------------------------------------------------------------
     constexpr int kCharacters = 64;
-    constexpr int kFrames = 600;
+    constexpr int kFrames_measure = 600;
     LocomotionAnimator crowd[kCharacters];
     for (int c = 0; c < kCharacters; ++c) {
         for (int f = 0; f < 60; ++f) crowd[c].update(1.0f / 60.0f, 1.2f + 0.02f * c);
@@ -384,7 +385,7 @@ int main(int argc, char** argv) {
 
     const long before = gAllocCount.load(std::memory_order_relaxed);
     const auto t0 = std::chrono::steady_clock::now();
-    for (int f = 0; f < kFrames; ++f) {
+    for (int f = 0; f < kFrames_measure; ++f) {
         const float t = static_cast<float>(f % 90) / 90.0f;
         const Pose swing = standInSwing(t);
         for (int c = 0; c < kCharacters; ++c) {
@@ -398,10 +399,10 @@ int main(int argc, char** argv) {
     const auto t1 = std::chrono::steady_clock::now();
     const long allocs = gAllocCount.load(std::memory_order_relaxed) - before;
     const double us = std::chrono::duration<double, std::micro>(t1 - t0).count();
-    const double poses = static_cast<double>(kFrames) * kCharacters;
+    const double poses = static_cast<double>(kFrames_measure) * kCharacters;
 
     printf("\n--- 14.1: cost of layering (%d characters x %d frames) ---\n", kCharacters,
-           kFrames);
+           kFrames_measure);
     printf("layered poses composed: %.0f\n", poses);
     printf("steady-state heap allocations: %ld  (target: 0)\n", allocs);
     printf("compose + evaluate: %.3f us per character-frame (%.2f ms total)\n", us / poses,
@@ -471,6 +472,97 @@ int main(int argc, char** argv) {
     }
     printf("closest pair of the six: %s vs %s, %.1f degrees apart at their widest\n", wa, wb,
            worstPair);
+
+    // ---------------------------------------------------------------------
+    // Measurement 3b (tasks 17.1/17.2): authored clips cost what?
+    // The claim under test is ADR 0018 Ruling 3 — the clip is resident once
+    // and sampled by everyone, only the cursor is per-character — and the
+    // usual one, that the frame path allocates nothing.
+    // ---------------------------------------------------------------------
+    {
+        // Bake the engine's own shipped walk into a clip. This is a
+        // MEASUREMENT VEHICLE, not task 17.4: publishing reference clips with
+        // the exported rig is the character asset pipeline's, and the rig
+        // cannot publish until the clavicle question closes (ADR 0018).
+        constexpr uint32_t kFrames = 64;
+        std::vector<Quat> keys(static_cast<size_t>(kFrames) * kJointCount);
+        LocomotionAnimator baker;
+        for (int f = 0; f < 180; ++f) baker.update(1.0f / 60.0f, 1.6f);
+        for (uint32_t f = 0; f < kFrames; ++f) {
+            // One full stride: phase is distance-driven, so advance by the
+            // stride length rather than by time.
+            Pose pose;
+            baker.samplePose(pose);
+            for (size_t j = 0; j < kJointCount; ++j) {
+                keys[static_cast<size_t>(f) * kJointCount + j] = pose.rotation[j];
+            }
+            for (int k = 0; k < 2; ++k) baker.update(1.0f / 60.0f, 1.6f);
+        }
+        AnimationClip walkClip;
+        std::string clipError;
+        if (!buildClip("locomotion_walk", keys.data(), kFrames, 30.0f, true,
+                       canonicalRigVersionHash(), walkClip, &clipError)) {
+            fprintf(stderr, "FAIL: %s\n", clipError.c_str());
+            return 1;
+        }
+
+        BudgetRegistry clipBudgets;
+        ClipLibrary library(clipBudgets);
+        const AnimationClip* resident = library.add(std::move(walkClip), &clipError);
+        if (resident == nullptr) {
+            fprintf(stderr, "FAIL: %s\n", clipError.c_str());
+            return 1;
+        }
+
+        printf("\n--- 17.1/17.2: authored clip cost ---\n");
+        printf("clip 'locomotion_walk': %u frames x %zu joints, %zu bytes RESIDENT ONCE\n",
+               resident->frameCount, kJointCount, resident->bytes());
+        printf("  rig hash %016llx, %.3fs, looping\n",
+               static_cast<unsigned long long>(resident->rigHash), resident->duration());
+        printf("  at full float that would be %zu bytes; quantized to 4 bytes a rotation\n",
+               static_cast<size_t>(resident->frameCount) * kJointCount * sizeof(Quat));
+        printf("ClipPlayer: %zu bytes per character (a pointer and a cursor)\n",
+               sizeof(ClipPlayer));
+        printf("a %d-character crowd therefore costs %zu bytes of players + ONE %zu-byte clip\n",
+               kCharacters, kCharacters * sizeof(ClipPlayer), resident->bytes());
+
+        // The frame path: every character samples the shared clip, layers it
+        // over locomotion, and evaluates — the same loop a game runs.
+        ClipPlayer players[kCharacters];
+        for (int c = 0; c < kCharacters; ++c) players[c].play(resident, true, 0.0f);
+        Pose clipScratch, baseScratch;
+        LayeredPose clipComposer;
+        // Warm up outside the counted window.
+        for (int c = 0; c < kCharacters; ++c) {
+            players[c].update(1.0f / 60.0f);
+            players[c].samplePose(clipScratch);
+        }
+
+        const long clipBefore = gAllocCount.load(std::memory_order_relaxed);
+        const auto c0 = std::chrono::steady_clock::now();
+        for (int f = 0; f < kFrames_measure; ++f) {
+            for (int c = 0; c < kCharacters; ++c) {
+                crowd[c].update(1.0f / 60.0f, 1.2f + 0.02f * c);
+                crowd[c].samplePose(baseScratch);
+                players[c].update(1.0f / 60.0f);
+                players[c].samplePose(clipScratch);
+                clipComposer.reset(baseScratch);
+                clipComposer.addLayer(clipScratch, upper, players[c].weight());
+                evaluatePose(skeleton, clipComposer.result(), palette);
+            }
+        }
+        const auto c1 = std::chrono::steady_clock::now();
+        const long clipAllocs = gAllocCount.load(std::memory_order_relaxed) - clipBefore;
+        const double clipUs = std::chrono::duration<double, std::micro>(c1 - c0).count();
+        const double clipPoses = static_cast<double>(kFrames_measure) * kCharacters;
+        printf("sampling + layering a shared clip, %.0f character-frames:\n", clipPoses);
+        printf("  steady-state heap allocations: %ld  (target: 0)\n", clipAllocs);
+        printf("  %.3f us per character-frame\n", clipUs / clipPoses);
+        if (clipAllocs != 0) {
+            fprintf(stderr, "FAIL: clip playback allocated %ld times\n", clipAllocs);
+            return 1;
+        }
+    }
 
     // ---------------------------------------------------------------------
     // Measurement 4 (task 16.2): does any of this SHEAR THE SKIN?

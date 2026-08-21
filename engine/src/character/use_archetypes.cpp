@@ -343,7 +343,18 @@ void sampleUseArchetype(const UseMotion& motion, float t, Pose& out) {
     const float w = normalized(m.weight, kUseWeightRange);
     // Reach: a longer item sweeps a wider arc and leans further in.
     const float arc = 0.88f + 0.24f * r;
-    const float lean = key.lean * (0.90f + 0.35f * w) + 0.20f * r * (key.lean >= 0.0f ? 1.0f : 0.0f);
+    // Reach deepens a forward lean and leaves a backward one alone.
+    //
+    // This was written as `+ 0.20f * r * (key.lean >= 0 ? 1 : 0)`, which is a
+    // STEP: the moment `key.lean` crossed zero the bonus switched on or off
+    // whole, popping the chest ~3.9 degrees in a single frame. Every
+    // archetype whose lean changes sign passed through it — `chop` does so on
+    // its first frame. It survived Phase 14 because nothing sampled the
+    // motion densely enough to see one frame, and baking a clip is exactly
+    // what does. Scaling by the lean itself keeps the same magnitude at the
+    // extremes and is continuous through zero.
+    const float leanReach = key.lean > 0.0f ? (1.0f + 0.55f * r) : 1.0f;
+    const float lean = key.lean * (0.90f + 0.35f * w) * leanReach;
     // Weight: a heavy item drags the whole torso into the motion.
     const float twist = key.twist * (0.90f + 0.30f * w);
 
