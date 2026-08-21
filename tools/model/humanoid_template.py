@@ -55,6 +55,13 @@ HEIGHT = 1.75
 LOD_TRIANGLES = (2200, 1200, 560)
 BASE_OBJECT = "GEO-body_male_realistic"
 
+# The cap/face boundary (B-9: "the hairline ... is an authored loop, not an
+# accident"). ONE constant, because two things depend on it and they must agree:
+# the Face/Scalp split below, and where the hair garments cut their cap. If the
+# hairline and the hair's edge drift apart, a hairstyle stops degrading to the
+# bald cap the contract promises it degrades to.
+HAIRLINE_Y = 1.655
+
 # The canonical rig, FITTED to the base mesh's own anatomy (measured from the
 # untouched model, scaled to 1.75 m). The engine's buildSkeleton() reproduces
 # these positions for the template variant — mesh and rig agree by
@@ -460,10 +467,10 @@ GARMENTS = {
         (("LegL", "LegR"),   [below(0.26)]),                       # shaft
     ], ("FootL", "FootR")),
     "hair_short": (0, 340, [
-        (("Scalp",),         [above(1.655)]),
+        (("Scalp",),         [above(HAIRLINE_Y)]),
     ], ()),
     "hair_long": (0, 460, [
-        (("Scalp",),         [above(1.645)]),
+        (("Scalp",),         [above(HAIRLINE_Y - 0.010)]),
         (("Neck",),          [above(1.44), behind(-0.005)]),       # down the back only
         (("Torso",),         [above(1.44), behind(0.010)]),
     ], ()),
@@ -495,6 +502,85 @@ def vertex_regions(obj):
                 best_w, best = g.weight, obj.vertex_groups[g.group].name
         out.append(REGION_OF_BONE.get(best, "Torso"))
     return out
+
+
+def split_face_shell(obj, arm, landmarks):
+    """Cuts the head into the Scalp cap and a real Face shell (B-8, task 13.7).
+
+    The rig cannot answer this. There is one Head joint (B-1 fixes the 17), so
+    every head vertex is Scalp by construction and `BodyRegion::Face` has been
+    empty since the body was first imported — the debt ADR 0008 logs against v3,
+    and what blocks the first mask, visor or face-covering helm. The face is a
+    MASKING division of the head, not an articulated one, so it is labelled by
+    the asset rather than derived from a bone: this cuts the boundary and paints
+    the front with a material named `Face`, which the importer reads.
+
+    Both planes come off measured landmarks, never off a number chosen by eye:
+
+      * the hairline is `HAIRLINE_Y`, the same height the hair garments cut
+        their cap at, so the cap the contract promises as the bald fallback is
+        exactly the region a hairstyle covers;
+      * the sides stop at the coronal plane through the ears (`ear_z`, measured
+        off the widest band of the skull), because everything behind it is
+        cranium and nape — hair territory, not face.
+
+    The boundary is CLASSIFIED, not cut: each head face goes to Face or Scalp
+    whole, by which side of the planes its centre falls on. B-9 asks for the
+    hairline to be a real authored loop, and this is not one — it is a boundary
+    one face wide that steps around whichever way each triangle happened to
+    fall. That deviation is deliberate and it is reported, not hidden.
+
+    Bisecting the two planes to get the loop was implemented and measured, and
+    it costs about 200 triangles (74 for the hairline, 128 for the ear plane) on
+    a LOD0 whose B-5 budget is 2 200 and which already sits at it. Paying for
+    them by decimating to 1 990 first fails `body_mesh_has_human_proportions`:
+    the Torso region stops reaching into the 0.82-0.88 m band the gate samples
+    and the measured hip width drops from 0.347 m to 0.146 m. Measured across
+    targets, that collapse is discrete — 2 200 passes, 2 100 and 1 990 do not —
+    so the loop cannot be bought out of this budget without either a bigger
+    LOD0 cap (B-5, an architect ruling) or spending the head's own triangles on
+    it. Both are budget decisions above this session's pay grade, so what ships
+    is the region, which is what task 13.7 is for, and the loop is raised.
+    """
+    regions = repack_uv.face_regions(obj, REGION_OF_BONE)
+    hairline_b = to_blender((0.0, HAIRLINE_Y, 0.0))
+    ear_b = to_blender((0.0, 0.0, landmarks.ear_z))
+    faces = 0
+    for i, poly in enumerate(obj.data.polygons):
+        if regions[i] != "Scalp":
+            continue
+        c = poly.center
+        # Blender space: z is up, and +y is the direction the body FACES
+        # (engine -z). Forward is therefore the GREATER y, not the lesser.
+        if c.z < hairline_b.z and c.y > ear_b.y:
+            regions[i] = "Face"
+            faces += 1
+
+    # EVERY region is labelled, not just Face.
+    #
+    # Labelling only the face left the other eleven to the rig on the engine's
+    # side while the chart was packed from the rig on this side — two
+    # inferences that have to agree, and they did not: `chart_islands_disjoint`
+    # failed on Scalp/Neck over a handful of triangles at the seam, the same
+    # class of disagreement that cost three attempts during the repack. Region
+    # bounding boxes are unforgiving, so "usually agrees" is not good enough.
+    #
+    # With all twelve labelled there is nothing left to disagree about: the
+    # region a triangle is packed into IS the region the engine reads back. It
+    # also gives B-25's per-region groups (task 13.8) their door.
+    obj.data.materials.clear()
+    slot = {}
+    for name in repack_uv.BODY_REGION_ORDER:
+        slot[name] = len(obj.data.materials)
+        mat = bpy.data.materials.get(name) or bpy.data.materials.new(name)
+        obj.data.materials.append(mat)
+    for i, poly in enumerate(obj.data.polygons):
+        poly.material_index = slot[regions[i]]
+    obj.data.update()
+    print("   face shell: %d of %d head polygons -> Face (hairline %.3f, ear z %.3f)"
+          % (faces, sum(1 for r in regions if r in ("Scalp", "Face")),
+             HAIRLINE_Y, landmarks.ear_z))
+    return regions
 
 
 def body_bvh(obj):
@@ -975,7 +1061,7 @@ def export(obj, arm, path):
     bpy.ops.export_scene.gltf(
         filepath=path, export_format='GLB', use_selection=True, export_yup=True,
         export_apply=False, export_skins=True, export_animations=False,
-        export_materials='NONE', export_normals=True, export_texcoords=True,
+        export_materials='EXPORT', export_normals=True, export_texcoords=True,
         export_morph=True, export_morph_normal=True, export_morph_tangent=False)
 
 
@@ -1066,7 +1152,17 @@ def main():
     # LOD0 imported from it. Packing the mesh the gate actually measures is the
     # only version of this that holds.
     lods = [duplicate_reduced(body, arm, "Body_LOD0", LOD_TRIANGLES[0], morphs=False)]
-    uv = repack_uv.repack_by_region(lods[0], REGION_OF_BONE)
+    # The Face shell is cut BEFORE the chart is packed, so Face is a region the
+    # packer sees and gives its own box to — `chart_regions_required` and
+    # `chart_islands_disjoint` both read the shipped chart, not the intent.
+    lod0_regions = split_face_shell(
+        lods[0], arm, humanoid_morphs.Landmarks(
+            [humanoid_morphs.to_engine(v.co) for v in lods[0].data.vertices]))
+    health(lods[0], "LOD0 + face")
+    if triangles(lods[0]) > LOD_TRIANGLES[0]:
+        raise RuntimeError("LOD0 is %d triangles after the face split, over the %d "
+                           "budget (B-5)" % (triangles(lods[0]), LOD_TRIANGLES[0]))
+    uv = repack_uv.repack_by_region(lods[0], REGION_OF_BONE, regions=lod0_regions)
     print("   uv chart: %d regions, %.1f%% of the tile used, %.0f px/m at "
           "1024^2, %d loops outside, %.1f%% of the halves' texels shared"
           % (uv['regions'], uv['covered'] * 100.0, uv['density'],

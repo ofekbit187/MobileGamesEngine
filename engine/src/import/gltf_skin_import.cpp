@@ -63,6 +63,38 @@ BodyRegion regionOf(Joint joint) {
     }
 }
 
+// A region named explicitly by the asset, overriding the rig-derived one.
+//
+// `regionOf` above answers from the bone that moves a vertex, which is the
+// right default and cannot ever answer `Face`: the rig has one Head joint, so
+// every head vertex is Scalp by construction (B-1 fixes the 17 joints, and a
+// Face joint would be a rig-version event to buy a region that is not a moving
+// part). The face is a *masking* division of the head, not an articulated one.
+//
+// So the asset labels it. A primitive whose material is named for a
+// `BodyRegion` tags its triangles as that region; anything unlabelled keeps
+// the rig's answer. The mechanism is general rather than Face-only because
+// B-25's per-region vertex groups (task 13.8) need the same door, and because
+// a rule with one hard-coded exception in it is a rule nobody trusts.
+bool regionFromName(const char* name, BodyRegion& out) {
+    if (name == nullptr) return false;
+    static const struct { const char* name; BodyRegion region; } kNames[] = {
+        {"Scalp", BodyRegion::Scalp}, {"Face", BodyRegion::Face},
+        {"Neck", BodyRegion::Neck},   {"Torso", BodyRegion::Torso},
+        {"ArmL", BodyRegion::ArmL},   {"ArmR", BodyRegion::ArmR},
+        {"HandL", BodyRegion::HandL}, {"HandR", BodyRegion::HandR},
+        {"LegL", BodyRegion::LegL},   {"LegR", BodyRegion::LegR},
+        {"FootL", BodyRegion::FootL}, {"FootR", BodyRegion::FootR},
+    };
+    for (const auto& entry : kNames) {
+        if (std::strcmp(name, entry.name) == 0) {
+            out = entry.region;
+            return true;
+        }
+    }
+    return false;
+}
+
 const cgltf_accessor* findAttribute(const cgltf_primitive& primitive,
                                     cgltf_attribute_type type, int index = 0) {
     for (cgltf_size a = 0; a < primitive.attributes_count; ++a) {
@@ -233,6 +265,14 @@ bool importSkinnedGltf(const char* path, SkinnedMeshData& out, std::string* erro
     }
 
     // --- vertices ---
+    // Where each primitive's vertices landed, so morph targets can be merged
+    // across primitives afterwards rather than per primitive (see below).
+    struct PrimSpan {
+        const cgltf_primitive* prim;
+        uint32_t base;
+        cgltf_size count;
+    };
+    std::vector<PrimSpan> spans;
     std::vector<BodyRegion> vertexRegion;
     for (cgltf_size p = 0; p < skinnedNode->mesh->primitives_count; ++p) {
         const cgltf_primitive& prim = skinnedNode->mesh->primitives[p];
@@ -249,7 +289,14 @@ bool importSkinnedGltf(const char* path, SkinnedMeshData& out, std::string* erro
             return false;
         }
 
+        // An explicitly labelled primitive names its own region (see
+        // `regionFromName`); everything else falls back to the rig.
+        BodyRegion labelled = BodyRegion::Torso;
+        const bool hasLabel =
+            prim.material != nullptr && regionFromName(prim.material->name, labelled);
+
         const uint32_t base = static_cast<uint32_t>(out.vertices.size());
+        spans.push_back(PrimSpan{&prim, base, positions->count});
         for (cgltf_size v = 0; v < positions->count; ++v) {
             SkinVertex vertex;
             float pos[3] = {0, 0, 0};
@@ -312,7 +359,8 @@ bool importSkinnedGltf(const char* path, SkinnedMeshData& out, std::string* erro
             vertex.weights[best] = static_cast<uint8_t>(corrected < 0 ? 0 :
                                                         (corrected > 255 ? 255 : corrected));
             out.vertices.push_back(vertex);
-            vertexRegion.push_back(regionOf(static_cast<Joint>(vertex.joints[best])));
+            vertexRegion.push_back(hasLabel ? labelled
+                                            : regionOf(static_cast<Joint>(vertex.joints[best])));
         }
 
         std::vector<uint32_t> primIndices;
@@ -329,34 +377,52 @@ bool importSkinnedGltf(const char* path, SkinnedMeshData& out, std::string* erro
         }
         out.indices.insert(out.indices.end(), primIndices.begin(), primIndices.end());
 
-        // --- morph targets, matched to the canonical shape parameters by name
-        const cgltf_mesh& parent = *skinnedNode->mesh;
-        for (cgltf_size t = 0; t < prim.targets_count; ++t) {
-            const char* name = t < parent.target_names_count ? parent.target_names[t] : nullptr;
-            Morph morph{};
-            if (!morphFromName(name, morph)) continue;  // unknown target: ignored, not an error
-            const cgltf_accessor* dpos =
-                findTargetAttribute(prim.targets[t], cgltf_attribute_type_position);
-            if (dpos == nullptr) continue;
-            const cgltf_accessor* dnrm =
-                findTargetAttribute(prim.targets[t], cgltf_attribute_type_normal);
+    }
 
-            // Two passes: the first finds the largest displacement, which sets
-            // the quantization scale, so int16 spends its whole range on this
-            // target rather than on a fixed guess.
-            float largest = 0.0f;
+    // --- morph targets, matched to the canonical shape parameters by name ---
+    //
+    // Merged ACROSS primitives, one target per shape parameter. glTF hangs
+    // morph targets off each primitive, so a mesh split by material carries the
+    // same parameter once per primitive — and the body is split by material now
+    // that the Face region is labelled that way (task 13.7). Emitting one
+    // `MorphTarget` per (primitive, parameter) turned 15 shape parameters into
+    // 25 targets, with `face.jawWidth` appearing twice and `mesh.morph()`
+    // returning whichever came first — half the jaw would have moved.
+    //
+    // The scale is chosen from the largest displacement across ALL primitives,
+    // so the int16 quantization spends its range on the parameter as a whole
+    // rather than per fragment.
+    const cgltf_mesh& parent = *skinnedNode->mesh;
+    for (cgltf_size t = 0; t < parent.target_names_count; ++t) {
+        Morph morph{};
+        if (!morphFromName(parent.target_names[t], morph)) continue;  // unknown: ignored
+
+        float largest = 0.0f;
+        for (const PrimSpan& span : spans) {
+            if (t >= span.prim->targets_count) continue;
+            const cgltf_accessor* dpos =
+                findTargetAttribute(span.prim->targets[t], cgltf_attribute_type_position);
+            if (dpos == nullptr) continue;
             for (cgltf_size v = 0; v < dpos->count; ++v) {
                 float p[3] = {0, 0, 0};
                 cgltf_accessor_read_float(dpos, v, p, 3);
                 for (int k = 0; k < 3; ++k) largest = std::max(largest, std::fabs(p[k]));
             }
-            if (largest < 1e-6f) continue;  // a target that moves nothing is not stored
+        }
+        if (largest < 1e-6f) continue;  // a target that moves nothing is not stored
 
-            MorphTarget target;
-            target.morph = morph;
-            target.scale = largest;
-            const float quantize = 32767.0f / largest;
-            for (cgltf_size v = 0; v < dpos->count && v < positions->count; ++v) {
+        MorphTarget target;
+        target.morph = morph;
+        target.scale = largest;
+        const float quantize = 32767.0f / largest;
+        for (const PrimSpan& span : spans) {
+            if (t >= span.prim->targets_count) continue;
+            const cgltf_accessor* dpos =
+                findTargetAttribute(span.prim->targets[t], cgltf_attribute_type_position);
+            if (dpos == nullptr) continue;
+            const cgltf_accessor* dnrm =
+                findTargetAttribute(span.prim->targets[t], cgltf_attribute_type_normal);
+            for (cgltf_size v = 0; v < dpos->count && v < span.count; ++v) {
                 float p[3] = {0, 0, 0};
                 cgltf_accessor_read_float(dpos, v, p, 3);
                 float n[3] = {0, 0, 0};
@@ -368,7 +434,7 @@ bool importSkinnedGltf(const char* path, SkinnedMeshData& out, std::string* erro
                     continue;
                 }
                 MorphDelta delta;
-                delta.vertex = static_cast<uint16_t>(base + v);
+                delta.vertex = static_cast<uint16_t>(span.base + v);
                 for (int k = 0; k < 3; ++k) {
                     const float q = p[k] * quantize;
                     delta.position[k] = static_cast<int16_t>(
@@ -379,9 +445,10 @@ bool importSkinnedGltf(const char* path, SkinnedMeshData& out, std::string* erro
                 }
                 target.deltas.push_back(delta);
             }
-            if (!target.deltas.empty()) out.morphs.push_back(std::move(target));
         }
+        if (!target.deltas.empty()) out.morphs.push_back(std::move(target));
     }
+
     cgltf_free(data);
 
     if (out.vertices.empty() || out.indices.size() < 3) {

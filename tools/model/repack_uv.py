@@ -327,14 +327,18 @@ def _prescale_region(obj, faces, loops, target_fill=0.75):
     obj.data.update()
 
 
-def repack_by_region(obj, region_of_bone, margin=MARGIN, gutter=GUTTER, verbose=True):
+def repack_by_region(obj, region_of_bone, margin=MARGIN, gutter=GUTTER,
+                     regions=None, verbose=True):
     """The whole repack: collapse, pack each region, give each its own box."""
     before_verts = len(obj.data.vertices)
     before_polys = len(obj.data.polygons)
 
     moved = collapse_udim_tiles(obj)
 
-    regions = face_regions(obj, region_of_bone)
+    # `regions` is passed in when the caller has already decided something the
+    # rig cannot answer — the Face split (13.7) is labelled, not derived.
+    if regions is None:
+        regions = face_regions(obj, region_of_bone)
     by_region = {}
     for i, r in enumerate(regions):
         by_region.setdefault(r, []).append(i)

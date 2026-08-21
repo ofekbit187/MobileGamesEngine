@@ -291,12 +291,73 @@ MGE_TEST(body_mesh_covers_every_region) {
         indexed += part.indexCount;
     }
     MGE_CHECK(indexed == mesh.indices.size());  // every triangle belongs to a part
-    // Face is a texture island in v1, not a separate shell; every other
-    // region is present as real geometry.
+    // ALL TWELVE, Face included. It was exempted here from v1 until task 13.7,
+    // because the rig has one Head joint and the importer read regions off the
+    // rig, so every head triangle came back Scalp and `BodyRegion::Face` was
+    // empty — the B-8 debt ADR 0008 logged against v3, and what blocked the
+    // first mask, visor or face-covering helm. The exemption is gone; if this
+    // fails, the body regressed to a headless-mask body and no skip is coming
+    // back.
     for (size_t r = 0; r < kBodyRegionCount; ++r) {
-        if (static_cast<BodyRegion>(r) == BodyRegion::Face) continue;
         MGE_CHECK(seen.count(static_cast<uint8_t>(r)) == 1);
     }
+}
+
+MGE_TEST(the_face_is_a_real_region_in_front_of_the_scalp) {
+    // Face exists as geometry (task 13.7), and it is the FRONT of the head.
+    // Checking where it sits, not just that it is non-empty: a Face region
+    // accidentally tagged onto the back of the skull would satisfy a count and
+    // put every visor on the back of the head.
+    const SkinnedMeshData mesh = body();
+    const Aabb face = boundsOfRegion(mesh, BodyRegion::Face);
+    const Aabb scalp = boundsOfRegion(mesh, BodyRegion::Scalp);
+    MGE_CHECK(!regionVertices(mesh, BodyRegion::Face).empty());
+
+    // The engine's forward is -Z, so the face is the more NEGATIVE z.
+    MGE_CHECK(face.min.z < scalp.min.z);
+    MGE_CHECK((face.min.z + face.max.z) < (scalp.min.z + scalp.max.z));
+    // Both are head: they share the same height band, and the scalp reaches
+    // higher because it is the cranium cap (B-9).
+    MGE_CHECK(scalp.max.y >= face.max.y);
+    MGE_CHECK(face.min.y > 1.30f);
+    // The most forward point of the HEAD is the nose, and it belongs to Face.
+    // Deliberately not "of the body": the toes reach further forward than the
+    // nose (-0.187 m against -0.169 m), which is what a body standing in an
+    // A-pose with its feet in front of it looks like.
+    float headFront = 1e9f;
+    for (uint32_t i : regionVertices(mesh, BodyRegion::Face)) {
+        headFront = std::fmin(headFront, mesh.vertices[i].position.z);
+    }
+    for (uint32_t i : regionVertices(mesh, BodyRegion::Scalp)) {
+        headFront = std::fmin(headFront, mesh.vertices[i].position.z);
+    }
+    MGE_CHECK_NEAR(face.min.z, headFront, 0.001f);
+}
+
+MGE_TEST(a_visor_can_hide_the_face_without_hiding_the_scalp) {
+    // The point of task 13.7. Before it, Face and Scalp were one shell, so a
+    // visor could only take the whole head off with it.
+    const SkinnedMeshData full = body();
+    const SkinnedMeshData noFace = body(BodyLod::Lod0, kAllRegions & ~regionBit(BodyRegion::Face));
+    MGE_CHECK(noFace.triangleCount() < full.triangleCount());
+
+    bool faceGone = true, scalpKept = false;
+    for (const MeshPart& part : noFace.parts) {
+        if (part.region == BodyRegion::Face) faceGone = false;
+        if (part.region == BodyRegion::Scalp) scalpKept = true;
+    }
+    MGE_CHECK(faceGone);
+    MGE_CHECK(scalpKept);   // the bald cap survives on its own (B-9)
+
+    // And the reverse: a helmet taking the cranium leaves the face behind.
+    const SkinnedMeshData noScalp =
+        body(BodyLod::Lod0, kAllRegions & ~regionBit(BodyRegion::Scalp));
+    bool faceKept = false;
+    for (const MeshPart& part : noScalp.parts) {
+        if (part.region == BodyRegion::Face) faceKept = true;
+        MGE_CHECK(part.region != BodyRegion::Scalp);
+    }
+    MGE_CHECK(faceKept);
 }
 
 // -------------------------------------------------------------- skinning ---

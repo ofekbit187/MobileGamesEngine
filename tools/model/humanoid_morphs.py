@@ -85,6 +85,13 @@ class Landmarks:
         # The face is the front of the head; the nose is its most forward point.
         self.nose = min(head, key=lambda p: p.z)
         self.ear_x = max(abs(p.x) for p in head if p.y > self.crown - 0.16)
+        # The coronal plane through the ears — the front/back divide of the
+        # skull, and therefore where the Face region stops and the cap takes
+        # over round the sides (B-9). Measured off the widest band of the head
+        # rather than assumed, for the same reason as everything else here.
+        ear_band = [p for p in head
+                    if p.y > self.crown - 0.16 and abs(abs(p.x) - self.ear_x) < 0.015]
+        self.ear_z = (sum(p.z for p in ear_band) / len(ear_band)) if ear_band else 0.0
         # The jaw runs down into the neck: the chin is the lowest FRONT point.
         chin_candidates = [p for p in head if p.z < self.nose.z + 0.09]
         self.chin = min(chin_candidates, key=lambda p: p.y)
@@ -106,9 +113,10 @@ class Landmarks:
 
     def report(self):
         return ("landmarks: crown %.3f  chin %.3f  head %.3f m  nose (%.3f,%.3f,%.3f)  "
-                "eyes %.3f  brow %.3f  mouth %.3f  ear |x| %.3f" %
+                "eyes %.3f  brow %.3f  mouth %.3f  ear |x| %.3f z %.3f" %
                 (self.crown, self.chin.y, self.head_height, self.nose.x, self.nose.y,
-                 self.nose.z, self.eye_y, self.brow_y, self.mouth_y, self.ear_x))
+                 self.nose.z, self.eye_y, self.brow_y, self.mouth_y, self.ear_x,
+                 self.ear_z))
 
 
 # ----------------------------------------------------------------- targets --
