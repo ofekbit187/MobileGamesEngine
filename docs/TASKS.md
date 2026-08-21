@@ -289,9 +289,18 @@ Anything that allocates a texture per character is a defect, not a budget line.*
   ours is a per-island affine we wrote and can invert**; and tileable detail applies in tangent
   space regardless of chart. **If nothing suitable is sourceable, that is a finding to bring
   back — not a licence to fall back to generating**, which would reinstate a reversed ruling
-  without anyone deciding it — *in progress. One input is already measured: the Face island
-  carries 483 px/m, which makes a 4 mm pupil 1.9 texels wide, so face resolution is an
-  acquisition criterion rather than a later polish item (docs/status/textures.md)*
+  without anyone deciding it — *[~] measured and written up:
+  [`research/skin-sourceability.md`](research/skin-sourceability.md). **Skin is sourceable, but
+  not by the assumed route.** Route 1 (inverse repack) has an EMPTY input set — the Blender
+  Studio bundle ships base meshes with UV maps and no textures, so there is nothing authored
+  against that layout to transfer. Route 2 (tileable, tangent space) is confirmed with a file on
+  disk (ShareTextures `human_skin_4`, CC0, 4096², 7 maps) but a tiling material has no layout and
+  cannot place an eye. The route that answers 15.1 is a third one: MakeHuman's CC0 system pack,
+  22 complete skins, sample measured at 2048² photographic with a real face — authored for
+  MakeHuman's mesh, so the import path is a **mesh-to-mesh transfer**, not an inverse affine.
+  Also measured: ambientCG has NO human skin (`q=skin` returns `Leather008`), and "MakeHuman
+  skins are CC0" holds only for the bundled system pack — community skins include CC-BY. Blocked
+  on three rulings in docs/status/textures.md; not falling back to generating*
 - [ ] **15.1** **One face, rendered, for the owner's eye** — a single imported skin on the shipped
   body, before any system exists. First deliberately: it **retires ADR 0012's provisional Face
   waiver**, whose condition is "the owner judges the first authored face texture" — *not started
