@@ -2,40 +2,109 @@
 
 **Session:** session_01BckkiWsd8dqsjacHidZYPe
 **Branch:** `claude/textures-artist-research-bkz70u`
-**State:** blocked
-**Updated:** 2026-08-21 — 15.0 measured and written up; blocked on three rulings it raised
+**State:** ready
+**Updated:** 2026-08-21 — **an imported face is on the body and rendering.** 15.1 needs the owner's eye
 
 ## Now
 
-**15.0 is done and it changes 15.2.** Full write-up with every number reproducible:
-[`docs/research/skin-sourceability.md`](../research/skin-sourceability.md).
+**A real photographic CC0 skin is on our body, through a mesh-to-mesh transfer, and it renders.**
+That is the capture ADR 0012's provisional Face waiver has been waiting for — over to the owner.
 
-**Skin is sourceable — but not by the route the reversal assumed.**
+| Evidence | What it is |
+|---|---|
+| `evidence/textures/imported_face.png` | **the portrait the ruling needs** |
+| `evidence/textures/imported_threequarter.png` | three-quarter |
+| `evidence/textures/imported_body.png` | the whole figure at play distance |
+| `evidence/textures/imported_sheet.png` | the transferred sheet, flat, on our frozen chart |
 
-- **Route 1 (inverse repack) has an empty input set.** Our body's source, Blender Studio's Human
-  Base Meshes bundle, ships base meshes with UV maps and **no textures**. The transform is
-  correct and we own it; there is simply nothing authored against that layout to apply it to. It
-  is a capability held in reserve, not a way to get a skin.
-- **Route 2 (tileable, tangent space) is confirmed with a file on disk:** ShareTextures
-  `human_skin_4`, CC0, **4096²**, 7 maps, downloaded and measured; 6 such materials exist. It
-  supplies pore and micro-detail over the whole body and needs no transfer — but a tiling
-  material has no layout, so **it cannot place an eye**. It supplies skin, not a face.
-- **Route 3, which is the one that answers 15.1:** MakeHuman's **system asset pack is CC0 and
-  holds 22 complete human skins** — young/middle/old × African/Asian/Caucasian × f/m. I read the
-  268 MB zip's index remotely and pulled one entry by byte range: `young_caucasian_male`,
-  **2048² 8-bit RGB, photographic, full body layout with a real face** — eyes, lips, ears,
-  nostrils, nails. It is authored for **MakeHuman's** mesh, so our affine says nothing about it
-  and the transfer is **mesh-to-mesh**.
+Reproduce: `mge_skin_import --mesh <source.obj> --texture <source.png> --out <dir>`. The source is
+a build-time input and is not committed, the same convention `humanoid_template.py` follows for
+the Blender bundle; provenance and licence in `research/skin-sourceability.md`.
 
-Two things measured that contradict what the web will tell you, recorded because they would have
-cost someone a day: **ambientCG has no human skin at all** (its API returns `Leather008` for
-`q=skin`), and **"MakeHuman skins are CC0" is true only of the bundled system pack** — the first
-community skin I opened is CC-BY.
+### What 15.2 turned out to need, and what it measured
 
-**And the resolution finding inverts.** Our chart gives the Face region **15 700 texels**; the
-source gives the head on the order of **4 × 10⁵** (estimated from the layout). Roughly **30×**,
-about 5× linear. The source is not the limiting factor and never will be — **our chart is**, and
-importing at 483 px/m means discarding most of what we acquire.
+One rigid transform cannot fit two humans in **different poses** — the source holds its arms
+wider than ours. The first run measured 71 mm mean separation and **64 mm across the face**, which
+is two eye-widths: every feature landed somewhere else. So the transfer fits **each body region
+separately** by iterated closest point, using the segmentation our body already publishes, which
+means the source needs no segmentation of its own:
+
+| Region | before | after | how far it moved |
+|---|---|---|---|
+| Face | 62.5 mm | **5.2 mm** | 92 mm |
+| Torso | 67.1 mm | 10.1 mm | 93 mm |
+| Hands | 200.5 mm | 10.1 mm | **224 mm** |
+| Arms | 90.8 mm | 31.0 mm | 91 mm |
+
+The hands were **22 cm** out of correspondence under a single transform. After fitting: whole body
+**15.6 mm** mean, **7.1 mm across the face** — comfortably inside an iris.
+
+Two defects found by looking at the render, both fixed and both worth recording because they are
+properties of *importing onto a different body*, not of this particular source:
+
+- **Red eyes and a red mouth.** MakeHuman models eyeballs, teeth and tongue as separate meshes, so
+  its sheet carries saturated interiors for surfaces our closed face shell does not have.
+  Rejected by testing each sample against the **CIELAB skin locus** — the same published colour
+  science the ITA classifier uses, applied as a validator rather than as taste — and filled from
+  surrounding skin by the dilation that was already there. 5 698 samples rejected, 3 271 on the face.
+- **Black bands around both wrists.** Per-region offsets are discontinuous where regions meet, and
+  arm-to-hand is a 13 cm step. Fixed by carrying the offsets **per vertex**, relaxing them across
+  the mesh and blending per texel, so the field is continuous by construction. One small dark patch
+  survives on one wrist — visible in `imported_body.png`, and honest to leave visible.
+
+Deterministic: two imports byte-identical (`imported_sheet.ppm` md5 `0e4b9b3b96c14a4879e45494332487cc`).
+
+### My judgment, as input and not the verdict
+
+**The skin reads as skin — it is photographic, so it should.** Tone, mottling and the shading
+around the nose, mouth and collarbones all land; there is no visible UV seam anywhere; at play
+distance it reads as a person. It is a categorical improvement on what a generator of ours
+produced, which is what the owner said it would be.
+
+**But the face has no eyes, and that is a geometry gap, not a texture one.** The source assumes a
+separate eyeball mesh, so what it supplies for the eye region is *eyelid skin over a closed
+socket*. Our face is one closed shell with no eye opening, so the imported face reads as a man
+with his eyes shut. No skin — imported, generated or painted — can fix this: it needs either eye
+geometry, or eyes painted in, and painting them in is originating. **This wants a ruling**, and it
+is listed under `Needs:`.
+
+Also worth the owner knowing when he looks: **this is the face at 483 px/m**, before the 2× Face
+repack riding the ADR 0019 clavicle event. It gets better on its own.
+
+## Needs from the architect
+
+```
+SEAM: Body geometry — the face has no eyes, so an imported skin cannot give it any
+NEED: Sourced skins assume separate eyeball geometry (MakeHuman, and every other
+      photographic human skin, is authored that way). Our Face is one closed shell
+      with no eye opening, so the transfer supplies eyelid skin over a closed
+      socket and the face reads as eyes-shut. Visible in imported_face.png.
+BREAKS: The body's head geometry — eye geometry is a mesh change, so it rides a
+      contract-version event. Body session's call, not mine.
+PROPOSAL: Two options, and I do not think it is mine to choose.
+      (a) Eye geometry on the template — a sourced eyeball, maskable, on the same
+          contract-version event as the clavicle if it can still be added.
+      (b) Accept eyes-shut for now and revisit. Cheap, and honest, but every
+          character in the game has its eyes closed.
+      What I will NOT do is paint eyes into the skin: that is originating what a
+      session cannot see, which is the rule ADR 0014's reversal restored.
+```
+
+Everything else I had open is now ruled and merged: `skinMesh()` carries UVs (my workaround is
+deleted), the skinned draw path is chartered to the renderer, and the Face repack rides ADR 0019.
+
+## Last landed
+
+- **15.1 + the core of 15.2** (this commit). `tools/skin_import/`: OBJ loader, `stb_image`
+  vendored for the import path, similarity alignment with the **facing chosen by measurement**
+  rather than assumed, per-region iterated-closest-point fitting with a smoothed per-vertex
+  offset field, skin-locus rejection, and the transfer itself. The result goes through the bake
+  path that already existed — dilate, mip in linear space, sRGB-tagged, `validateTexture` — and
+  renders through the engine's textured lit pipeline.
+- **15.0** — `research/skin-sourceability.md`, the survey that found this route.
+- The UV audit and `assets/standards/skin_texture.mgestd`, earlier.
+
+## Earlier in this session
 
 ### Previously — re-aimed onto the reversal
 
@@ -91,65 +160,6 @@ exception the standard's `near_field 1024` class already exists for.
 **15.0 turned this around:** the sourced content has ~30× the face texels our chart can hold, so
 the constraint is not what we can acquire — it is what our chart can accept.
 
-## Needs from the architect
-
-```
-SEAM: Body contract (skinMesh) — blocks any textured character
-NEED: `skinMesh()` in engine/src/character/body_mesh.cpp writes position and normal
-      but not UV, so a CPU-skinned body samples one texel for its whole surface.
-BREAKS: One line in skinMesh's vertex write. Nothing downstream: the static
-      Vertex already has the uv field and it is currently left at {0,0}.
-PROPOSAL: out.vertices[i].uv[0] = sv.uv[0] / 65535.0f; (and [1]). My tool copies
-      the UVs across itself as a local workaround; it should not outlive this.
-```
-
-```
-SEAM: Skinned draw — blocks textured characters on the path they are really drawn through
-NEED: `SkinnedDrawItem` has no material, and `skinned.vert` reads inUv at
-      location 2 but never outputs it, so the GPU skinned path cannot sample a
-      texture at all. An imported skin is as useless here as a generated one.
-BREAKS: engine/shaders/skinned.vert (pass UV through), the skinned pipeline's
-      descriptor layout (bind set 2 as the lit pipeline does), and a
-      `const GpuMaterial* surface` on SkinnedDrawItem. Renderer-owned.
-PROPOSAL: Mirror what DrawItem already does — same set 2, same lit.frag, same
-      1x1-white default so one pipeline serves textured and untextured.
-      Verified on that seam the usual way: mge_skin_test.
-```
-
-```
-SEAM: UV chart density (Face island) — now an input to 15.0, not a polish item
-NEED: The face needs ~965 px/m to carry a legible pupil; it has 483. Measured,
-      with both renders committed.
-BREAKS: The chart, hence every skin texture — a B-27 contract-version event.
-      Body session's file.
-PROPOSAL: Repack the Face island 2x linear inside the existing 1024^2 sheet
-      (+4.5% sheet, from 56% currently unused). Rides the next contract-version
-      event rather than causing one.
-```
-
-### Blocked on these three — they decide what 15.2 builds
-
-1. **Is a mesh-to-mesh transfer acceptable as "the import path"?** It is more machinery than the
-   reversal anticipated, and it is the difference between having a face and not having one. Still
-   acquire → validate → process → integrate; the process step is just bigger. **If this is
-   refused, there is no route to a face and that is the finding** — I am not falling back to
-   generating.
-2. **Is the CC0 MakeHuman system pack acceptable as a build-time dependency?** Same convention as
-   the Blender bundle: the baked maps get committed, the 268 MB pack does not.
-3. **Face island density, before the transfer is built rather than after.** Importing at 483 px/m
-   and re-importing at 965 means doing the transfer twice.
-
-I can start the alignment work speculatively on (1) if you would rather I did not idle, but I
-would be building against an unruled route, so I have stopped instead.
-
-## Last landed
-
-- **`67bcf5d` — a generated face, rendered** (`tools/skin_preview/`). Built against ADR 0014
-  pre-reversal; **re-labelled above, not claimed as 15.1.** Deterministic (two bakes
-  byte-identical), maps validate with full 11-level linear-space mip chains, albedo sRGB-typed.
-  Captures in `docs/status/evidence/textures/`.
-- **`3f63609` — the UV audit** that found the chart unusable, and
-  `assets/standards/skin_texture.mgestd`, the standard the import gates will run against.
 
 ## Verification
 

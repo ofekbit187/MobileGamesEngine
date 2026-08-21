@@ -597,6 +597,29 @@ void packMips(const std::vector<Rgb>& base, uint32_t sheet, ColorSpace space, Te
 
 }  // namespace
 
+bool packImportedAlbedo(const std::vector<uint8_t>& rgb, const std::vector<uint8_t>& filled,
+                        uint32_t sheet, TextureData& out) {
+    const size_t count = size_t(sheet) * sheet;
+    if (rgb.size() < count * 3 || filled.size() < count) return false;
+
+    // The source bytes are sRGB-encoded. Decode to linear so the dilation and
+    // the mip chain both happen in light rather than in gamma — the standard's
+    // `mip_generation_space linear`, which matters just as much for an imported
+    // map as for one we made.
+    std::vector<Rgb> linear(count);
+    for (size_t i = 0; i < count; ++i) {
+        for (int ch = 0; ch < 3; ++ch) {
+            const float s = rgb[i * 3 + ch] / 255.0f;
+            const float l = s <= 0.04045f ? s / 12.92f : std::pow((s + 0.055f) / 1.055f, 2.4f);
+            (&linear[i].r)[ch] = l;
+        }
+    }
+    std::vector<uint8_t> mask = filled;
+    dilate(linear, mask, sheet, 8);
+    packMips(linear, sheet, ColorSpace::Srgb, TextureUsage::Albedo, out);
+    return !out.mips.empty();
+}
+
 void generate(const SkinnedMeshData& mesh, const SurfaceTexel* surface, uint32_t sheet,
               const HeadLandmarks& head, const SkinParams& params, SkinMaps& out) {
     const size_t count = size_t(sheet) * sheet;
