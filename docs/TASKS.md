@@ -264,39 +264,47 @@ Status legend: `[ ]` not started · `[~]` in progress · `[x]` done
 - [ ] **14.5** Item data: archetype + reach + weight on `ItemUse`; `animKey` narrows to the bespoke-clip escape hatch
 - [ ] **14.6** Proof by catalog: sword, spear, axe, hammer, torch, apple — six items, zero per-item animation authoring, visibly distinct motion
 
-## Phase 15 — Procedural skin (ADR 0014, owner dictation 2026-08-21)
+## Phase 15 — Imported skin (ADR 0014 + its reversal, owner dictation 2026-08-21)
 
-*Goal: skin is produced by a generator parameterized by the phenotype the DNA module already
-produces, not painted by hand. Not a staffing workaround — a painted skin is one skin, and
-Dictation 5 dictates that every person is unique with hereditary features, which no finite set of
-painted skins can deliver. Same P5/P12 pattern as virtual models and family trees, applied to the
-one surface that had been waiting for a human.*
+*Goal: skin base maps are **imported**, then made to serve many people by a parameter layer.
+The owner reversed the generate-it ruling the same day, on cost and quality, and was right on
+both — plus a third thing he did not have to say: `AGENTS.md` §6.2 already forbids originating
+what a session cannot see, and writing a skin generator was that rule broken one layer up. The
+area's rule is the same as the mesh side's: **acquire → validate → process → integrate.**
+We build the import path, never the content.*
+
+*Dictation 5 is satisfied by the hybrid, not by generation: one imported skin is one face, and
+uniqueness comes from the parameter layer over it. The argument was never about generating —
+it was about variation not costing memory.*
 
 *The P1 constraint is ruled up front and is not negotiable: **texture memory is O(1) in crowd
 size.** A small shared set of base maps, baked once; per-person variation rides as material
 parameters fed from the phenotype. Adding the fifty-first villager costs zero texture bytes.
 Anything that allocates a texture per character is a defect, not a budget line.*
 
-- [~] **15.1** **One face, rendered, for the owner's eye** — a single generated skin on the
-  shipped body, put in front of the owner before any system exists. This is deliberately first:
-  it is the cheapest test of the one failure mode measurement cannot catch (output that passes
-  every numeric gate and reads as plastic), and it **retires ADR 0012's provisional Face waiver**,
-  whose condition is "the owner judges the first authored face texture" — *built and rendered:
-  `tools/skin_preview` generates albedo + packed maps from a melanin/haemoglobin CIELAB model
-  (this skin measures ITA 25.6° → Fitzpatrick IV), rasterizes the body into chart space so the
-  generator evaluates in metres on the body and noise crosses UV seams invisibly, bakes AO by
-  ray-casting the body against itself, and renders the result through the engine's textured lit
-  path. Deterministic: two bakes byte-identical. Captures committed under
-  `docs/status/evidence/textures/`. **The owner's verdict is what closes this** — and with it
-  ADR 0012's Face waiver. Measured alongside: the Face island gets 483 px/m, which makes a 4 mm
-  pupil 1.9 texels; both 483 and 965 px/m renders are committed for the comparison
-  (docs/status/textures.md). Two seam requests are open — `skinMesh()` drops UVs, and the skinned
-  draw path has no material, so 15.1 CPU-skins into the static textured path*
-- [ ] **15.2** Generator v1: the base map set from `TEXTURING.md` Part I, conforming to
-  `assets/standards/skin_texture.mgestd` and packed against the frozen chart (`B-27`)
-- [ ] **15.3** Phenotype binding: melanin depth, undertone, weathering and blemish seeds driven
-  from the `Genome`'s phenotype (ADR 0009), evaluated in-shader against the shared maps — **never
-  as per-person texture allocation**
+- [ ] **15.0** **Sourceability, measured before anything is built** — what exists under an
+  acceptable licence for this body, and does a re-projected sample land correctly on the frozen
+  chart. Two routes are already open by construction: `repack_uv.py` moved the source's UDIM
+  islands as units with no splits and no cut seams, so **the transform from the source layout to
+  ours is a per-island affine we wrote and can invert**; and tileable detail applies in tangent
+  space regardless of chart. **If nothing suitable is sourceable, that is a finding to bring
+  back — not a licence to fall back to generating**, which would reinstate a reversed ruling
+  without anyone deciding it — *in progress. One input is already measured: the Face island
+  carries 483 px/m, which makes a 4 mm pupil 1.9 texels wide, so face resolution is an
+  acquisition criterion rather than a later polish item (docs/status/textures.md)*
+- [ ] **15.1** **One face, rendered, for the owner's eye** — a single imported skin on the shipped
+  body, before any system exists. First deliberately: it **retires ADR 0012's provisional Face
+  waiver**, whose condition is "the owner judges the first authored face texture" — *not started
+  under the current ruling. A GENERATED face was built and rendered against ADR 0014 before the
+  reversal (commit `67bcf5d`, `tools/skin_preview`, captures in `docs/status/evidence/textures/`);
+  it is kept as evidence about the chart and the render path, NOT as a content route. The render
+  harness, the mesh→chart rasterizer, the linear-space mip/dilate/validate path and the AO bake
+  are route-independent and carry over; the colour model and procedural features do not*
+- [ ] **15.2** The import path: re-projection through the inverse repack transform, plus the
+  conformance gates against `assets/standards/skin_texture.mgestd` — the tool, not the content
+- [ ] **15.3** Phenotype binding: melanin depth, undertone, weathering and per-person blemish
+  masks driven from the `Genome`'s phenotype (ADR 0009), evaluated in-shader over the shared
+  imported maps — **never as per-person texture allocation**
 - [ ] **15.4** The `.mgetex` baker and its gates: colour space, mip chain, island padding,
   compression PSNR, deterministic rebuild — the five rules `mge_uv_report` currently reports as
   "not checkable here (no textures exist yet)"
@@ -306,7 +314,35 @@ Anything that allocates a texture per character is a defect, not a budget line.*
 **Exit criteria:** a crowd in which no two people share a face, drawn from one shared map set, at
 a texture cost that does not move when the crowd grows.
 
-## Phase 16 and beyond — held for further dictation
+## Phase 16 — Retire the v1 box rig (architect ruling, 2026-08-21)
+
+*The owner spotted an animation preview rendering the obsolete boxy body and asked whether it was
+deliberate. It was not, and the root cause is a trap in our own tree rather than a careless
+session: `buildHumanoidVisual` still compiles, still looks like the obvious way to draw a
+character, and three demos still call it — so a new session that reads a demo as the reference
+inherits the dead path. That is what happened.*
+
+*Scope, stated precisely so nobody over-reacts: **the phone build is not affected.**
+`device_game.cpp` already runs the real skinned body, as do `body_preview` and `skin_test`. The
+stale callers are three host demos plus the new `anim_preview` that copied one of them.*
+
+*The cost is not cosmetic. A boxy preview **cannot show** the most likely defect of a pose
+feature: separated boxes have no surface between them, so a joint mask that snaps 0 → 1 across a
+joint looks perfect and shears visibly on continuous skinned geometry where the weights blend
+across that same joint. **A preview that cannot fail is not evidence.***
+
+- [x] **16.0** Mark `buildHumanoidVisual` deprecated at the declaration, loudly, with the reason
+  and the replacement — *done in the same push as this ruling; the marker is what stops the next
+  session inheriting it while the migration is queued*
+- [ ] **16.1** Migrate `tools/template_game`, `tools/people_demo` and `tools/humanoid_demo` to
+  `buildPosedCharacter` — **owner: whoever the demo demonstrates** (`AGENTS.md` §3)
+- [ ] **16.2** `tools/anim_preview` onto the real skinned body, and **re-verify the 14.1 upper-body
+  mask through skinning** — the check the box rig could not perform. Expect the mask boundary to
+  need feathering across the joint rather than a hard cut — **owner: animation**
+- [ ] **16.3** Delete `buildHumanoidVisual` and `tests/test_humanoid.cpp`'s coverage of it once
+  16.1 and 16.2 land — dead code that renders is worse than dead code that does not
+
+## Phase 17 and beyond — held for further dictation
 
 Deliberately not planned yet; known candidates awaiting direction:
 
@@ -318,7 +354,7 @@ Deliberately not planned yet; known candidates awaiting direction:
   list — P12: one line of data, not a code change, tightens a rule). The
   texture **runtime** (sampling, GPU upload, materials, formats on the device)
   belongs to the renderer area, not here. Engine-side prerequisites: TEXTURING
-  §13. **Textures as generators is now ruled — ADR 0014, Phase 15 above.** The
+  §13. **Ruled and then reversed — ADR 0014 + reversal: skin is IMPORTED, Phase 15 above.** The
   second proposal (virtual textures on the P5 pattern) remains undecided
 - **UNBLOCKED (ADR 0010/0011/0012) — a skin texture may now be authored.** `mge_uv_report --gate` passes six of its seven checkable rules; `stretch_above_max` is the lone refusal and ADR 0012 waives it — outright for the seven non-face regions, provisionally for the **Face at 2.09×, whose retirement condition is the owner's eye on the first authored face texture** rather than a threshold. Nothing has been painted yet. *Historical, for the record:* `mge_uv_report`
   (in `ctest`; `--gate` for pass/fail) measures 89.7 % of the body's triangles
