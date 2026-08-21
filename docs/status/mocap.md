@@ -124,6 +124,32 @@ BREAKS: Nothing shipped. 18.2's deliverable changes from "a metric 3D skeleton"
       stores rotations, so the point cloud was always an intermediate we would
       have thrown away. The held-out protocol already built scores a rig fit
       unchanged. Tasks 18.4, 18.5 and 18.6 are untouched.
+EVIDENCE, because a proposal is worth less than a measurement. A bounded spike
+      (`tools/mocap/rigfit_spike.py`, labelled a spike and not an implementation)
+      fits the rig — 22 rotational DOF per frame, hinge knees and elbows, bone
+      lengths fixed, seven proportion scales fitted once for the take — and is
+      scored by the identical held-out protocol:
+
+        held out       train fit   HELD-OUT   best single (point)   fused
+        threequarter        3.1%       3.9%                  7.9%    8.4%
+        front               3.8%      10.3%                  9.6%   10.1%
+        side                5.5%       8.6%                  7.8%   11.7%
+        mean                           7.6%                  8.4%   10.1%
+
+      The number I care most about is the training fit: 3.1–5.5% against an
+      estimator noise floor of 3.1–5.1%. **Our 17-joint rig, with hinge knees
+      and elbows, is expressive enough to reproduce this walk to within the
+      precision of the measurement.** That is a fact about the rig, independent
+      of which method wins, and you may want it on file against ADR 0020.
+
+WHAT I WILL NOT CLAIM: the mean gain over the best single view is small (7.6% vs
+      8.4%) and rests on one strong fold. Fitted proportions are NOT stable
+      across folds (shoulder 0.82/1.00/0.82, torso 1.13/0.89/1.09), so the
+      variant estimate is absorbing pose error. The `front` fold overfits
+      (3.8% train, 10.3% held out). A real implementation needs temporal
+      continuity, joint limits and a foot-contact constraint — none of which the
+      spike has, all of which should attack exactly those symptoms.
+
 RISK I am not hiding: a nonlinear fit over 17 joints per frame can converge to a
       plausible-looking wrong pose. The held-out reprojection test is what
       catches that, and it exists and is trusted now — which is what the

@@ -121,6 +121,44 @@ can converge to a plausible-looking wrong pose. The held-out reprojection test i
 catch that, which is why building it first was worth doing even though it produced a negative
 result.
 
+### 5.1 The proposal, measured rather than argued
+
+A bounded spike (`tools/mocap/rigfit_spike.py`) fits the rig — 22 rotational DOF per frame across
+10 joints, with knees and elbows as 1-DOF hinges, bone lengths fixed, and seven proportion scales
+fitted once for the whole take — and is scored by the identical held-out protocol.
+
+```
+held out       train fit   HELD-OUT     best single (point)   fused (point)
+threequarter        3.1%       3.9%                    7.9%            8.4%
+front               3.8%      10.3%                    9.6%           10.1%
+side                5.5%       8.6%                    7.8%           11.7%
+                              -----                    ----            ----
+mean                           7.6%                    8.4%           10.1%
+```
+
+Two things in this are worth more than the mean.
+
+**The training fit reaches the estimator's own noise floor.** 3.1–5.5% against a floor of
+3.1–5.1%. **Our 17-joint rig, with anatomically-correct hinge knees and elbows, is expressive
+enough to reproduce this walk to within the precision of the measurement.** That is a
+feasibility result about the rig itself, it is independent of which fusion method wins, and it
+is worth knowing before ADR 0020's joint count is ever reopened.
+
+**On the fold where it wins, it wins by 2x** (3.9% against 7.9%) and lands essentially at the
+noise floor. On the other two it is within about a point of the best single view.
+
+**What I will not claim.** The mean improvement over the best single view is small (7.6% against
+8.4%) and rests on one strong fold. The fitted proportions are **not stable across folds** —
+shoulder width comes out 0.82, 1.00, 0.82 and torso 1.13, 0.89, 1.09 — so the variant estimate
+is absorbing pose error and is not yet trustworthy. And the `front` fold shows a large
+train-to-held-out gap (3.8% to 10.3%) that says it is overfitting there. A real implementation
+needs temporal continuity, joint limits and a foot-contact constraint, none of which the spike
+has, and all of which should reduce exactly those symptoms.
+
+The honest summary: **the rig fit is the best of the three approaches measured, it is the only
+one that outputs what we actually need (rotations, not points), and it is not yet good enough to
+call finished.**
+
 **This is a change of approach to a charted task, so it is a question for the architect, not a
 decision for me.** It is raised in `docs/status/mocap.md`.
 
@@ -129,6 +167,9 @@ decision for me.** It is raised in `docs/status/mocap.md`.
 - `tools/mocap/multiview.py` — camera fitting, alignment, fusion, and the held-out validation
   protocol. The protocol is the durable part: whatever 18.2 eventually produces gets scored by
   it, including a rig fit.
+- `tools/mocap/rigfit_spike.py` — the feasibility spike above. **Labelled a spike on purpose**:
+  it is evidence for a proposal, not an implementation of it, and it should be rewritten rather
+  than extended once there is a ruling.
 - The measured noise floor (3.1–5.1% of torso) that any future method must be judged against.
 - The negative result above, with the three ways of getting it wrong recorded.
 
