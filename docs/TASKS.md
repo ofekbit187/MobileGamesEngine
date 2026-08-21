@@ -493,11 +493,25 @@ holds the trajectories; `tools/mocap/track_video.py` reproduces them. **The sour
 deliberately not committed** — third-party reference of uncertain redistribution licence, raised
 with the owner.*
 
-- [ ] **18.1** **The walk we already ship, measured against a real human.** Before any new content:
+- [x] **18.1** **The walk we already ship, measured against a real human.** Before any new content:
   compare our procedural walk to the tracked reference — stride length and cadence, hip and
   shoulder counter-rotation, vertical bob, foot-contact timing, knee and ankle angle curves.
   **Nobody has ever checked whether our walk is any good**, and this makes it a number rather than
   an opinion. It also validates the tracking pipeline on a motion we can already produce
+  — **done**, `docs/research/procedural-walk-vs-human.md`. Pipeline validated before it was
+  believed: the measurement recovers the animator's own stride constant, 1.0378 m against the
+  1.0379 m its source formula predicts, knowing nothing of that formula. Both walks driven at
+  the measured 1.355 m/s. Six findings, worst first: **the feet slide 236 mm through
+  mid-stance against a human 42 mm** — the "feet never slide" comment guarantees only that the
+  cycle freezes when standing still, not that a foot stays put within a cycle; **the knee
+  flexes a third as far AND a third of a cycle early**, missing swing-phase flexion entirely;
+  **vertical bob is exactly zero and cannot be otherwise** — `Pose` carries rotations only, so
+  the root cannot move (seam request in `docs/status/mocap.md`); cadence +32% because stride is
+  −28%; stance 354 mm wide against 95 mm with zero lateral foot motion; pelvis yaw 0.0° against
+  a counter-rotating human. Girdle-rotation *amplitude* is measured but spreads ~4x across the
+  three views, so it does **not** yet meet ADR 0020's revisit condition — that needs 18.2.
+  Tools: `tools/mocap/gait_dump.cpp` (links `mge_core`, runs the real `LocomotionAnimator`
+  rather than a model of it), `gait_metrics.py`, `gait_compare.py`
 - [ ] **18.2** Triangulate the three views into one metric 3D skeleton per frame. The views are
   **simultaneous — one take, one frame** — so temporal sync is free; what remains is relative
   camera pose, solvable from the subject itself across views

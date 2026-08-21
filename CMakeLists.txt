@@ -21,6 +21,9 @@ if(NOT ANDROID OR MGE_EMULATED_TESTS)
     add_subdirectory(tools/host_runner)
     add_subdirectory(tools/stream_test)
     add_subdirectory(tools/audio_demo)
+    # Host analysis for Phase 18: dumps the engine's own LocomotionAnimator so
+    # the mocap comparison measures the shipped walk rather than a model of it.
+    add_subdirectory(tools/mocap)
     enable_testing()
     add_subdirectory(tests)
     # After enable_testing(): mge_uv_report registers itself as a test so the
