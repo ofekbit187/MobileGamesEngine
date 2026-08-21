@@ -329,9 +329,34 @@ across that same joint. **A preview that cannot fail is not evidence.***
   session inheriting it while the migration is queued*
 - [ ] **16.1** Migrate `tools/template_game`, `tools/people_demo` and `tools/humanoid_demo` to
   `buildPosedCharacter` — **owner: whoever the demo demonstrates** (`AGENTS.md` §3)
-- [ ] **16.2** `tools/anim_preview` onto the real skinned body, and **re-verify the 14.1 upper-body
-  mask through skinning** — the check the box rig could not perform. Expect the mask boundary to
-  need feathering across the joint rather than a hard cut — **owner: animation**
+- [x] **16.2** `tools/anim_preview` onto the real skinned body, and **re-verify the 14.1 upper-body
+  mask through skinning** — the check the box rig could not perform — **owner: animation** —
+  *`anim_preview` now renders through `buildPosedCharacter`; every capture is the imported artist
+  body. The mask was re-verified on it by measuring PER-EDGE STRAIN on the CPU — how far each mesh
+  edge's length moves from bind, which is what tearing and pinching physically are — so the gate
+  needs no picture. New permanent test:
+  `layering_does_not_shear_the_real_skinned_body`.*
+
+  ***Layering is clean.*** *The number that matters is what layering ADDS over the two poses it
+  blends: `strain(layered) - max(strain(walk), strain(action))`. Worst case **0.216**, against
+  locomotion's own worst of **0.311** — blending two poses distorts this skin less than the walk
+  cycle already does by itself. The mask boundary is not what breaks the picture.*
+
+  ***The predicted fix is not the fix.*** *The expectation written into this task was that the
+  boundary would need feathering rather than a hard cut. Measured across 180 pose pairs (5
+  archetypes x 9 timeline points x 4 walk phases), feathering makes it very slightly WORSE, not
+  better — worst excess 0.198 at feather 0.00, 0.206 at 0.50, 0.228 at 1.00, monotone. The spine
+  and chest weights already blend properly, so the skin absorbs the difference either way. The
+  `spineFeather` knob is a look control (how much torso joins the action) and its header comment
+  has been corrected to stop claiming otherwise.*
+
+  ***What DOES break the picture is the shoulder, and it is not this area's.*** *Measured on the
+  naked body with nothing layered and no archetype playing — one joint rotated: 30 deg puts 5
+  edges over 50% strain, 60 deg puts 23 over 50% and 6 over 100%, 140 deg puts 71 over 50%.
+  Locomotion stays inside ~35 deg and never puts a single edge over 50%, which is why eight
+  phases of walking never exposed it. Every use archetype needs 60-140 deg. Raised in
+  `docs/status/animation.md` for the character asset pipeline; captures
+  `anim_shoulder_envelope.ppm` and `anim_walk_vs_layered.ppm`.*
 - [ ] **16.3** Delete `buildHumanoidVisual` and `tests/test_humanoid.cpp`'s coverage of it once
   16.1 and 16.2 land — dead code that renders is worse than dead code that does not
 

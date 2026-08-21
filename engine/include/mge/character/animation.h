@@ -74,11 +74,21 @@ void maskSetChain(JointMask& mask, const Skeleton& skeleton, Joint root, float w
 // The 14.1 split. Spine upward plus both arms — the half an action drives
 // while locomotion keeps the hips and legs.
 //
-// `spineFeather` is the weight given to the Spine joint, and it is the whole
-// reason this is not a bitmask. A hard 0-to-1 cut at the waist makes the
-// torso shear: the chest snaps to the action's rotation while the hips are
-// still walking, and the joint between them absorbs all of it. Blending the
-// spine halfway spreads that difference over two joints instead of one.
+// `spineFeather` is the weight given to the Spine joint, and it is the reason
+// this is not a bitmask.
+//
+// It controls HOW MUCH OF THE TORSO JOINS THE ACTION — a look control. An
+// earlier version of this comment claimed it was needed to stop the waist
+// SHEARING, and that claim has now been measured on the real skinned body and
+// is wrong: across 180 pose pairs the excess strain layering adds is 0.198 at
+// feather 0.00 and 0.206 at 0.50, i.e. the same, and it rises to 0.228 at
+// 1.00. The body's spine and chest weights already blend properly, so the
+// skin absorbs the difference either way. (The joint that does NOT blend
+// properly is the shoulder, and no mask setting reaches it — see
+// docs/status/animation.md.)
+//
+// Keep it for what it actually does. Do not keep it believing it prevents a
+// tear.
 JointMask maskUpperBody(const Skeleton& skeleton, float spineFeather = 0.5f);
 
 // The complement: hips and both legs. For an overlay that drives the lower

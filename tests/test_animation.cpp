@@ -288,3 +288,134 @@ MGE_TEST(layering_works_on_every_body_variant) {
                            walk.rotation[idx(Joint::ThighL)], 0.0f));
     }
 }
+
+// ---------------------------------------------------------------------------
+// Does layering shear the SKIN? (task 16.2)
+//
+// This is the test the first version of this area could not have written,
+// because it previewed on the deprecated v1 box rig. Separated boxes have no
+// surface between them, so a joint mask that snaps 0 -> 1 across a joint looks
+// perfect on boxes and can tear on continuous skinned geometry, where the skin
+// weights blend across that same joint.
+//
+// So: measure it on the real imported body, on the CPU, with no picture
+// involved. The metric is per-edge strain — how much each mesh edge's length
+// changes from bind — because that is what tearing and pinching ARE.
+//
+// The question is not "is the layered pose distorted" (every pose distorts a
+// skin) but "does LAYERING add distortion that neither source pose had". So
+// the number under test is
+//
+//     excess = strain(layered) - max(strain(locomotion), strain(action))
+//
+// and the bar it must clear is locomotion's own worst distortion: if blending
+// two poses adds less than the walk cycle already does by itself, layering is
+// not what will break the picture.
+// ---------------------------------------------------------------------------
+
+#include "mge/character/body_mesh.h"
+#include "mge/character/use_archetypes.h"
+
+#include <algorithm>
+#include <set>
+#include <vector>
+
+namespace {
+
+struct SkinProbe {
+    const SkinnedMeshData* mesh = nullptr;
+    std::vector<std::pair<uint32_t, uint32_t>> edges;
+    std::vector<float> bindLength;
+
+    void build() {
+        mesh = &sharedTemplateLods()[0];
+        std::set<std::pair<uint32_t, uint32_t>> unique;
+        const auto add = [&](uint32_t a, uint32_t b) {
+            unique.insert({std::min(a, b), std::max(a, b)});
+        };
+        for (size_t t = 0; t + 2 < mesh->indices.size(); t += 3) {
+            add(mesh->indices[t], mesh->indices[t + 1]);
+            add(mesh->indices[t + 1], mesh->indices[t + 2]);
+            add(mesh->indices[t + 2], mesh->indices[t]);
+        }
+        edges.assign(unique.begin(), unique.end());
+        bindLength.resize(edges.size());
+        for (size_t i = 0; i < edges.size(); ++i) {
+            bindLength[i] = (mesh->vertices[edges[i].first].position -
+                             mesh->vertices[edges[i].second].position)
+                                .length();
+        }
+    }
+
+    std::vector<float> strain(const HumanoidVariant& variant, const Pose& pose) const {
+        Mat4 palette[kJointCount];
+        buildSkinPalette(variant, pose, palette);
+        MeshData posed;
+        skinMesh(*mesh, palette, posed);
+        std::vector<float> out(edges.size(), 0.0f);
+        for (size_t i = 0; i < edges.size(); ++i) {
+            if (bindLength[i] < 1e-6f) continue;
+            const float len = (posed.vertices[edges[i].first].position -
+                               posed.vertices[edges[i].second].position)
+                                  .length();
+            out[i] = std::fabs(len / bindLength[i] - 1.0f);
+        }
+        return out;
+    }
+};
+
+float worstOf(const std::vector<float>& v) {
+    float w = 0.0f;
+    for (float x : v) w = std::max(w, x);
+    return w;
+}
+
+}  // namespace
+
+MGE_TEST(layering_does_not_shear_the_real_skinned_body) {
+    const HumanoidVariant variant;
+    const Skeleton skeleton = buildSkeleton(variant);
+    SkinProbe probe;
+    probe.build();
+    MGE_CHECK(probe.mesh->vertices.size() > 1000);  // the real body, not a stub
+    MGE_CHECK(probe.edges.size() > 3000);
+
+    // What the shipped walk cycle does to this skin, all by itself. Everything
+    // below is judged against this rather than against zero.
+    LocomotionAnimator anim;
+    for (int f = 0; f < 180; ++f) anim.update(1.0f / 60.0f, 1.6f);
+    Pose walk;
+    anim.samplePose(walk);
+    const std::vector<float> walkStrain = probe.strain(variant, walk);
+    const float walkWorst = worstOf(walkStrain);
+    MGE_CHECK(walkWorst > 0.0f);
+
+    float worstExcess = 0.0f;
+    const UseArchetype kSampled[] = {UseArchetype::Swing, UseArchetype::Chop,
+                                     UseArchetype::Thrust};
+    for (UseArchetype archetype : kSampled) {
+        UseMotion motion;
+        motion.archetype = archetype;
+        for (int step = 0; step <= 4; ++step) {
+            Pose action;
+            sampleUseArchetype(motion, static_cast<float>(step) / 4.0f, action);
+            const std::vector<float> actionStrain = probe.strain(variant, action);
+
+            LayeredPose layered;
+            layered.reset(walk);
+            layered.addLayer(action, useArchetypeMask(skeleton, motion), 1.0f);
+            const std::vector<float> layeredStrain = probe.strain(variant, layered.result());
+
+            for (size_t i = 0; i < probe.edges.size(); ++i) {
+                const float excess =
+                    layeredStrain[i] - std::max(walkStrain[i], actionStrain[i]);
+                worstExcess = std::max(worstExcess, excess);
+            }
+        }
+    }
+    printf("  skin shear: locomotion's own worst edge strain %.3f; worst excess ADDED by "
+           "layering %.3f\n",
+           walkWorst, worstExcess);
+    // Layering must not distort the skin more than the walk cycle already does.
+    MGE_CHECK(worstExcess < walkWorst);
+}

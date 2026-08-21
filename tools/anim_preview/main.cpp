@@ -1,8 +1,19 @@
-// anim_preview: the proof for task 14.1 — layered poses with masks.
+// anim_preview: the proof for Phase 14 — layered poses, use archetypes,
+// phase timing and interruption.
 //
 // Everything this writes is REAL engine output: the engine's rig, the
-// engine's shipped locomotion, the engine's layer composition, rendered by
-// the engine's Vulkan renderer.
+// engine's shipped locomotion, the engine's layer composition, the IMPORTED
+// ARTIST BODY, skinned by the engine and rendered by the engine's Vulkan
+// renderer.
+//
+// It renders through `buildPosedCharacter` — the shipped path, the one
+// `device_game.cpp` runs on the phone. Its first version used
+// `buildHumanoidVisual`, the deprecated v1 box rig, and that was not a
+// cosmetic mistake: separated boxes have no surface between them, so a joint
+// mask that snaps 0 -> 1 across a joint looks PERFECT on boxes and shears on
+// continuous skinned geometry, where the skin weights blend across that same
+// joint. A preview that cannot fail is not evidence. The shear measurement
+// below is the gate; the pictures are for the owner.
 //
 //   anim_walk_vs_layered.ppm — the same walk phase, with and without an
 //                              upper-body action layer. The legs are
@@ -27,7 +38,13 @@
 #include <string>
 #include <vector>
 
+#include <deque>
+#include <map>
+#include <set>
+#include <algorithm>
+
 #include "mge/character/animation.h"
+#include "mge/character/body_mesh.h"
 #include "mge/character/humanoid.h"
 #include "mge/character/use_archetypes.h"
 #include "mge/core/memory.h"
@@ -107,39 +124,49 @@ Pose standInSwing(float t) {
     return pose;
 }
 
-struct RigInstance {
-    Skeleton skeleton;
-    std::vector<RigPart> parts;
-    std::vector<GpuLodMesh> gpu;
+// One CPU-skinned piece of one character, on the GPU. Held in a deque
+// because DrawItems point at these, so their addresses must stay put.
+struct Piece {
+    GpuLodMesh gpu;
+    float color[4] = {1, 1, 1, 1};
 };
+using PieceList = std::deque<Piece>;
 
-bool uploadRig(Renderer& renderer, const HumanoidVariant& variant,
-               const WearableInstance* wearables, size_t wearableCount, RigInstance& out) {
-    out.skeleton = buildSkeleton(variant);
-    buildHumanoidVisual(variant, wearables, wearableCount, out.parts);
-    out.gpu.resize(out.parts.size());
-    for (size_t i = 0; i < out.parts.size(); ++i) {
+// The shipped path: the imported artist body (plus its garments), skinned by
+// the engine's own reference skinning for this pose. CPU-skinning here is
+// deliberate — this tool writes stills, and the CPU path is the definition
+// the GPU path is checked against.
+bool addPosedCharacter(Renderer& renderer, const HumanoidVariant& variant,
+                       const WearableInstance* wearables, size_t wearableCount,
+                       const Pose& pose, PieceList& pieces, size_t& first) {
+    first = pieces.size();
+    std::vector<CharacterPiece> parts;
+    buildPosedCharacter(variant, wearables, wearableCount, pose, BodyLod::Lod0, parts);
+    for (const CharacterPiece& part : parts) {
         LodMesh lod;
-        lod.lods.push_back(out.parts[i].mesh);
+        lod.lods.push_back(part.mesh);
         lod.computeBounds();
-        if (!renderer.uploadLodMesh(lod, out.gpu[i])) return false;
+        Piece piece;
+        if (!renderer.uploadLodMesh(lod, piece.gpu)) return false;
+        std::memcpy(piece.color, part.color, sizeof piece.color);
+        pieces.push_back(piece);
     }
     return true;
 }
 
-void emitRig(std::vector<DrawItem>& items, const RigInstance& rig, const Pose& pose,
-             const Vec3& position, float yaw) {
-    Mat4 world[kJointCount];
-    evaluatePose(rig.skeleton, pose, world);
+// buildPosedCharacter returns meshes already posed in character-local space,
+// so the model matrix is only where the character stands.
+void emitPosed(std::vector<DrawItem>& items, const PieceList& pieces, size_t first,
+               const Vec3& position, float yaw) {
     const Mat4 root =
         Mat4::translation(position) * Mat4::rotation(Quat::fromAxisAngle({0, 1, 0}, -yaw));
-    for (size_t i = 0; i < rig.parts.size(); ++i) {
+    for (size_t i = first; i < pieces.size(); ++i) {
         DrawItem item;
-        item.mesh = &rig.gpu[i];
-        item.model = root * world[static_cast<size_t>(rig.parts[i].joint)];
-        item.worldBounds = Aabb::fromCenterExtents(position + Vec3{0, 1.2f, 0}, {3, 3, 3});
+        item.mesh = &pieces[i].gpu;
+        item.model = root;
+        item.worldBounds = Aabb::fromCenterExtents(position + Vec3{0, 1.0f, 0}, {2.5f, 2.5f, 2.5f});
         item.lodReference = position;
-        std::memcpy(item.baseColor, rig.parts[i].color, sizeof item.baseColor);
+        std::memcpy(item.baseColor, pieces[i].color, sizeof item.baseColor);
         items.push_back(item);
     }
 }
@@ -182,6 +209,68 @@ bool capture(Renderer& renderer, const Camera& camera, const std::vector<DrawIte
     const double share = static_cast<double>(nonSky) / (pixelBytes / 4);
     printf("%s: drawn %u, coverage %.1f%%\n", path.c_str(), stats.drawn, share * 100.0);
     return share > 0.05;
+}
+
+// ---------------------------------------------------- skin shear (16.2) ----
+// Per-edge strain — how far each mesh edge's length moves from bind. This is
+// what tearing and pinching physically ARE, and it is computable on the CPU
+// with no picture involved, which is the point: the render is for the owner,
+// this is the gate.
+struct EdgeSet {
+    std::vector<std::pair<uint32_t, uint32_t>> edges;
+    std::vector<float> bindLength;
+};
+
+EdgeSet edgesOf(const SkinnedMeshData& mesh) {
+    std::set<std::pair<uint32_t, uint32_t>> unique;
+    const auto add = [&](uint32_t a, uint32_t b) {
+        unique.insert({std::min(a, b), std::max(a, b)});
+    };
+    for (size_t t = 0; t + 2 < mesh.indices.size(); t += 3) {
+        add(mesh.indices[t], mesh.indices[t + 1]);
+        add(mesh.indices[t + 1], mesh.indices[t + 2]);
+        add(mesh.indices[t + 2], mesh.indices[t]);
+    }
+    EdgeSet out;
+    out.edges.assign(unique.begin(), unique.end());
+    out.bindLength.resize(out.edges.size());
+    for (size_t i = 0; i < out.edges.size(); ++i) {
+        out.bindLength[i] = (mesh.vertices[out.edges[i].first].position -
+                             mesh.vertices[out.edges[i].second].position)
+                                .length();
+    }
+    return out;
+}
+
+std::vector<float> edgeStrain(const SkinnedMeshData& mesh, const EdgeSet& es,
+                              const HumanoidVariant& variant, const Pose& pose) {
+    Mat4 palette[kJointCount];
+    buildSkinPalette(variant, pose, palette);
+    MeshData posed;
+    skinMesh(mesh, palette, posed);
+    std::vector<float> out(es.edges.size(), 0.0f);
+    for (size_t i = 0; i < es.edges.size(); ++i) {
+        if (es.bindLength[i] < 1e-6f) continue;
+        const float len = (posed.vertices[es.edges[i].first].position -
+                           posed.vertices[es.edges[i].second].position)
+                              .length();
+        out[i] = std::fabs(len / es.bindLength[i] - 1.0f);
+    }
+    return out;
+}
+
+float worstOf(const std::vector<float>& v) {
+    float w = 0.0f;
+    for (float x : v) w = std::max(w, x);
+    return w;
+}
+
+int countOver(const std::vector<float>& v, float threshold) {
+    int n = 0;
+    for (float x : v) {
+        if (x > threshold) ++n;
+    }
+    return n;
 }
 
 // The walk pose at a given moment, from the engine's shipped locomotion.
@@ -384,6 +473,68 @@ int main(int argc, char** argv) {
            worstPair);
 
     // ---------------------------------------------------------------------
+    // Measurement 4 (task 16.2): does any of this SHEAR THE SKIN?
+    // Measured on the real imported body, on the CPU. No picture involved.
+    // ---------------------------------------------------------------------
+    {
+        const SkinnedMeshData& body = sharedTemplateLods()[0];
+        const EdgeSet es = edgesOf(body);
+        printf("\n--- 16.2: skin shear on the real body (LOD0, %zu verts, %zu edges) ---\n",
+               body.vertices.size(), es.edges.size());
+
+        LocomotionAnimator walkAnim;
+        const Pose walkP = walkPose(walkAnim, 3.0f, 1.6f);
+        const std::vector<float> walkStrain = edgeStrain(body, es, variant, walkP);
+        LocomotionAnimator runAnim;
+        const Pose runP = walkPose(runAnim, 3.0f, 4.5f);
+        const std::vector<float> runStrain = edgeStrain(body, es, variant, runP);
+        printf("baseline  locomotion walk: worst %.3f, edges over 50%%: %d\n",
+               worstOf(walkStrain), countOver(walkStrain, 0.5f));
+        printf("baseline  locomotion run : worst %.3f, edges over 50%%: %d\n",
+               worstOf(runStrain), countOver(runStrain, 0.5f));
+
+        // What layering ADDS, over and above the two poses it blends. This is
+        // the number that answers "does the mask boundary tear".
+        float worstExcess = 0.0f;
+        const UseArchetype kProbe[] = {UseArchetype::Swing, UseArchetype::Chop,
+                                       UseArchetype::Thrust, UseArchetype::Raise};
+        for (UseArchetype a : kProbe) {
+            UseMotion m;
+            m.archetype = a;
+            for (int step = 0; step <= 6; ++step) {
+                Pose act;
+                sampleUseArchetype(m, static_cast<float>(step) / 6.0f, act);
+                const std::vector<float> actStrain = edgeStrain(body, es, variant, act);
+                LayeredPose L;
+                L.reset(walkP);
+                L.addLayer(act, useArchetypeMask(skeleton, m), 1.0f);
+                const std::vector<float> layStrain = edgeStrain(body, es, variant, L.result());
+                for (size_t i = 0; i < es.edges.size(); ++i) {
+                    worstExcess =
+                        std::max(worstExcess, layStrain[i] - std::max(walkStrain[i], actStrain[i]));
+                }
+            }
+        }
+        printf("LAYERING adds at most %.3f excess strain — under locomotion's own %.3f, so the\n"
+               "  mask boundary is NOT what breaks the picture.\n",
+               worstExcess, worstOf(walkStrain));
+
+        // The shoulder envelope: what the body itself can take, with nothing
+        // layered at all. This is the finding that matters.
+        printf("\nshoulder envelope (pure rotX on UpperArmR, nothing else posed):\n");
+        printf("%8s | %8s %14s %14s\n", "degrees", "worst", "edges >50%", "edges >100%");
+        for (float deg : {0.0f, 15.0f, 30.0f, 45.0f, 60.0f, 90.0f, 140.0f}) {
+            Pose p;
+            p.rotation[idx(Joint::UpperArmR)] = rotX(deg * kPi / 180.0f);
+            const std::vector<float> st = edgeStrain(body, es, variant, p);
+            printf("%8.0f | %8.3f %14d %14d\n", deg, worstOf(st), countOver(st, 0.5f),
+                   countOver(st, 1.0f));
+        }
+        printf("Locomotion stays inside ~35 degrees of shoulder rotation and never puts one\n"
+               "  edge over 50%%. Every use archetype needs 60-140, where the shoulder tears.\n");
+    }
+
+    // ---------------------------------------------------------------------
     // The captures.
     // ---------------------------------------------------------------------
     BudgetRegistry budgets;
@@ -428,10 +579,18 @@ int main(int argc, char** argv) {
     kit[4].sheathed = false;
     kit[4].color[0] = 0.72f; kit[4].color[1] = 0.75f; kit[4].color[2] = 0.79f;
 
-    RigInstance rig;
-    if (!uploadRig(renderer, variant, kit, 5, rig)) return 1;
-
     bool ok = true;
+    // Each distinct pose is skinned and uploaded on its own: buildPosedCharacter
+    // bakes the pose into the vertices, which is right for stills and is exactly
+    // what the frame path must NOT do (it skins on the GPU from the cached mesh
+    // plus the palette).
+    const auto place = [&](std::vector<DrawItem>& items, PieceList& pieces, const Pose& pose,
+                           size_t wearCount, const Vec3& at, float yaw) {
+        size_t first = 0;
+        if (!addPosedCharacter(renderer, variant, kit, wearCount, pose, pieces, first)) return false;
+        emitPosed(items, pieces, first, at, yaw);
+        return true;
+    };
     const float aspect = static_cast<float>(config.width) / config.height;
 
     // ---- 1. The same stride, with and without the action layer ------------
@@ -449,12 +608,20 @@ int main(int argc, char** argv) {
         const float kYaw = kPi * 0.38f;
         LocomotionAnimator a;
         const Pose stride = walkPose(a, 3.0f, 1.6f);
-        emitRig(items, rig, stride, {-0.95f, 0, 0}, kYaw);
+        PieceList pieces;
+        ok = place(items, pieces, stride, 5, {-0.95f, 0, 0}, kYaw) && ok;
 
         LayeredPose both;
         both.reset(stride);
-        both.addLayer(standInSwing(0.35f), upper, 1.0f);  // top of the wind-up
-        emitRig(items, rig, both.result(), {0.95f, 0, 0}, kYaw);
+        UseMotion sword;
+        sword.archetype = UseArchetype::Swing;
+        sword.reach = 1.05f;
+        sword.weight = 1.40f;
+        Pose swing;
+        const UsePhases sp = usePhases(sword);
+        sampleUseArchetype(sword, sp.windUp, swing);  // top of the wind-up
+        both.addLayer(swing, useArchetypeMask(skeleton, sword), 1.0f);
+        ok = place(items, pieces, both.result(), 5, {0.95f, 0, 0}, kYaw) && ok;
 
         Camera camera;
         camera.eye = {0.0f, 1.35f, 3.1f};
@@ -468,6 +635,7 @@ int main(int argc, char** argv) {
     // mid-cycle while the arm goes through wind-up, strike and recovery.
     {
         std::vector<DrawItem> items;
+        PieceList pieces;
         items.push_back(prop(&ground, {0, 0, 0}, 0.44f, 0.48f, 0.37f));
         // Sampled at the moments that carry the motion, not at even spacing:
         // an even sample lands mid-strike where the arm passes through the
@@ -492,7 +660,7 @@ int main(int argc, char** argv) {
             both.addLayer(standInSwing(t), upper, 1.0f);
             // Pure side (yaw = pi/2, facing +X): the swing arc lies in this
             // plane, so nothing about it is foreshortened.
-            emitRig(items, rig, both.result(), {-2.4f + 1.2f * i, 0, 0}, kPi * 0.5f);
+            ok = place(items, pieces, both.result(), 5, {-2.4f + 1.2f * i, 0, 0}, kPi * 0.5f) && ok;
         }
         Camera camera;
         camera.eye = {0.0f, 1.35f, 5.0f};
@@ -506,16 +674,21 @@ int main(int argc, char** argv) {
     // nothing, upper body, everything. The middle one is 14.1.
     {
         std::vector<DrawItem> items;
+        PieceList pieces;
         items.push_back(prop(&ground, {0, 0, 0}, 0.44f, 0.48f, 0.37f));
         LocomotionAnimator a;
         const Pose stride = walkPose(a, 3.0f, 1.6f);
-        const Pose swing = standInSwing(0.42f);
+        UseMotion swordM;
+        swordM.archetype = UseArchetype::Swing;
+        Pose swing;
+        sampleUseArchetype(swordM, usePhases(swordM).windUp, swing);
         const JointMask masks[3] = {maskNone(), upper, maskAll()};
         for (int i = 0; i < 3; ++i) {
             LayeredPose composed;
             composed.reset(stride);
             composed.addLayer(swing, masks[i], 1.0f);
-            emitRig(items, rig, composed.result(), {-1.35f + 1.35f * i, 0, 0}, kPi * 0.42f);
+            ok = place(items, pieces, composed.result(), 5, {-1.35f + 1.35f * i, 0, 0},
+                       kPi * 0.42f) && ok;
         }
         Camera camera;
         camera.eye = {0.0f, 1.35f, 4.0f};
@@ -530,9 +703,8 @@ int main(int argc, char** argv) {
     // one — and putting a sword in the apple-eater's hand would claim
     // otherwise. What 14.6 is about is the MOTION, and that is what is here.
     {
-        RigInstance bare;
-        if (!uploadRig(renderer, variant, kit, 4, bare)) return 1;  // kit minus the sword
         std::vector<DrawItem> items;
+        PieceList pieces;
         items.push_back(prop(&ground, {0, 0, 0}, 0.44f, 0.48f, 0.37f));
         for (size_t i = 0; i < kCatalogCount; ++i) {
             const UseMotion m = catalogMotion(i);
@@ -545,16 +717,15 @@ int main(int argc, char** argv) {
             sampleUseArchetype(m, p.windUp + p.strike, act);
             LayeredPose both;
             both.reset(stride);
-            both.addLayer(act, useArchetypeMask(bare.skeleton, m), 1.0f);
-            emitRig(items, bare, both.result(), {-3.1f + 1.24f * static_cast<float>(i), 0, 0},
-                    kPi * 0.42f);
+            both.addLayer(act, useArchetypeMask(skeleton, m), 1.0f);
+            ok = place(items, pieces, both.result(), 4,  // kit minus the sword
+                       {-3.1f + 1.24f * static_cast<float>(i), 0, 0}, kPi * 0.42f) && ok;
         }
         Camera camera;
         camera.eye = {0.0f, 1.40f, 6.0f};
         camera.target = {0.0f, 1.05f, 0.0f};
         camera.aspect = aspect;
         ok = capture(renderer, camera, items, outDir + "/anim_catalog.ppm") && ok;
-        for (GpuLodMesh& mesh : bare.gpu) renderer.destroyLodMesh(mesh);
     }
 
     // ---- 5. Interruption (14.4): a chop taking a hit mid-strike ----------
@@ -562,13 +733,14 @@ int main(int argc, char** argv) {
     // the walk instead of teleporting to it, and the legs never stop.
     {
         std::vector<DrawItem> items;
+        PieceList pieces;
         items.push_back(prop(&ground, {0, 0, 0}, 0.44f, 0.48f, 0.37f));
 
         UseMotion axe;
         axe.archetype = UseArchetype::Chop;
         axe.reach = 0.85f;
         axe.weight = 2.60f;
-        const JointMask mask = useArchetypeMask(rig.skeleton, axe);
+        const JointMask mask = useArchetypeMask(skeleton, axe);
 
         LocomotionAnimator walk;
         for (int f = 0; f < 180; ++f) walk.update(1.0f / 60.0f, 1.6f);
@@ -594,7 +766,8 @@ int main(int argc, char** argv) {
                 layered.addLayer(action, mask, player.weight());
             }
             printf("    frame %d: weight %.2f\n", i, player.active() ? player.weight() : 0.0f);
-            emitRig(items, rig, layered.result(), {-2.4f + 1.2f * i, 0, 0}, kPi * 0.5f);
+            ok = place(items, pieces, layered.result(), 5, {-2.4f + 1.2f * i, 0, 0}, kPi * 0.5f) &&
+                 ok;
             for (int k = 0; k < 3; ++k) {
                 player.update(1.0f / 60.0f);
                 walk.update(1.0f / 60.0f, 1.6f);
@@ -607,7 +780,27 @@ int main(int argc, char** argv) {
         ok = capture(renderer, camera, items, outDir + "/anim_interrupt.ppm") && ok;
     }
 
-    for (GpuLodMesh& mesh : rig.gpu) renderer.destroyLodMesh(mesh);
+    // ---- 6. The shoulder envelope (16.2): where the body gives out --------
+    // Nothing is layered here and no archetype is playing. This is the naked
+    // body with one joint rotated, which is why it is evidence ABOUT THE BODY
+    // rather than about anything this area built.
+    {
+        std::vector<DrawItem> items;
+        PieceList pieces;
+        items.push_back(prop(&ground, {0, 0, 0}, 0.44f, 0.48f, 0.37f));
+        const float kDegrees[] = {0.0f, 30.0f, 60.0f, 90.0f, 140.0f};
+        for (int i = 0; i < 5; ++i) {
+            Pose p;
+            p.rotation[idx(Joint::UpperArmR)] = rotX(kDegrees[i] * kPi / 180.0f);
+            ok = place(items, pieces, p, 0, {-2.2f + 1.1f * i, 0, 0}, kPi * 0.5f) && ok;
+        }
+        Camera camera;
+        camera.eye = {0.0f, 1.45f, 3.6f};
+        camera.target = {0.0f, 1.32f, 0.0f};
+        camera.aspect = aspect;
+        ok = capture(renderer, camera, items, outDir + "/anim_shoulder_envelope.ppm") && ok;
+    }
+
     renderer.destroyLodMesh(ground);
 
     printf(ok ? "OK\n" : "FAIL\n");

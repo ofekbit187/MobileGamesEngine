@@ -3,7 +3,37 @@
 **Session:** session_01TiRzQ9qPRKyvVbtW9akJLV
 **Branch:** `claude/animation-layered-poses`
 **State:** ready
-**Updated:** 2026-08-21 — 14.1, 14.2 landed; 14.3, 14.4, 14.6 partial; 14.5 blocked on a seam
+**Updated:** 2026-08-21 — 16.2 done: `anim_preview` is on the real skinned body, and 14.1 is
+re-verified through skinning. Layering is clean; the shoulder is not.
+
+## 16.2 — you were right to stop the capture, and the answer is not what either of us expected
+
+`anim_preview` now renders through `buildPosedCharacter`. Every capture below is the imported
+artist body. I took the method note seriously and did not just re-render: I built a gate that
+**cannot pass by looking nice**, measuring per-edge strain on the CPU — how far each mesh edge's
+length moves from bind, which is what tearing and pinching physically *are*. New permanent test:
+`layering_does_not_shear_the_real_skinned_body`.
+
+**Layering is clean.** The number that matters is what layering *adds* over the two poses it
+blends — `strain(layered) − max(strain(walk), strain(action))`. Worst case **0.216**, against
+locomotion's own worst of **0.311**. Blending two poses distorts this skin *less than the walk
+cycle already does by itself*. 14.1 is verified on the thing it runs on.
+
+**The feathering you predicted is not the fix — it is very slightly the wrong direction.**
+Measured across 180 pose pairs (5 archetypes × 9 timeline points × 4 walk phases):
+
+| spine feather | 0.00 | 0.25 | 0.50 | 0.75 | 1.00 |
+|---|---|---|---|---|---|
+| worst excess strain | **0.198** | 0.202 | 0.206 | 0.211 | 0.228 |
+
+Monotone, and the hard cut is the *best* of them. The reason is that the body's spine and chest
+weights already blend properly, so the skin absorbs the difference wherever you put it. I have
+corrected the comment in `animation.h`, which claimed the feather prevented a tear — it does not,
+and I should not have asserted that from a box-rig render. It stays as what it actually is: a
+look control for how much torso joins the action.
+
+**What does break the picture is the shoulder, and it is not this area's.** See the seam request
+below. It is the first thing I would fix in the whole engine right now.
 
 ## Last landed
 
@@ -77,30 +107,109 @@ rig nor `items.h`, so nothing of mine conflicted). `scripts/verify.sh` then exit
 
 216 rather than 204 because the merge brought in the wearables session's new gate tests.
 
-### Captures worth the owner's eye — yes, one in particular
+### Captures — all now on the real skinned body
 
-All four are ● real engine output, written by `tools/anim_preview` into the build dir.
-**`anim_walk_vs_layered.ppm` is the one to show him.** Two characters at the *identical*
-walk phase: the left one walking, the right one walking and swinging, sword raised. The
-legs are bit-identical between them — that is the thing that could not happen yesterday,
-and it is visible at a glance rather than needing a number.
+All ● real engine output, written by `tools/anim_preview` (which `ctest` runs, so
+`scripts/verify.sh` regenerates every one of them). **Every capture is the imported artist body
+through `buildPosedCharacter`.** None of them use the box rig any more.
 
-- `anim_walk_vs_layered.ppm` — **the headline.** Same stride, one of them swinging.
+- **`anim_walk_vs_layered.ppm` — still the headline, and now it is also the evidence for the
+  shoulder problem.** Two characters at the *identical* walk phase: the left walking, the right
+  walking and acting. The legs are bit-identical between them — the thing that could not happen
+  before. And the right one's shoulder has visibly torn, which is exactly what the box rig would
+  have hidden.
+- `anim_shoulder_envelope.ppm` — the naked body with one joint rotated to 0/30/60/90/140 degrees
+  and nothing else posed. Evidence *about the body*, not about anything this area built.
 - `anim_interrupt.ppm` — a chop taking a hit mid-strike, easing back over five frames
   (layer weight 1.00 → 0.77 → 0.55 → 0.32 → 0.09) while the legs never stop.
 - `anim_swing_strip.ppm` — one action across its timeline, walking throughout.
 - `anim_mask_scope.ppm` — the same action through three masks. The right-hand figure
-  (mask = everything) has its stride destroyed, which is what the old whole-body
-  behaviour did to every action.
-- `anim_catalog.ppm` — the six items. Rendered **bare-handed on purpose**: item meshes
-  beyond the parametric sword do not exist, and putting one in the apple-eater's hand
-  would claim otherwise.
+  (mask = everything) has its stride destroyed, which is what a whole-body action does.
+- `anim_catalog.ppm` — the six items, bare-handed. Not a stylistic choice: held items are not
+  drawn on the real body anywhere in the engine (see finding 2 above).
+
+**On whether to show the owner anything yet — my recommendation is that you hold the headline
+capture.** He has been waiting to see a character swing while walking, and the composition is
+right, but the shoulder tears in the same frame. Showing it now means showing him a bug in the
+body rather than the feature. I would rather you had the shoulder ruling first and then one clean
+picture. That is your call and not mine — you know what he has been told and I do not.
 
 I have not published anything and will not — the board is yours.
 
 ## Needs from the architect
 
-### 1. SEAM REQUEST — archetype data on `ItemUse` (this is 14.5, and it also unblocks 14.3 and 14.6)
+### 1. SEAM REQUEST — the shoulder cannot take an action-scale rotation (this is the blocker)
+
+```
+SEAM:  Rig — `Joint` enum, `Skeleton`, bind offsets, 17-joint palette, and the skin weights
+       the import path produces (AGENTS.md §4; Body ⇄ Wearables, Renderer)
+NEED:  A character needs to be able to raise an arm. Measured on the shipped body
+       (`humanoid_template_lod0.mgeskin`), NAKED, with nothing layered and no archetype
+       playing — one joint rotated and nothing else:
+
+         shoulder pitch |  worst edge strain | edges >50% | edges >100%
+                 15 deg |              0.352 |          0 |           0
+                 30 deg |              0.690 |          5 |           0
+                 45 deg |              1.003 |         11 |           2
+                 60 deg |              1.479 |         23 |           6
+                 90 deg |              2.413 |         47 |          21
+                140 deg |              3.513 |         71 |          32
+
+       For scale: the shipped WALK puts zero edges over 50%, and the shipped RUN also puts
+       zero over 50%. Locomotion stays inside roughly 35 degrees of shoulder rotation, which
+       is exactly why eight phases of walking never exposed this. Every use archetype needs
+       60-140 degrees, and all nine tear.
+
+       Two structural facts behind it, both measured rather than guessed:
+         * There is NO CLAVICLE. `UpperArmR`'s parent is `Chest` directly, so the entire
+           shoulder rotation loads one joint — the worst case for linear-blend skinning.
+         * The shoulder weights have no falloff. 53 of the 195 vertices influenced by
+           `UpperArmR` are bound to it at weight exactly 1.00, and they sit adjacent to
+           vertices that are 49% Spine. Adjacent vertices jump from fully-arm to
+           mostly-torso with nothing in between, so the surface between them is what tears.
+
+       The visible result is in `anim_walk_vs_layered.ppm`: the walking figure's shoulder is
+       clean, and the acting figure's tunic sleeve has torn open into inverted triangles.
+       Same body, same frame, same skinning — only the shoulder angle differs.
+BREAKS: Depends entirely on which option you pick — see below. One is free, one is a
+       rig-version event, one is a renderer change.
+PROPOSAL: I am NOT proposing a specific fix, because the rig and the skin weights are the
+       character asset pipeline's and the choice is theirs. The three options, with what
+       each costs, so the decision has numbers under it:
+
+       (a) REWEIGHT THE SHOULDER — give the deltoid/armpit a proper falloff instead of a
+           hard 1.00 boundary. No rig change, no new joint, no shader change, no
+           `Joint` enum edit. Re-bakes the body and re-bakes garments (the body hash
+           changes, which the pipeline already refuses loudly, ADR 0008). Cheapest by far
+           and it is where I would start.
+       (b) ADD A CLAVICLE JOINT — anatomically the real answer, and it halves the rotation
+           any single joint has to carry. But it is 17 -> 18 joints: a rig-version event
+           that breaks every garment binding AND the skinning shader's palette size. Your
+           ruling, explicitly, per §4. I have NOT done this and would not.
+       (c) DUAL-QUATERNION SKINNING — fixes the collapse generally rather than per-joint,
+           but changes `skinMesh()`, which is the definition GPU skinning must match, so it
+           is a renderer + body change landing together with `mge_skin_test` reproving it.
+
+       Until one of these lands, every upper-body action in Phase 14 will look torn at the
+       shoulder on the real body, however correct the pose composition is. The animation
+       side is not blocked from BUILDING — 14.1-14.4 are done and measured — but it is
+       blocked from LOOKING RIGHT, and no amount of work on my side reaches it.
+```
+
+### 2. Held items are not drawn on the real body — anywhere, including the phone
+
+Not a request, a finding, and it explains something in my first capture. `buildPosedCharacter`
+skips held items (`if (garment.vertices.empty()) continue; // held items are not garments`), and
+`device_game.cpp` does the identical thing at its line 543. So **no character in the shipped
+engine has ever held anything.** The sword in my earlier capture existed only because the box rig
+generated one as a rigid part — it was an artifact of the dead path, not a feature I lost.
+
+This is wearables' (§6.3 — held items and grips). It also means my charter's "the sword teleports
+between hand and back" is understating the gap: there is no sword in either place yet. Flagging
+it because Phase 14's whole point is weapons, and 14.6's catalog capture is bare-handed for this
+reason rather than by preference.
+
+### 3. SEAM REQUEST — archetype data on `ItemUse` (this is 14.5, and it also unblocks 14.3 and 14.6)
 
 ```
 SEAM:  Item use — `ItemUse`, `ItemUseRegistry` (AGENTS.md §4; Gameplay ⇄ UI ⇄ People)
@@ -138,7 +247,7 @@ PROPOSAL: Add four fields to `ItemUse`, defaulted so every existing item is unaf
        I have NOT written any of this. `items.h` is gameplay's and this is a seam.
 ```
 
-### 2. A rig observation — not a request, and explicitly not a change I would make
+### 4. A rig observation — not a request, and explicitly not a change I would make
 
 Measuring the archetypes turned up something in the rig that I want on your desk rather
 than in my code. In `buildSkeleton`, the `*L` joints are placed at **positive** local X and
@@ -160,7 +269,7 @@ every weight and garment binding for a cosmetic gain. **What I would suggest is 
 documentation in the body contract** recording which side `*L` and `*R` are on, so the fact
 is written down once instead of rediscovered. Your ruling, and theirs.
 
-### 3. The ownership map and my charter disagree on paper
+### 5. The ownership map and my charter disagree on paper
 
 `AGENTS.md` §3 still maps **all** of `engine/*/character/**` — "(body, rig, variants,
 skinning, animation)" — to the character asset pipeline, and §2's roster has no animation
@@ -176,7 +285,7 @@ row, or you tell me the split is meant to be temporary and this all reverts to t
 character asset pipeline when that area next runs. Yours to decide; I have not edited
 `AGENTS.md`.
 
-### 4. Two small things I did take, flagged for the record
+### 6. Two small things I did take, flagged for the record
 
 - **One line in the root `CMakeLists.txt`** registering `tools/anim_preview` (mine under
   AGENTS.md §3, "`tools/<demo>/**` — whoever the demo demonstrates"). Without it the tool
