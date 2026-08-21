@@ -61,7 +61,76 @@ What *is* solid: the human counter-rotates on all three views (girdle correlatio
 each), and the engine's pelvis does not rotate on any. **Nothing measured here threatens the rig
 freeze**, and I will bring the amplitude back after 18.2/18.3 rather than before.
 
+## 18.2 — partial, and the assumption underneath it did not survive
+
+`docs/research/multiview-triangulation.md`. **Delivered:** a held-out validation protocol
+(`tools/mocap/multiview.py`) and the measured noise floor — each view's own 3D explains its own
+image to **3.1–5.1% of torso length**. **Not delivered: a 3D skeleton better than a single view.**
+
+```
+held out         view A   view B   A+B fused   verdict
+threequarter       15.7      7.9         8.4   single wins
+front               9.6     11.5        10.1   single wins
+side                7.8     20.0        11.7   single wins
+```
+
+Three methods, none of which beat the best single view on any fold: visibility-weighted
+averaging, anisotropic fusion that distrusts each view's depth axis, and direct least-squares
+triangulation from the 2D landmarks with bundle-adjusted rotations. Fused skeletons land
+*between* their inputs — the signature of averaging **biased** errors rather than independent
+ones.
+
+**Three of my own intermediate results were wrong, and I am recording them because each looked
+convincing.** Bone-length constancy as a quality metric (it rewards the best-conditioned view
+and never tests depth). A benchmark whose arms were calibrated differently — that one reported
+triangulation as **2.5x and 4.5x better** than a single view, and the margin vanished entirely
+once every arm got a freshly fitted camera. And "the estimator is bad" (26.8%/33.7% self-error),
+which was my harness not fitting the rotation; fitted, it is 4.8%/5.1%.
+
+**I have not built 18.3 on this.** Doing so is the expensive step, and building it on a skeleton
+measurably worse than one view is the mistake worth an hour of measurement to avoid.
+
 ## Needs from the architect
+
+### 1. An approach ruling on 18.2/18.3 — this is the one I am asking for first
+
+```
+SEAM: none yet — this is a method question about charted tasks 18.2 and 18.3,
+      and changing the shape of a charted task is your call, not mine.
+NEED: Permission to replace "triangulate to 3D points, then convert points to
+      rotations" with "fit our 17-joint rig directly to all three views' 2D
+      landmarks", collapsing 18.2 and 18.3 into one step.
+
+      Measured reason: averaging point estimates cannot beat the best of them,
+      and no weighting fixes a bias (0 of 3 folds, three methods). What is
+      missing is a CONSTRAINT, and the obvious one is that these landmarks
+      belong to a body whose bones do not change length. Our rig is exactly
+      that constraint, and we already have it.
+
+      It is also better than the sequence, not merely shorter. 18.3's stated
+      risk is that "limb roll is underdetermined by positions alone" — in a
+      direct rig fit there is no positions-to-rotations stage for roll to be
+      underdetermined in; roll is a rig DOF constrained by three simultaneous
+      views. Proportion mismatch likewise stops being a separate retargeting
+      stage: fitting OUR rig to HIS images resolves it in the fit.
+
+BREAKS: Nothing shipped. 18.2's deliverable changes from "a metric 3D skeleton"
+      to "rig rotations per frame", which is what 18.5 needs anyway — `.mgeanim`
+      stores rotations, so the point cloud was always an intermediate we would
+      have thrown away. The held-out protocol already built scores a rig fit
+      unchanged. Tasks 18.4, 18.5 and 18.6 are untouched.
+RISK I am not hiding: a nonlinear fit over 17 joints per frame can converge to a
+      plausible-looking wrong pose. The held-out reprojection test is what
+      catches that, and it exists and is trusted now — which is what the
+      negative result above bought.
+PROPOSAL: Re-scope 18.2 to "recover per-view cameras and fit the rig to all
+      three views", 18.3 to "constrain and regularise that fit", and I proceed
+      on the direct-fit path. If you would rather I keep pushing on point
+      triangulation, say so and I will — but I would be doing it against a
+      measurement that says averaging is the wrong tool.
+```
+
+### 2. The root-motion seam request from 18.1 — still open, still not blocking
 
 ```
 SEAM: Rig — `Pose`, and the clip format that feeds it (ADR 0018 Ruling 1)
@@ -114,7 +183,9 @@ rather than pick the more expensive option unilaterally.
 
 ## Now
 
-**18.2** — triangulating the three views into one metric 3D skeleton per frame.
+**Holding at 18.2 for the approach ruling above.** While it is outstanding I am on **18.4**
+(foot contact detection and locking), which is independent of how the 3D is recovered — its
+detector is already written and validated against the engine's own animator phase in 18.1.
 
 ## Blocked on
 
@@ -126,7 +197,17 @@ This container had **no repository checked out and no push credential** at sessi
 cloned `ofekbit187/MobileGamesEngine` and attached it before pushing. Recorded in case other
 sessions hit the same thing.
 
-`scripts/verify.sh` currently reports **tier 1 green (`steady-state heap allocations: 0`), tiers
-2 and 3 SKIPPED** — no Android SDK/NDK and no `qemu-user` in this container. I am provisioning
-via `scripts/setup-android-sdk.sh` and will report which tiers actually ran rather than claiming
-three. 18.1 changed no engine code — the only compiled addition is a host analysis tool.
+`scripts/verify.sh` — **all three tiers green** after provisioning this container
+(`scripts/setup-android-sdk.sh`, plus `apt-get install qemu-user-static`; the apt index needed
+an `update` first, which is worth knowing):
+
+```
+=== 1/3 host: build + tests + runner      steady-state heap allocations: 0  (target: 0)
+=== 2/3 arm64 (NDK 27.0.12077973)         226 tests, 0 failed
+                                          steady-state heap allocations: 0  (target: 0)
+=== 3/3 android: assembleDebug            app-debug.apk (5,361,405 bytes)
+=== verification complete
+```
+
+**No engine code has changed on this branch.** Everything landed so far is host analysis tooling
+(`tools/mocap/`, one new `mge_core`-linked executable) and documentation.

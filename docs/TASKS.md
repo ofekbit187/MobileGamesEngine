@@ -512,9 +512,22 @@ with the owner.*
   three views, so it does **not** yet meet ADR 0020's revisit condition — that needs 18.2.
   Tools: `tools/mocap/gait_dump.cpp` (links `mge_core`, runs the real `LocomotionAnimator`
   rather than a model of it), `gait_metrics.py`, `gait_compare.py`
-- [ ] **18.2** Triangulate the three views into one metric 3D skeleton per frame. The views are
+- [~] **18.2** Triangulate the three views into one metric 3D skeleton per frame. The views are
   **simultaneous — one take, one frame** — so temporal sync is free; what remains is relative
   camera pose, solvable from the subject itself across views
+  — **partial**, `docs/research/multiview-triangulation.md`. **Delivered:** the held-out
+  validation protocol (`tools/mocap/multiview.py` — build a skeleton from two views, predict
+  the third), and the measured noise floor any method must beat: each view's own 3D explains
+  its own image to **3.1–5.1% of torso length**. **Not delivered: a 3D skeleton better than a
+  single view.** Combining views beat the best single view on **0 of 3 folds** across three
+  methods (visibility-weighted averaging, anisotropic depth-downweighted fusion, and direct
+  least-squares triangulation from the 2D landmarks with bundle-adjusted rotations) — fused
+  skeletons land *between* the two inputs, which is what averaging does when per-view errors
+  are biased rather than independent. Diagnosis and proposal in the doc: the missing ingredient
+  is a *constraint*, and fitting our own 17-joint rig directly to all three views' 2D landmarks
+  would supply it while collapsing 18.2 and 18.3 into one step that never has a
+  positions→rotations stage. **That is a change of approach to a charted task — raised with the
+  architect in `docs/status/mocap.md`, not taken unilaterally.**
 - [ ] **18.3** Positions → rotations on our 17-joint rig. **This is where quality lives or dies**:
   estimators give joint *positions*, the rig needs *rotations*, and limb roll is underdetermined by
   positions alone. Proportion mismatch is retargeting's job — the filmed man's limbs are not ours
