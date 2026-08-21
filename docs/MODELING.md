@@ -73,7 +73,7 @@ screen at once:
 
 | Content | LOD0 | LOD1 | LOD2 |
 |---|---|---|---|
-| Humanoid body (crowd content) | ≤ 2 200 | ≤ 1 300 | ≤ 650 |
+| Humanoid body (crowd content) | ≤ 2 400 | ≤ 1 300 | ≤ 650 |
 | Wearable / garment | ≤ 900 | ≤ 450 | ≤ 200 |
 | Held item (weapon, tool) | ≤ 400 | ≤ 200 | ≤ 80 |
 | Prop, small (crate, stool) | ≤ 300 | ≤ 150 | — |
@@ -83,6 +83,12 @@ Published guidance for mobile puts hero characters at 5k–20k triangles, and
 recommends staying under ~5k for a steady 60 fps on mid-range Android. These
 budgets sit deliberately below that: this engine draws crowds in an open
 streamed world, and P1 ranks the working set above per-model fidelity.
+
+The humanoid LOD0 cap was raised from 2 200 to 2 400 by ADR 0012, and the
+reasoning generalises: **a crowd does not draw LOD0.** LOD1 and LOD2 are what
+the working set is made of, so those caps are the ones P1 is really defending
+and they do not move. Spend a raise on the near mesh only, and only to buy
+something that is cheap now and impossible later.
 
 Also budgeted:
 

@@ -49,9 +49,12 @@ engine-design event owned by the owner's dictation, not a modeling choice.
   per-joint scale + morph deltas. If a body feature cannot survive per-joint
   scaling, it must be redesigned or expressed as a morph.
 - **B-5 (MUST)** — Triangle budgets at the MODELING.md caps: body
-  **≤ 2 200 / 1 300 / 650** at LOD0/1/2, LODs strictly decreasing,
-  silhouettes matching within 3 %. (The current body ships 2 004/1 164/572 —
-  headroom exists but is not a target.)
+  **≤ 2 400 / 1 300 / 650** at LOD0/1/2, LODs strictly decreasing,
+  silhouettes matching within 3 %. (LOD0 raised from 2 200 by ADR 0012 to fund
+  B-9's authored hairline loop: the crowd draws LOD1/LOD2, so the budget P1
+  actually cares about is unchanged. LOD1 and LOD2 do NOT move — a cap raised at
+  every level would be the standard bending to fit the content. The current body
+  ships 2 200/1 200/560.)
 - **B-6 (MUST)** — Delivered through the engine's import path as
   `SkinnedMeshData` (glTF in): the generator is replaced *behind the same
   interfaces* — nothing downstream may need to know the body is now imported.
