@@ -96,6 +96,12 @@ request (§5), not a quick fix — even when the fix is one line and obviously r
 | `tools/<demo>/**` | whoever the demo demonstrates |
 | `tests/test_<area>.cpp` | the area's owner |
 
+**When an area has no live session, it is not a deadlock** (ADR 0017). The architect assigns the
+change to the session that raised it, recorded in the ruling — on three conditions: the change is
+fully specified by that ruling, it is written down rather than taken silently, and the grant covers
+the named change and nothing adjacent. Ownership exists to stop two correct implementations from
+being incompatible; with no second implementer that risk is zero, and waiting has a real cost.
+
 `engine/include/mge/framework/character.h` is the busiest shared file in the repo: it
 carries universal character mechanisms that four sessions read. Treat every edit to it as
 a seam change.
@@ -281,7 +287,9 @@ far lived in platform glue that headless tests could not reach — closing that 
   | 0013 | Pit clearance (B-24) and covered rims (§9.1) | in use |
   | 0014 | Skin is imported, not painted (owner dictation + reversal) | in use |
   | 0015 | The shoulder: reweight before a rig-version event | in use |
-  | 0016+ | — | available on request |
+  | 0016 | A body is for moving — B-31 posed integrity | in use |
+  | 0017 | ItemUse archetypes; unowned-area rule | in use |
+  | 0018+ | — | available on request |
 - **CMake source lists**: one file per line, alphabetical. Both-added lines are the most
   common merge conflict in this repo.
 - **Shared headers**: append at the documented seam point, don't reorganize. A tidy-up of
