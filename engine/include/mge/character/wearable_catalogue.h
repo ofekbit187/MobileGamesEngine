@@ -36,6 +36,7 @@
 #include <string>
 #include <vector>
 
+#include "mge/character/held_items.h"
 #include "mge/character/humanoid.h"
 
 namespace mge {
@@ -52,6 +53,7 @@ struct WearableDef {
     float thicknessMm = 11.0f;
     float color[4] = {1, 1, 1, 1};
     bool held = false;     // held items attach rigidly; they are not fitted
+    HeldItemDef heldItem;  // meaningful only when `held` — grip, anchors, offset
 
     bool valid() const { return !id.empty() && !mesh.empty(); }
 };
@@ -93,9 +95,15 @@ public:
     void loadFromDirectory(const char* dir);
     void clear();
 
+    // Bumped on every load. Caches keyed by catalogue INDEX must rebuild when
+    // this changes: a reload can reorder rows, so a stale index does not just
+    // miss — it silently names a different garment.
+    uint32_t generation() const { return generation_; }
+
 private:
     std::vector<WearableDef> entries_;
     std::vector<std::string> refusals_;
+    uint32_t generation_ = 0;
 };
 
 // The process-wide catalogue, loaded from `characterAssetDir()` on first use.

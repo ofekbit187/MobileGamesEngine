@@ -195,18 +195,56 @@ WearableParseResult parseWearableDef(const std::string& text, WearableDef& out) 
                 return fail(lineNumber, "held must be `true` or `false`");
             }
             out.held = tokens[1] == "true";
+        } else if (key == "grip") {
+            if (tokens.size() != 2 || !gripTypeFromName(tokens[1].c_str(), out.heldItem.grip)) {
+                return fail(lineNumber,
+                            "grip must be one_handed, two_handed or versatile");
+            }
+        } else if (key == "anchor" || key == "sheath") {
+            AttachPoint point = AttachPoint::HandR;
+            if (tokens.size() != 2 || !attachPointFromName(tokens[1].c_str(), point)) {
+                return fail(lineNumber, "`" + key +
+                                            "` must name an attachment point: hand_r hand_l "
+                                            "back hip_l hip_r");
+            }
+            if (key == "anchor") {
+                out.heldItem.drawn = point;
+            } else {
+                out.heldItem.sheathed = point;
+                out.heldItem.sheathable = true;
+            }
+        } else if (key == "sheathable") {
+            if (tokens.size() != 2 || (tokens[1] != "true" && tokens[1] != "false")) {
+                return fail(lineNumber, "sheathable must be `true` or `false`");
+            }
+            out.heldItem.sheathable = tokens[1] == "true";
+        } else if (key == "grip_offset" || key == "grip_rotate") {
+            if (tokens.size() != 4) {
+                return fail(lineNumber, "`" + key + "` needs three numbers: x y z");
+            }
+            float v[3] = {0, 0, 0};
+            for (int c = 0; c < 3; ++c) {
+                if (!parseFloat(tokens[static_cast<size_t>(c) + 1], v[c])) {
+                    return fail(lineNumber, "`" + key + "` components must be numbers");
+                }
+            }
+            Vec3& target =
+                key == "grip_offset" ? out.heldItem.gripOffset : out.heldItem.gripRotation;
+            target = Vec3{v[0], v[1], v[2]};
         } else {
             return fail(lineNumber, "unknown key `" + key +
                                         "`. Known keys: version id name mesh layer covers "
-                                        "thickness_mm color held");
+                                        "thickness_mm color held grip anchor sheath "
+                                        "sheathable grip_offset grip_rotate");
         }
         if (end >= text.size()) break;
     }
 
     if (!sawVersion) return fail(0, "missing `version 1` — every content file declares one");
     if (out.id.empty()) return fail(0, "missing `id` — the stable name data refers to");
-    if (out.mesh.empty() && !out.held) {
-        return fail(0, "missing `mesh` — a fitted garment needs geometry");
+    if (out.mesh.empty()) {
+        return fail(0, out.held ? "missing `mesh` — a held item needs geometry (a .mgemesh)"
+                                : "missing `mesh` — a fitted garment needs geometry");
     }
     if (!sawCovers && !out.held) {
         return fail(0,
@@ -258,7 +296,9 @@ void WearableCatalogue::clear() {
 }
 
 void WearableCatalogue::loadFromDirectory(const char* dir) {
+    const uint32_t generation = generation_ + 1;
     clear();
+    generation_ = generation;
     if (dir == nullptr) return;
 
     // Sorted, so the catalogue is the same on every machine and a diff of a
