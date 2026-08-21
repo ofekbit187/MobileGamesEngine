@@ -60,6 +60,7 @@ if(NOT ANDROID)
         src/import/gltf_import.cpp
         src/import/gltf_skin_import.cpp
         src/import/garment_fit.cpp
+        src/import/wearable_gates.cpp
     )
     target_link_libraries(mge_import PUBLIC mge_core)
     target_include_directories(mge_import PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/../third_party/cgltf)

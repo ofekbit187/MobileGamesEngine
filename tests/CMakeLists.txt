@@ -33,6 +33,7 @@ if(TARGET mge_import)
         test_garment_fit.cpp
         test_import.cpp
         test_skin_import.cpp
+        test_wearable_gates.cpp
     )
     target_link_libraries(mge_tests PRIVATE mge_import)
     target_compile_definitions(mge_tests PRIVATE
