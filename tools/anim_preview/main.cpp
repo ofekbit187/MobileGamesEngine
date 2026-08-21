@@ -29,6 +29,7 @@
 
 #include "mge/character/animation.h"
 #include "mge/character/humanoid.h"
+#include "mge/character/use_archetypes.h"
 #include "mge/core/memory.h"
 #include "mge/graphics/primitives.h"
 #include "mge/graphics/renderer.h"
@@ -191,13 +192,49 @@ Pose walkPose(LocomotionAnimator& anim, float seconds, float speed) {
     return pose;
 }
 
-// Angle between two rotations, in degrees — used to put a number on how far
-// a joint has been moved rather than describing it.
+// Angle between two rotations, in degrees — a number instead of an adjective.
+//
+// NOT 2*acos(dot): acos has an infinite derivative at 1, so two BIT-IDENTICAL
+// quaternions come back 0.06 degrees apart on float rounding alone. That is
+// small enough to hide behind %.1f and large enough to make an exact claim
+// wrong. 4*atan2(|a-b|, |a+b|) is exact in the same neighbourhood.
 float angleBetween(const Quat& a, const Quat& b) {
-    float dot = a.x * b.x + a.y * b.y + a.z * b.z + a.w * b.w;
-    if (dot < 0.0f) dot = -dot;
-    if (dot > 1.0f) dot = 1.0f;
-    return 2.0f * std::acos(dot) * 180.0f / kPi;
+    const float dot = a.x * b.x + a.y * b.y + a.z * b.z + a.w * b.w;
+    const float s = dot < 0.0f ? -1.0f : 1.0f;
+    const float dx = a.x - s * b.x, dy = a.y - s * b.y, dz = a.z - s * b.z, dw = a.w - s * b.w;
+    const float sx = a.x + s * b.x, sy = a.y + s * b.y, sz = a.z + s * b.z, sw = a.w + s * b.w;
+    const float dLen = std::sqrt(dx * dx + dy * dy + dz * dz + dw * dw);
+    const float sLen = std::sqrt(sx * sx + sy * sy + sz * sz + sw * sw);
+    return 4.0f * std::atan2(dLen, sLen) * 180.0f / kPi;
+}
+
+// ------------------------------------------------- the 14.6 catalog --------
+// Six items. Every one is an archetype and four numbers. There is no clip, no
+// per-item code and no animation authoring anywhere in this table — which is
+// the whole claim P12 makes.
+struct CatalogItem {
+    const char* name;
+    UseArchetype archetype;
+    ItemGrip grip;
+    float reach, weight;
+};
+const CatalogItem kCatalog[] = {
+    {"sword",  UseArchetype::Swing,   ItemGrip::Versatile, 1.05f, 1.40f},
+    {"spear",  UseArchetype::Thrust,  ItemGrip::TwoHanded, 2.40f, 2.20f},
+    {"axe",    UseArchetype::Chop,    ItemGrip::OneHanded, 0.85f, 2.60f},
+    {"hammer", UseArchetype::Work,    ItemGrip::OneHanded, 0.45f, 3.20f},
+    {"torch",  UseArchetype::Raise,   ItemGrip::OneHanded, 0.55f, 0.70f},
+    {"apple",  UseArchetype::Consume, ItemGrip::OneHanded, 0.10f, 0.20f},
+};
+constexpr size_t kCatalogCount = sizeof(kCatalog) / sizeof(kCatalog[0]);
+
+UseMotion catalogMotion(size_t i) {
+    UseMotion m;
+    m.archetype = kCatalog[i].archetype;
+    m.grip = kCatalog[i].grip;
+    m.reach = kCatalog[i].reach;
+    m.weight = kCatalog[i].weight;
+    return m;
 }
 
 }  // namespace
@@ -288,6 +325,62 @@ int main(int argc, char** argv) {
         fprintf(stderr, "FAIL: layered pose path allocated %ld times\n", allocs);
         return 1;
     }
+
+    // ---------------------------------------------------------------------
+    // Measurement 3 (task 14.6): the catalog. Six items, zero per-item
+    // animation authoring. Each row below IS the entire animation cost of
+    // that item, and the phase timing on the right is derived from its
+    // weight rather than tuned by hand.
+    // ---------------------------------------------------------------------
+    printf("\n--- 14.6: six items, zero per-item animation authoring ---\n");
+    printf("%-8s %-9s %-10s %6s %7s | %8s %7s %9s %9s\n", "item", "archetype", "grip",
+           "reach", "weight", "wind-up", "strike", "recovery", "duration");
+    for (size_t i = 0; i < kCatalogCount; ++i) {
+        const UseMotion m = catalogMotion(i);
+        const UsePhases p = usePhases(m);
+        const char* gripName = m.grip == ItemGrip::TwoHanded   ? "two-handed"
+                               : m.grip == ItemGrip::Versatile ? "versatile"
+                                                               : "one-handed";
+        printf("%-8s %-9s %-10s %5.2fm %6.2fkg | %7.2f%% %6.2f%% %8.2f%% %8.3fs\n",
+               kCatalog[i].name, useArchetypeName(m.archetype), gripName, m.reach, m.weight,
+               p.windUp * 100.0f, p.strike * 100.0f, p.recovery * 100.0f, p.duration);
+    }
+    // The damage moment gameplay will hang on `strike` (task 14.3), in
+    // seconds, so a maul landing late is the motion saying so.
+    printf("strike moment (s from start): ");
+    for (size_t i = 0; i < kCatalogCount; ++i) {
+        const UsePhases p = usePhases(catalogMotion(i));
+        printf("%s %.3f  ", kCatalog[i].name, p.windUp * p.duration);
+    }
+    printf("\n");
+
+    // How different are the six, measured across their whole timelines? A
+    // single frame is the wrong question — a thrust and a chop both end with
+    // the arm forward; the path there is what separates them.
+    float worstPair = 1e9f;
+    const char *wa = "", *wb = "";
+    for (size_t i = 0; i < kCatalogCount; ++i) {
+        for (size_t j = i + 1; j < kCatalogCount; ++j) {
+            float widest = 0.0f;
+            for (int step = 0; step <= 20; ++step) {
+                const float tt = static_cast<float>(step) / 20.0f;
+                Pose pi, pj;
+                sampleUseArchetype(catalogMotion(i), tt, pi);
+                sampleUseArchetype(catalogMotion(j), tt, pj);
+                for (size_t jt = 0; jt < kJointCount; ++jt) {
+                    const float d = angleBetween(pi.rotation[jt], pj.rotation[jt]);
+                    if (d > widest) widest = d;
+                }
+            }
+            if (widest < worstPair) {
+                worstPair = widest;
+                wa = kCatalog[i].name;
+                wb = kCatalog[j].name;
+            }
+        }
+    }
+    printf("closest pair of the six: %s vs %s, %.1f degrees apart at their widest\n", wa, wb,
+           worstPair);
 
     // ---------------------------------------------------------------------
     // The captures.
@@ -428,6 +521,39 @@ int main(int argc, char** argv) {
         camera.target = {0.0f, 1.05f, 0.0f};
         camera.aspect = aspect;
         ok = capture(renderer, camera, items, outDir + "/anim_mask_scope.ppm") && ok;
+    }
+
+    // ---- 4. The catalog (14.6): six items, six motions, one mechanism ----
+    // Rendered BARE-HANDED on purpose. Item meshes beyond the parametric
+    // sword do not exist — held-item content is the wearables area, not this
+    // one — and putting a sword in the apple-eater's hand would claim
+    // otherwise. What 14.6 is about is the MOTION, and that is what is here.
+    {
+        RigInstance bare;
+        if (!uploadRig(renderer, variant, kit, 4, bare)) return 1;  // kit minus the sword
+        std::vector<DrawItem> items;
+        items.push_back(prop(&ground, {0, 0, 0}, 0.44f, 0.48f, 0.37f));
+        for (size_t i = 0; i < kCatalogCount; ++i) {
+            const UseMotion m = catalogMotion(i);
+            const UsePhases p = usePhases(m);
+            LocomotionAnimator a;
+            const Pose stride = walkPose(a, 3.0f + 0.13f * static_cast<float>(i), 1.6f);
+            Pose act;
+            // Each at its own strike moment — the comparable instant, since
+            // the six have different timelines.
+            sampleUseArchetype(m, p.windUp + p.strike, act);
+            LayeredPose both;
+            both.reset(stride);
+            both.addLayer(act, useArchetypeMask(bare.skeleton, m), 1.0f);
+            emitRig(items, bare, both.result(), {-3.1f + 1.24f * static_cast<float>(i), 0, 0},
+                    kPi * 0.42f);
+        }
+        Camera camera;
+        camera.eye = {0.0f, 1.40f, 6.0f};
+        camera.target = {0.0f, 1.05f, 0.0f};
+        camera.aspect = aspect;
+        ok = capture(renderer, camera, items, outDir + "/anim_catalog.ppm") && ok;
+        for (GpuLodMesh& mesh : bare.gpu) renderer.destroyLodMesh(mesh);
     }
 
     for (GpuLodMesh& mesh : rig.gpu) renderer.destroyLodMesh(mesh);
