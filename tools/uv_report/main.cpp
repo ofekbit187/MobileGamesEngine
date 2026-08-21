@@ -38,6 +38,27 @@ namespace {
 
 // ------------------------------------------------------------ standard -----
 
+// A per-asset waiver (ADR 0011 designed it, ADR 0012 ruled it into use).
+//
+// A waiver is NOT a pass and never prints as one. It records that a specific
+// asset misses a specific rule in a specific region, by a measured amount, for
+// a stated reason, with the condition that retires it written down next to it.
+// The rule itself never moves: `stretch_max` stays 1.50 for everything the
+// project commissions, and this body's failure to meet it stays visible.
+//
+// It is deliberately narrow. A waiver names one REGION, so waiving the arms
+// says nothing about the face; and it stops applying if the measured value
+// drifts past what was recorded, so it cannot quietly cover a regression it
+// was never granted for.
+struct Waiver {
+    std::string asset;
+    std::string rule;
+    std::string region;
+    double measured = 0.0;
+    std::string reason;
+    std::string retires;
+};
+
 // The rules this run was measured against, read from the .mgestd file. Only
 // the fields the chart phase needs are parsed; the image-bake rules belong to
 // the baker and are reported as "not checkable yet" rather than assumed good.
@@ -51,7 +72,15 @@ struct Standard {
     double minIslandGapTexels = 4.0;
     int standardDensity = 512;
     std::vector<std::string> requiredRegions;
+    std::vector<Waiver> waivers;
 };
+
+std::string trim(const std::string& in) {
+    const size_t a = in.find_first_not_of(" \t");
+    if (a == std::string::npos) return "";
+    const size_t b = in.find_last_not_of(" \t");
+    return in.substr(a, b - a + 1);
+}
 
 bool loadStandard(const char* path, Standard& s) {
     std::ifstream in(path);
@@ -87,6 +116,21 @@ bool loadStandard(const char* path, Standard& s) {
             int px = 0;
             ls >> name >> px;
             if (name == "standard" && px > 0) s.standardDensity = px;
+        } else if (key == "waive") {
+            // waive <asset> <rule> <region> <measured> | <reason> | <retires when>
+            Waiver w;
+            ls >> w.asset >> w.rule >> w.region >> w.measured;
+            std::string tail;
+            std::getline(ls, tail);
+            const size_t first = tail.find('|');
+            if (first != std::string::npos) {
+                const size_t second = tail.find('|', first + 1);
+                w.reason = trim(tail.substr(first + 1, second == std::string::npos
+                                                          ? std::string::npos
+                                                          : second - first - 1));
+                if (second != std::string::npos) w.retires = trim(tail.substr(second + 1));
+            }
+            if (!w.asset.empty() && !w.rule.empty()) s.waivers.push_back(w);
         } else if (key == "chart_regions_required") {
             std::string r;
             while (ls >> r) s.requiredRegions.push_back(r);
@@ -151,16 +195,29 @@ struct RegionStat {
     double stretch() const { return worldArea > 0 ? stretchSum / worldArea : 0.0; }
 };
 
+// The asset these verdicts are about. `mge_uv_report` reports on the template
+// body's LOD0, and a waiver has to name an asset or it is a rule change.
+const char* kAssetId = "humanoid_template_lod0";
+
+// How far a measured value may drift past a recorded waiver before the waiver
+// stops covering it. Small on purpose: a waiver is granted for a known state.
+const double kWaiverDrift = 0.02;
+
 // One rule's verdict, printed with the reason it failed — a bare FAIL teaches
 // an artist nothing.
 struct Verdict {
+    enum class State { Pass, Fail, Waived };
     const char* rule;
-    bool pass;
+    State state;
     std::string reason;
 };
 
 void say(std::vector<Verdict>& out, const char* rule, bool pass, const std::string& reason) {
-    out.push_back({rule, pass, reason});
+    out.push_back({rule, pass ? Verdict::State::Pass : Verdict::State::Fail, reason});
+}
+
+void sayWaived(std::vector<Verdict>& out, const char* rule, const std::string& reason) {
+    out.push_back({rule, Verdict::State::Waived, reason});
 }
 
 std::string fmt(const char* f, ...) {
@@ -445,14 +502,46 @@ int main(int argc, char** argv) {
                 outOfTol, measured, 100.0 * std_.densityTolerance, worst.c_str(),
                 100.0 * worstDev));
 
+        // Regions over the rule are split into those a waiver covers and those
+        // it does not. A waiver covers a region only if it names that region on
+        // this asset for this rule AND the measured value has not drifted past
+        // what was recorded — otherwise a waiver granted for 2.09x would
+        // silently absorb a later regression to 3.0x.
         int stretched = 0;
-        for (const RegionStat& s : stats) {
-            if (s.measurable() && s.stretch() > std_.stretchMax) stretched++;
+        std::string unwaived, waived;
+        for (const RegionStat& st : stats) {
+            if (!st.measurable() || st.stretch() <= std_.stretchMax) continue;
+            stretched++;
+            const char* region = regionName(st.region);
+            const Waiver* cover = nullptr;
+            for (const Waiver& w : std_.waivers) {
+                if (w.asset == kAssetId && w.rule == "stretch_above_max" &&
+                    w.region == region && st.stretch() <= w.measured + kWaiverDrift) {
+                    cover = &w;
+                    break;
+                }
+            }
+            std::string& bucket = cover ? waived : unwaived;
+            if (!bucket.empty()) bucket += ", ";
+            bucket += fmt("%s %.2fx", region, st.stretch());
         }
-        say(verdicts, "stretch_above_max", stretched == 0,
-            fmt("%d of %d measurable regions stretch more than %.2fx — a painted circle reads "
-                "as an ellipse there",
-                stretched, measured, std_.stretchMax));
+
+        if (stretched == 0) {
+            say(verdicts, "stretch_above_max", true,
+                fmt("no region stretches more than %.2fx", std_.stretchMax));
+        } else if (unwaived.empty()) {
+            sayWaived(verdicts, "stretch_above_max",
+                      fmt("%d of %d regions over %.2fx, every one waived for this asset "
+                          "(%s) — waived is not passed: the rule still stands at %.2fx and "
+                          "each waiver carries the condition that retires it",
+                          stretched, measured, std_.stretchMax, waived.c_str(),
+                          std_.stretchMax));
+        } else {
+            say(verdicts, "stretch_above_max", false,
+                fmt("%d of %d measurable regions stretch more than %.2fx — a painted circle "
+                    "reads as an ellipse there; not waived: %s",
+                    stretched, measured, std_.stretchMax, unwaived.c_str()));
+        }
     } else {
         const std::string why =
             fmt("not conclusive: only %.1f%% of the body's surface has usable UVs (need 90%%) — "
@@ -464,16 +553,32 @@ int main(int argc, char** argv) {
 
     printf("\nVERDICTS (against %s)\n", stdPath);
     int failed = 0;
+    int waivedCount = 0;
     for (const Verdict& v : verdicts) {
-        printf("  %s  %-26s %s\n", v.pass ? "pass" : "FAIL", v.rule, v.reason.c_str());
-        if (!v.pass) failed++;
+        const char* label = v.state == Verdict::State::Pass     ? "pass"
+                            : v.state == Verdict::State::Waived ? "WAIV"
+                                                                : "FAIL";
+        printf("  %s  %-26s %s\n", label, v.rule, v.reason.c_str());
+        if (v.state == Verdict::State::Fail) failed++;
+        if (v.state == Verdict::State::Waived) waivedCount++;
     }
 
-    printf("\nchart status: %s\n", failed == 0 ? "CONFORMS" : "REFUSED");
+    printf("\nchart status: %s\n",
+           failed > 0 ? "REFUSED" : (waivedCount > 0 ? "CONFORMS (with waivers)" : "CONFORMS"));
     if (failed > 0) {
         printf("%d rule(s) refused. No skin texture should be authored against this chart —\n"
                "see docs/research/uv-audit.md for the defects and the handoff.\n",
                failed);
+    }
+    if (waivedCount > 0) {
+        printf("%d rule(s) WAIVED — not passed. Each is a per-asset exception recorded in\n"
+               "the standard with the condition that retires it:\n", waivedCount);
+        for (const Waiver& w : std_.waivers) {
+            if (w.asset != kAssetId) continue;
+            printf("  %s / %s at %.2fx — %s\n      retires when: %s\n",
+                   w.rule.c_str(), w.region.c_str(), w.measured, w.reason.c_str(),
+                   w.retires.c_str());
+        }
     }
     printf("\nnot checkable here (no textures exist yet — the baker's gates):\n"
            "  colour space, mip chain, island padding, compression PSNR, determinism\n");

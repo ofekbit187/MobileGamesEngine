@@ -7,8 +7,11 @@
 #include <cmath>
 #include <cstdint>
 #include <cstring>
+#include <algorithm>
+#include <functional>
 #include <map>
 #include <set>
+#include <tuple>
 #include <vector>
 
 #include "mge/character/body_mesh.h"
@@ -268,11 +271,35 @@ MGE_TEST(body_mesh_has_human_proportions) {
 
     // Shoulders wider than hips, waist narrower than both — measured on the
     // trunk itself, not on the arms hanging beside it.
+    //
+    // The bands come from the TORSO'S OWN extent, not from fixed world heights,
+    // and that is the whole point (ADR 0012 Ruling 3). Sampling a fixed 60 mm
+    // band at 0.82-0.88 m made this gate pass by a single vertex: the hips do
+    // not change width with the triangle budget, but below about 2 200
+    // triangles the Torso region stops REACHING into that band, so the gate
+    // measured a narrower part of the body and called it a proportion failure.
+    // Measured, hip width read 0.347 m at 2 200 and 0.146 m at 2 100 —
+    // discretely, for a reason that has nothing to do with proportions. A gate
+    // that fails for the wrong reason is worse than no gate: it teaches people
+    // to route around it. Taken as fractions of the torso's own height, the
+    // bands follow the body instead of the decimator.
+    const Aabb trunk = boundsOfRegion(mesh, BodyRegion::Torso);
+    const float trunkH = trunk.max.y - trunk.min.y;
+    MGE_CHECK(trunkH > 0.2f);   // a torso that thin means the region is broken
+    const float shoulderLo = trunk.max.y - 0.15f * trunkH;
+    const float hipHi = trunk.min.y + 0.15f * trunkH;
+    const float waistMid = trunk.min.y + 0.55f * trunkH;
+
     const float shoulders =
-        std::fmax(maxAbsX(mesh, mesh.vertices, BodyRegion::Torso, 1.40f, 1.50f),
-                  maxAbsX(mesh, mesh.vertices, BodyRegion::ArmL, 1.40f, 1.50f)) * 2.0f;
-    const float waist = maxAbsX(mesh, mesh.vertices, BodyRegion::Torso, 1.05f, 1.09f) * 2.0f;
-    const float hips = maxAbsX(mesh, mesh.vertices, BodyRegion::Torso, 0.82f, 0.88f) * 2.0f;
+        std::fmax(maxAbsX(mesh, mesh.vertices, BodyRegion::Torso, shoulderLo, trunk.max.y),
+                  maxAbsX(mesh, mesh.vertices, BodyRegion::ArmL, shoulderLo, trunk.max.y)) * 2.0f;
+    const float waist = maxAbsX(mesh, mesh.vertices, BodyRegion::Torso,
+                                waistMid - 0.08f * trunkH, waistMid + 0.08f * trunkH) * 2.0f;
+    const float hips =
+        maxAbsX(mesh, mesh.vertices, BodyRegion::Torso, trunk.min.y, hipHi) * 2.0f;
+    printf("  proportions: shoulders %.3f m, waist %.3f m, hips %.3f m "
+           "(torso %.3f..%.3f m)\n",
+           shoulders, waist, hips, trunk.min.y, trunk.max.y);
     MGE_CHECK(shoulders > hips);
     MGE_CHECK(hips > waist);
     MGE_CHECK(shoulders > 0.40f && shoulders < 0.56f);
@@ -332,6 +359,114 @@ MGE_TEST(the_face_is_a_real_region_in_front_of_the_scalp) {
         headFront = std::fmin(headFront, mesh.vertices[i].position.z);
     }
     MGE_CHECK_NEAR(face.min.z, headFront, 0.001f);
+}
+
+MGE_TEST(the_hairline_is_one_closed_loop) {
+    // B-9: "the hairline (cap/face boundary) is an authored loop, not an
+    // accident". Task 13.7 shipped the Face region with the boundary merely
+    // CLASSIFIED per face — a staircase one face wide — because cutting it cost
+    // ~200 triangles on a LOD0 already at its cap. ADR 0012 funded it (LOD0
+    // 2 200 -> 2 400, LOD1/LOD2 untouched) and 13.7a cuts it.
+    //
+    // A render cannot settle this: the body is smooth-shaded and the seam does
+    // not show. What settles it is topology — every vertex on the boundary has
+    // exactly two boundary edges, and they close into ONE ring.
+    //
+    // Matched by POSITION, not by index: the regions are separate glTF
+    // primitives, so Face and Scalp own distinct vertex copies along the seam
+    // and no edge is literally shared between them.
+    const SkinnedMeshData mesh = body();
+
+    auto key = [](const Vec3& p) {
+        auto q = [](float v) { return static_cast<long long>(std::lround(v * 100000.0f)); };
+        return std::make_tuple(q(p.x), q(p.y), q(p.z));
+    };
+    using Key = decltype(key(Vec3{}));
+
+    // Edges of the Face region, counted; a boundary edge is used exactly once.
+    std::map<std::pair<Key, Key>, int> edges;
+    for (const MeshPart& part : mesh.parts) {
+        if (part.region != BodyRegion::Face) continue;
+        for (uint32_t i = 0; i + 2 < part.indexCount; i += 3) {
+            const uint32_t* t = &mesh.indices[part.firstIndex + i];
+            for (int e = 0; e < 3; ++e) {
+                Key a = key(mesh.vertices[t[e]].position);
+                Key b = key(mesh.vertices[t[(e + 1) % 3]].position);
+                if (b < a) std::swap(a, b);
+                edges[{a, b}]++;
+            }
+        }
+    }
+
+    std::map<Key, std::vector<Key>> ring;
+    size_t boundaryEdges = 0;
+    for (const auto& kv : edges) {
+        if (kv.second != 1) continue;
+        ring[kv.first.first].push_back(kv.first.second);
+        ring[kv.first.second].push_back(kv.first.first);
+        boundaryEdges++;
+    }
+    MGE_CHECK(boundaryEdges > 16);   // a real hairline, not a stray sliver
+
+    // Every boundary vertex has exactly two boundary neighbours — that is what
+    // makes it a loop rather than a branching seam.
+    for (const auto& kv : ring) MGE_CHECK(kv.second.size() == 2);
+
+    // Walk every cycle and report their sizes.
+    std::set<Key> seen;
+    std::vector<size_t> loops;
+    std::vector<Vec3> loopAt;
+    for (const auto& kv : ring) {
+        if (seen.count(kv.first)) continue;
+        Key start = kv.first;
+        Key prev = start;
+        Key at = ring[start][0];
+        seen.insert(start);
+        size_t n = 1;
+        Vec3 centre{0, 0, 0};
+        auto add = [&centre](const Key& k) {
+            centre.x += static_cast<float>(std::get<0>(k)) / 100000.0f;
+            centre.y += static_cast<float>(std::get<1>(k)) / 100000.0f;
+            centre.z += static_cast<float>(std::get<2>(k)) / 100000.0f;
+        };
+        add(start);
+        while (!(at == start) && n <= ring.size()) {
+            seen.insert(at);
+            add(at);
+            const std::vector<Key>& next = ring[at];
+            Key step = (next[0] == prev) ? next[1] : next[0];
+            prev = at;
+            at = step;
+            n++;
+        }
+        centre.x /= static_cast<float>(n);
+        centre.y /= static_cast<float>(n);
+        centre.z /= static_cast<float>(n);
+        loops.push_back(n);
+        loopAt.push_back(centre);
+    }
+    printf("  hairline: %zu boundary edges in %zu closed loop(s):\n", boundaryEdges,
+           loops.size());
+    for (size_t k = 0; k < loops.size(); ++k) {
+        printf("    %zu vertices, centred (%.3f, %.3f, %.3f)\n", loops[k], loopAt[k].x,
+               loopAt[k].y, loopAt[k].z);
+    }
+    std::sort(loops.begin(), loops.end(), std::greater<size_t>());
+
+    // Measured, this comes out as two rings and both are real:
+    //
+    //   77 vertices centred (-0.001, 1.616, -0.061)  <- the hairline itself
+    //   10 vertices centred (-0.003, 1.558, -0.080)  <- the mouth
+    //
+    // The second sits on the mid-line at the measured mouth height (1.553 m),
+    // not out at the ears (|x| 0.093 m) — it is the rim of the source mesh's
+    // mouth opening, which falls inside the Face region and so bounds it. That
+    // is geometry the CC0 body came with, not a stray patch.
+    //
+    // What the assertions hold is the part B-9 is about: the cap/face boundary
+    // is ONE dominant ring, not a shattered seam.
+    MGE_CHECK(loops.size() <= 3);
+    MGE_CHECK(loops[0] > ring.size() / 2);   // the hairline dominates
 }
 
 MGE_TEST(a_visor_can_hide_the_face_without_hiding_the_scalp) {
@@ -741,7 +876,11 @@ MGE_TEST(body_mesh_stays_inside_the_mobile_budget) {
     buildTemplateBodyLods(kAllRegions, lods);
     MGE_CHECK(lods.size() == kBodyLodCount);
 
-    const size_t budget[kBodyLodCount] = {2200, 1300, 650};
+    // B-5's caps. LOD0 was 2 200 until ADR 0012 raised it to 2 400 to fund B-9's
+    // authored hairline loop; LOD1 and LOD2 did NOT move, and that is the half
+    // that matters — a crowd draws LOD1/LOD2, so the working set P1 defends is
+    // unchanged. If a future change wants headroom, it does not come from here.
+    const size_t budget[kBodyLodCount] = {2400, 1300, 650};
     for (size_t i = 0; i < lods.size(); ++i) {
         printf("  LOD%zu: %zu triangles, %zu vertices\n", i, lods[i].triangleCount(),
                lods[i].vertices.size());
