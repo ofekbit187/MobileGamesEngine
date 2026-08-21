@@ -52,7 +52,7 @@ layout(push_constant) uniform DrawData {
     mat4 model;
     vec4 baseColor;
     vec4 params;  // x != 0: this draw carries morph targets and weights
-    vec4 material;  // unused here; keeps one push-constant layout engine-wide
+    vec4 material;  // x roughness, y AO, z has-packed, w UV scale
 } draw;
 
 layout(location = 0) in vec3 inPosition;
@@ -63,6 +63,11 @@ layout(location = 4) in vec4 inWeights;
 
 layout(location = 0) out vec3 outWorldPos;
 layout(location = 1) out vec3 outWorldNormal;
+// The body's chart, straight through to the same lit.frag the static path
+// uses. inUv has been read here since GPU skinning landed and gone nowhere,
+// which is why a character could not sample a texture at all: every surface
+// in the engine except the ones people are made of could be textured.
+layout(location = 2) out vec2 outUv;
 
 // The packed delta is signed; GLSL has no int16/int8, so sign-extend by
 // shifting the field up to the top of a 32-bit int and back down.
@@ -114,6 +119,11 @@ void main() {
 
     vec4 skinnedPos = blended * vec4(bindPosition, 1.0);
     vec3 skinnedNormal = mat3(blended) * bindNormal;
+
+    // Morphs move the surface, never its chart: a delta displaces the vertex
+    // in bind space, and the texel it wears travels with it. So the UV needs
+    // no morph term — which is also why a re-shaped face keeps its features.
+    outUv = inUv * draw.material.w;
 
     vec4 world = draw.model * skinnedPos;
     outWorldPos = world.xyz;
