@@ -1,6 +1,6 @@
 # Motion capture
 
-**Session:** (being created)
+**Session:** session_01XF3PqLgmSojSaKWKFtUmyF
 **Branch:** `claude/mocap-from-video`
 **State:** idle — chartered, awaiting pickup
 **Updated:** 2026-08-21 by the architect
