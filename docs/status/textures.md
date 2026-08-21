@@ -2,13 +2,44 @@
 
 **Session:** session_01BckkiWsd8dqsjacHidZYPe
 **Branch:** `claude/textures-artist-research-bkz70u`
-**State:** working
-**Updated:** 2026-08-21 — re-aimed onto the reversal; 15.1 was built against the superseded
-ruling and is re-labelled below rather than claimed
+**State:** blocked
+**Updated:** 2026-08-21 — 15.0 measured and written up; blocked on three rulings it raised
 
 ## Now
 
-**Re-aimed.** I built and pushed a *generated* face (commit `67bcf5d`) against ADR 0014 as it
+**15.0 is done and it changes 15.2.** Full write-up with every number reproducible:
+[`docs/research/skin-sourceability.md`](../research/skin-sourceability.md).
+
+**Skin is sourceable — but not by the route the reversal assumed.**
+
+- **Route 1 (inverse repack) has an empty input set.** Our body's source, Blender Studio's Human
+  Base Meshes bundle, ships base meshes with UV maps and **no textures**. The transform is
+  correct and we own it; there is simply nothing authored against that layout to apply it to. It
+  is a capability held in reserve, not a way to get a skin.
+- **Route 2 (tileable, tangent space) is confirmed with a file on disk:** ShareTextures
+  `human_skin_4`, CC0, **4096²**, 7 maps, downloaded and measured; 6 such materials exist. It
+  supplies pore and micro-detail over the whole body and needs no transfer — but a tiling
+  material has no layout, so **it cannot place an eye**. It supplies skin, not a face.
+- **Route 3, which is the one that answers 15.1:** MakeHuman's **system asset pack is CC0 and
+  holds 22 complete human skins** — young/middle/old × African/Asian/Caucasian × f/m. I read the
+  268 MB zip's index remotely and pulled one entry by byte range: `young_caucasian_male`,
+  **2048² 8-bit RGB, photographic, full body layout with a real face** — eyes, lips, ears,
+  nostrils, nails. It is authored for **MakeHuman's** mesh, so our affine says nothing about it
+  and the transfer is **mesh-to-mesh**.
+
+Two things measured that contradict what the web will tell you, recorded because they would have
+cost someone a day: **ambientCG has no human skin at all** (its API returns `Leather008` for
+`q=skin`), and **"MakeHuman skins are CC0" is true only of the bundled system pack** — the first
+community skin I opened is CC-BY.
+
+**And the resolution finding inverts.** Our chart gives the Face region **15 700 texels**; the
+source gives the head on the order of **4 × 10⁵** (estimated from the layout). Roughly **30×**,
+about 5× linear. The source is not the limiting factor and never will be — **our chart is**, and
+importing at 483 px/m means discarding most of what we acquire.
+
+### Previously — re-aimed onto the reversal
+
+I built and pushed a *generated* face (commit `67bcf5d`) against ADR 0014 as it
 stood when I was dispatched. The owner reversed that ruling the same day — **base maps are
 imported, not generated** — and I merged the reversal before this update. Correcting my own
 record first, because a status file claiming a delivered 15.1 would be false under the current
@@ -17,7 +48,7 @@ charter:
 - **15.1 is NOT done.** It needs *an imported* face. What is committed is a generated one.
 - **15.0 is now first**, and it is a measurement, not an assumption.
 
-I am starting 15.0. The generated face stays in the tree as evidence about the *chart and the
+The generated face stays in the tree as evidence about the *chart and the
 render path* — see "What survives the reversal" — but it is not a content route and I am not
 treating it as a fallback. If nothing turns out to be sourceable, that comes back here as a
 finding, per the reversal's closing instruction.
@@ -57,9 +88,8 @@ doubling its linear density costs about **4.5 % more sheet inside the existing 1
 density across regions is the right default — I wrote that rule — and the face is the principled
 exception the standard's `near_field 1024` class already exists for.
 
-**This now bears on 15.0 directly:** it sets the minimum resolution a sourced skin must have in
-the face region to be worth acquiring, so it is an input to the survey rather than a later polish
-item.
+**15.0 turned this around:** the sourced content has ~30× the face texels our chart can hold, so
+the constraint is not what we can acquire — it is what our chart can accept.
 
 ## Needs from the architect
 
@@ -97,9 +127,20 @@ PROPOSAL: Repack the Face island 2x linear inside the existing 1024^2 sheet
       event rather than causing one.
 ```
 
-**No ruling needed to proceed with 15.0** — the reversal answers the route question. The question
-I *will* bring back after 15.0 is whether what is actually sourceable clears the bar, and at what
-licence.
+### Blocked on these three — they decide what 15.2 builds
+
+1. **Is a mesh-to-mesh transfer acceptable as "the import path"?** It is more machinery than the
+   reversal anticipated, and it is the difference between having a face and not having one. Still
+   acquire → validate → process → integrate; the process step is just bigger. **If this is
+   refused, there is no route to a face and that is the finding** — I am not falling back to
+   generating.
+2. **Is the CC0 MakeHuman system pack acceptable as a build-time dependency?** Same convention as
+   the Blender bundle: the baked maps get committed, the 268 MB pack does not.
+3. **Face island density, before the transfer is built rather than after.** Importing at 483 px/m
+   and re-importing at 965 means doing the transfer twice.
+
+I can start the alignment work speculatively on (1) if you would rather I did not idle, but I
+would be building against an unruled route, so I have stopped instead.
 
 ## Last landed
 
@@ -119,7 +160,7 @@ under `tools/`; no engine, shader or `app/` file was touched.
 
 ## Not started
 
-15.0 (sourceability — starting now), 15.1 (one *imported* face), 15.2 (the import path:
+15.1 (one *imported* face), 15.2 (the import path:
 re-projection through the inverse repack transform + conformance gates), 15.3 (phenotype
 binding), 15.4 (the `.mgetex` baker), 15.5 (the crowd proof). 15.3 and 15.5 are what prove
 Ruling 1, which the reversal left standing.

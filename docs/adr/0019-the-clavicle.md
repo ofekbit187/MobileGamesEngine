@@ -75,7 +75,10 @@ event and six garment re-bakes on a partial fix. **One event, containing:**
 5. The two consequences the session flagged: the region re-partition (`regionOf()` reads the
    dominant bone, so a reweight re-segments the body and needs the wearables `jaw` pit assertion
    re-baselined) and the degenerate needle slivers the moved face-split plane creates.
-6. Garment re-bake, new body hash, `B-31` green at 140°.
+6. **The Face UV island repacked 2× inside the existing 1024² sheet** (ADR 0014 amendment) —
+   the face carries 483 px/m and needs ~965 for a legible pupil, measured with renders committed.
+   A `B-27` chart change afterwards would cost a second full garment re-bake for nothing.
+7. Garment re-bake, new body hash, `B-31` green at 140°.
 
 ## Ruling 3 — after this, the rig is frozen
 

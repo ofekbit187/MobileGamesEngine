@@ -32,6 +32,8 @@ if(TARGET mge_import)
     add_subdirectory(tools/asset_import)
     add_subdirectory(tools/garment_fit)
     add_subdirectory(tools/wearable_gates)
+    add_subdirectory(tools/item_bake)
+    add_subdirectory(tools/held_preview)
 endif()
 
 if(TARGET mge_graphics)

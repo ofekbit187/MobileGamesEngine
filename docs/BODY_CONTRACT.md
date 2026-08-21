@@ -120,8 +120,13 @@ body's vertices by index. Consequence:
   (existing gate). For wearables this is load-bearing, not cosmetic: a
   collapsing knee collapses every trouser layered on it.
 
-- **B-31 (MUST, added by ADR 0016)** — **Posed integrity.** Under the rotation
-  range the engine actually asks of it, no bending joint may tear: at each
+- **B-31 (MUST, added by ADR 0016, amended by ADR 0020)** — **Posed integrity,
+  measured per MOTION rather than per joint in isolation.** Where a real body
+  recruits more than one joint, the gate poses them together: no human raises an
+  arm to 140° with a locked chest, and no archetype asks for it. Measuring that
+  pose called the body defective for failing something it never does, and came
+  within one ruling of buying an irreversible rig change to satisfy it. Under the
+  rotation range the engine actually asks of it, no bending joint may tear: at each
   joint's working range, **zero edges over 100 % strain**, with the count over
   50 % reported. Locomotion measures zero-over-50 %, and that is the target
   rather than a bar to squeak under. This clause exists because `B-15`'s 50/50

@@ -7,6 +7,7 @@
 #include <cstdint>
 
 #include "mge/framework/asset_registry.h"
+#include "mge/framework/use_archetype.h"
 
 namespace mge {
 
@@ -43,7 +44,36 @@ struct ItemUse {
     float effectMagnitude = 0;
     float effectDuration = -1;
     uint32_t payload = 0;      // Custom / Launch: game-defined
-    const char* animKey = "";  // presentation cue
+
+    // --- how it is used, and therefore how it animates (P12, ADR 0017) ----
+    //
+    // *"A new weapon must not mean new animation work"* (owner, Dictation 7).
+    // The item declares WHAT KIND of use it is and gives the motion its
+    // dimensions; the engine animates the archetype. So shipping a new sword
+    // is: model it, declare `Swing`, give it a reach and a weight. No clip,
+    // no animation authoring, no code.
+    //
+    // Every field is defaulted, so an item that says nothing about its use
+    // still animates — as a one-handed swing of ordinary length and heft.
+    // Nothing that existed before this landed changed behaviour.
+    UseArchetype archetype = UseArchetype::Swing;
+    ItemGrip grip = ItemGrip::OneHanded;
+    // Metres, tip to grip. A dagger ~0.3, a longsword ~1.0, a spear ~2.4.
+    // Sets the arc radius and how far the body leans in.
+    float reach = 1.0f;
+    // Kilograms. An apple ~0.2, a sword ~1.4, a maul ~8. Sets wind-up,
+    // strike and recovery timing — in fractions AND in seconds — which is
+    // why a war-hammer and a dagger are the same archetype and read as
+    // completely different weapons.
+    float weight = 1.4f;
+
+    // The bespoke-clip escape hatch, and nothing more (CHARACTERS.md §6.2).
+    // Before archetypes, this free-form string was the whole answer and the
+    // game had to present the motion itself. Now the engine plays the
+    // archetype, and this is the opt-in luxury for a hero item — never the
+    // price of admission. Empty means "animate the archetype", which is the
+    // right answer for almost every item.
+    const char* animKey = "";
 };
 
 // Item definitions keyed by asset id: the held item's identity is what the

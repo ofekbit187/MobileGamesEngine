@@ -336,3 +336,50 @@ MGE_TEST(a_broken_wearable_file_is_refused_without_taking_the_others_down) {
     setCharacterAssetDir(original.c_str());
     reloadWearableCatalogue();
 }
+
+MGE_TEST(reloading_the_catalogue_does_not_leave_stale_meshes_behind) {
+    // Caches keyed by catalogue INDEX have to follow the catalogue's
+    // generation. This is not a theoretical hazard: the first version of the
+    // held-item work cached garment meshes in a function-local static built
+    // once, and after a reload every index was off by the rows the reload
+    // added — so `sharedGarmentById` handed back a DIFFERENT garment rather
+    // than a missing one, which is the failure mode that does not announce
+    // itself.
+    const WearableCatalogue& shipped = wearableCatalogue();
+    if (shipped.size() == 0) return;
+
+    const uint32_t before = shipped.generation();
+    const size_t tunicBefore = shipped.find("tunic");
+    MGE_CHECK(tunicBefore != WearableCatalogue::npos);
+    const size_t tunicVertices = sharedGarmentById(tunicBefore).vertices.size();
+    MGE_CHECK(tunicVertices > 0);
+
+    // A directory whose rows sort BEFORE "tunic", so every later index shifts.
+    const std::string dir = tmpPath("mge_wearable_reload");
+    MGE_CHECK(copyAssetDirInto(std::string(characterAssetDir()), dir));
+    const std::string path = dir + "/aaa_apron.mgewear";
+    std::FILE* file = std::fopen(path.c_str(), "wb");
+    MGE_CHECK(file != nullptr);
+    if (file == nullptr) return;
+    const char* text =
+        "version 1\nid apron\nmesh garment_tunic\nlayer 1\ncovers torso\n";
+    std::fwrite(text, 1, std::strlen(text), file);
+    std::fclose(file);
+
+    const std::string original = characterAssetDir();
+    setCharacterAssetDir(dir.c_str());
+    reloadWearableCatalogue();
+
+    const WearableCatalogue& reloaded = wearableCatalogue();
+    MGE_CHECK(reloaded.generation() != before);
+    const size_t tunicAfter = reloaded.find("tunic");
+    MGE_CHECK(tunicAfter != WearableCatalogue::npos);
+    MGE_CHECK(tunicAfter != tunicBefore);  // the index really did shift
+    // ...and the mesh still follows the NAME, not the old index.
+    MGE_CHECK(sharedGarmentById(tunicAfter).vertices.size() == tunicVertices);
+
+    setCharacterAssetDir(original.c_str());
+    reloadWearableCatalogue();
+    MGE_CHECK(sharedGarmentById(wearableCatalogue().find("tunic")).vertices.size() ==
+              tunicVertices);
+}
