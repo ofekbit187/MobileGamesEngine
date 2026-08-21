@@ -26,6 +26,11 @@ which files, the seams between areas, and the charters. The non-negotiables:
   captures, test names — not prose.
 - **ADR numbers are reserved by the architect**, never self-assigned. (0005 has now been
   minted twice by two sessions; it cost a renumbering and then a second correction.)
+- **Report by committing, never by messaging.** Write your state to `docs/status/<area>.md` —
+  what you finished, what you are doing, what you need, what is blocking you — then push and
+  stop. Cross-session messaging silently drops what you send: it has cost this project one
+  session outright and nineteen hours of another. The architect polls branches; git is the only
+  channel that has never lost a message. `docs/status/README.md` has the format.
 - **`claude/android-game-engine-design-blsmnw` is the integration branch.** Merge it into
   your branch before you start and again before you finish; push your own branch and say
   it is ready. The architect merges into integration, verifies, and pushes — nobody else

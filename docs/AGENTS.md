@@ -120,6 +120,30 @@ incompatible.
 | **Streaming lifetime** — collider/entity registration per chunk | World ⇄ Gameplay | Whatever a chunk spawns, it releases. Query cost stays bounded by the resident set, never world size. |
 | **Platform boundary** — `app/src/main/cpp/**` | Platform ⇄ everyone | Android headers appear nowhere else (P3). Engine code that needs a platform service gets an interface, not an `#ifdef`. |
 
+## 4.5 How sessions report — the ledger, not messages
+
+**Sessions do not message each other or the architect. They commit to `docs/status/<area>.md`
+and push.** This is not a style preference; it is the fix for a failure that has cost this
+project three times. `ListAgents`/`SendMessage` cannot see sibling sessions in this setup, and
+messages sent into that channel are dropped **without an error on either end** — one session sat
+blocked for nineteen hours holding a message the architect never received, and an earlier
+session was lost the same way and had to be replaced.
+
+Git is the only channel that has never dropped anything. So git is the channel.
+
+- **One file per session**, owned entirely by that session. Nobody edits anyone else's, which is
+  what makes the ledger conflict-free by construction where a shared board would not be.
+- Update it whenever your state changes and **always before you stop**: what you finished (with
+  the commit), what you are doing, what you need from the architect, what is blocking you.
+- `State:` is one of `working` / `ready` / `blocked` / `idle`. `blocked` and `ready` are the two
+  the architect acts on — a session marked `working` that is actually stuck is invisible.
+- **Seam requests (§5, below) go in the ledger under `Needs:`**, never in a message.
+- Then **push and stop.** The architect fetches every branch on a timer and picks it up.
+
+`docs/status/README.md` is the operative form. The property that matters: the whole project's
+state is reconstructible from a fresh clone, with no session metadata, no dashboard, and nothing
+in anyone's memory.
+
 ## 5. Raising a seam request
 
 When your work needs something on the other side of a seam, open it with the architect in
