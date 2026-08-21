@@ -474,7 +474,47 @@ are not part of the skeleton, so clips authored against today's joint list survi
 **Exit criteria:** the owner exports the rig, animates it in Blender, imports it, and watches it
 play on a character — without asking anyone how.
 
-## Phase 18 and beyond — held for further dictation
+## Phase 18 — Motion capture from reference video (owner request, 2026-08-21)
+
+*The owner asked whether an animation session could animate instead of him, and whether his
+video would help. Both answers turn on one point: **a session cannot see what it makes** — the
+rule that cost this project its body modeller — so hand-keying curves is out. But video converts
+"does this look right", which no session can honestly judge, into **"does this match measured
+human motion"**, which is checkable. The footage is what makes AI-authored animation legitimate
+rather than a repeat of that failure.*
+
+*This is a **second front end onto Phase 17's importer**, not a parallel system: both hand-authored
+clips and captured motion end as joint rotations on our rig, baked to `.mgeanim`, validated by the
+same gates.*
+
+*Feasibility is already measured, not assumed: **436 of 436 frames tracked on all three views,
+zero misses**, mean landmark visibility 0.82–0.97. `assets/mocap/walk_reference_tracking.json.gz`
+holds the trajectories; `tools/mocap/track_video.py` reproduces them. **The source video is
+deliberately not committed** — third-party reference of uncertain redistribution licence, raised
+with the owner.*
+
+- [ ] **18.1** **The walk we already ship, measured against a real human.** Before any new content:
+  compare our procedural walk to the tracked reference — stride length and cadence, hip and
+  shoulder counter-rotation, vertical bob, foot-contact timing, knee and ankle angle curves.
+  **Nobody has ever checked whether our walk is any good**, and this makes it a number rather than
+  an opinion. It also validates the tracking pipeline on a motion we can already produce
+- [ ] **18.2** Triangulate the three views into one metric 3D skeleton per frame. The views are
+  **simultaneous — one take, one frame** — so temporal sync is free; what remains is relative
+  camera pose, solvable from the subject itself across views
+- [ ] **18.3** Positions → rotations on our 17-joint rig. **This is where quality lives or dies**:
+  estimators give joint *positions*, the rig needs *rotations*, and limb roll is underdetermined by
+  positions alone. Proportion mismatch is retargeting's job — the filmed man's limbs are not ours
+- [ ] **18.4** Foot contact detection and locking. Our locomotion is distance-driven precisely so
+  feet do not slide; capture that ignores ground contact reintroduces exactly that
+- [ ] **18.5** Bake through Phase 17's `.mgeanim` path — same clip format, same rig-hash refusal,
+  same budget. **No second animation system**
+- [ ] **18.6** Proof: the captured walk playing on a character in the engine, beside the procedural
+  one, with 18.1's differences quantified
+
+**Exit criteria:** a video of a person walking becomes a clip playing on a character, and we can
+say by how much it differs from what we generate.
+
+## Phase 19 and beyond — held for further dictation
 
 Deliberately not planned yet; known candidates awaiting direction:
 
