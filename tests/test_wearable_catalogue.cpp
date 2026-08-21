@@ -18,6 +18,65 @@
 #include "mge/character/wearable_catalogue.h"
 #include "test_framework.h"
 
+// Copying the shipped assets into a scratch directory used to shell out to
+// `rm -rf && mkdir -p && cp`. That works on the host and DOES NOT WORK ON THE
+// ABI WE SHIP: under qemu-user, `std::system` execs /bin/sh, which is an
+// x86-64 binary, from inside an emulated aarch64 process; and Android has no
+// /bin/sh at all. Both P12 proofs below therefore passed on x86 and had never
+// once run on arm64. Copy in-process instead — no shell, no assumption about
+// what the target platform has in /bin.
+#include <dirent.h>
+#include <sys/stat.h>
+#include <unistd.h>
+
+namespace {
+
+bool copyOneFile(const std::string& from, const std::string& to) {
+    std::FILE* in = std::fopen(from.c_str(), "rb");
+    if (in == nullptr) return false;
+    std::FILE* out = std::fopen(to.c_str(), "wb");
+    if (out == nullptr) { std::fclose(in); return false; }
+    char buf[64 * 1024];
+    size_t n = 0;
+    bool ok = true;
+    while ((n = std::fread(buf, 1, sizeof buf, in)) > 0) {
+        if (std::fwrite(buf, 1, n, out) != n) { ok = false; break; }
+    }
+    std::fclose(in);
+    std::fclose(out);
+    return ok;
+}
+
+// Fresh scratch directory holding a copy of every regular file in `from`.
+bool copyAssetDirInto(const std::string& from, const std::string& dir) {
+    DIR* existing = ::opendir(dir.c_str());
+    if (existing != nullptr) {
+        while (struct dirent* e = ::readdir(existing)) {
+            const std::string name = e->d_name;
+            if (name == "." || name == "..") continue;
+            ::unlink((dir + "/" + name).c_str());
+        }
+        ::closedir(existing);
+    } else if (::mkdir(dir.c_str(), 0755) != 0) {
+        return false;
+    }
+    DIR* src = ::opendir(from.c_str());
+    if (src == nullptr) return false;
+    bool ok = true;
+    while (struct dirent* e = ::readdir(src)) {
+        const std::string name = e->d_name;
+        if (name == "." || name == "..") continue;
+        struct stat st {};
+        const std::string full = from + "/" + name;
+        if (::stat(full.c_str(), &st) != 0 || !S_ISREG(st.st_mode)) continue;
+        if (!copyOneFile(full, dir + "/" + name)) { ok = false; break; }
+    }
+    ::closedir(src);
+    return ok;
+}
+
+}  // namespace
+
 using namespace mge;
 
 namespace {
@@ -191,9 +250,7 @@ MGE_TEST(a_garment_added_as_pure_data_behaves_like_a_compiled_one) {
     // that reuses an existing mesh. Reusing the mesh is the point — what is
     // new here is the DECLARATION, which is all a new garment really is.
     const std::string dir = tmpPath("mge_wearable_catalogue");
-    const std::string cmd = "rm -rf '" + dir + "' && mkdir -p '" + dir + "' && cp '" +
-                            std::string(characterAssetDir()) + "'/* '" + dir + "'/";
-    MGE_CHECK(std::system(cmd.c_str()) == 0);
+    MGE_CHECK(copyAssetDirInto(std::string(characterAssetDir()), dir));
 
     const std::string path = dir + "/surcoat.mgewear";
     std::FILE* file = std::fopen(path.c_str(), "wb");
@@ -253,9 +310,7 @@ MGE_TEST(a_broken_wearable_file_is_refused_without_taking_the_others_down) {
     const size_t shippedCount = shipped.size();
 
     const std::string dir = tmpPath("mge_wearable_broken");
-    const std::string cmd = "rm -rf '" + dir + "' && mkdir -p '" + dir + "' && cp '" +
-                            std::string(characterAssetDir()) + "'/* '" + dir + "'/";
-    MGE_CHECK(std::system(cmd.c_str()) == 0);
+    MGE_CHECK(copyAssetDirInto(std::string(characterAssetDir()), dir));
 
     const std::string path = dir + "/broken.mgewear";
     std::FILE* file = std::fopen(path.c_str(), "wb");
