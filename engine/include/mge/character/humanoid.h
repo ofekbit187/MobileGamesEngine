@@ -199,6 +199,30 @@ struct WearableInstance {
     float color[4] = {1, 1, 1, 1};
 };
 
+// ============================ DEPRECATED ==================================
+// THIS IS THE v1 BOX RIG. IT IS NOT WHAT THE GAME DRAWS. Do not build new
+// tools, demos or previews on it, and do not copy the pattern out of the
+// demos that still call it.
+//
+// It generates one box primitive per joint. The shipped path is
+// `buildPosedCharacter` in `character/body_mesh.h`, which loads the imported
+// artist body (`humanoid_template_lod*.mgeskin`) and skins it — that is what
+// `device_game.cpp` runs on the phone, and what `body_preview` and
+// `skin_test` render.
+//
+// Why this matters beyond looks (architect ruling, 2026-08-21): a boxy preview
+// CANNOT SHOW the most likely defect of anything pose-related. Separated boxes
+// have no surface between them, so a joint mask that snaps 0 -> 1 across a
+// joint looks perfect here and shears visibly on continuous skinned geometry,
+// where the skin weights blend across that same joint. A preview that cannot
+// fail is not evidence.
+//
+// Still called by tools/template_game, tools/people_demo and
+// tools/humanoid_demo, which are stale and scheduled to migrate (task 16.1).
+// That staleness is exactly how a new session inherits this by reading a demo
+// as the reference — which is what happened, and is not that session's fault.
+// ==========================================================================
+//
 // Builds the full visual for one character: body parts generated from the
 // variant, minus regions covered by wearables, plus the wearables generated
 // against the SAME proportions (+ per-layer thickness). Output parts render

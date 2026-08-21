@@ -307,7 +307,35 @@ Anything that allocates a texture per character is a defect, not a budget line.*
 **Exit criteria:** a crowd in which no two people share a face, drawn from one shared map set, at
 a texture cost that does not move when the crowd grows.
 
-## Phase 16 and beyond — held for further dictation
+## Phase 16 — Retire the v1 box rig (architect ruling, 2026-08-21)
+
+*The owner spotted an animation preview rendering the obsolete boxy body and asked whether it was
+deliberate. It was not, and the root cause is a trap in our own tree rather than a careless
+session: `buildHumanoidVisual` still compiles, still looks like the obvious way to draw a
+character, and three demos still call it — so a new session that reads a demo as the reference
+inherits the dead path. That is what happened.*
+
+*Scope, stated precisely so nobody over-reacts: **the phone build is not affected.**
+`device_game.cpp` already runs the real skinned body, as do `body_preview` and `skin_test`. The
+stale callers are three host demos plus the new `anim_preview` that copied one of them.*
+
+*The cost is not cosmetic. A boxy preview **cannot show** the most likely defect of a pose
+feature: separated boxes have no surface between them, so a joint mask that snaps 0 → 1 across a
+joint looks perfect and shears visibly on continuous skinned geometry where the weights blend
+across that same joint. **A preview that cannot fail is not evidence.***
+
+- [x] **16.0** Mark `buildHumanoidVisual` deprecated at the declaration, loudly, with the reason
+  and the replacement — *done in the same push as this ruling; the marker is what stops the next
+  session inheriting it while the migration is queued*
+- [ ] **16.1** Migrate `tools/template_game`, `tools/people_demo` and `tools/humanoid_demo` to
+  `buildPosedCharacter` — **owner: whoever the demo demonstrates** (`AGENTS.md` §3)
+- [ ] **16.2** `tools/anim_preview` onto the real skinned body, and **re-verify the 14.1 upper-body
+  mask through skinning** — the check the box rig could not perform. Expect the mask boundary to
+  need feathering across the joint rather than a hard cut — **owner: animation**
+- [ ] **16.3** Delete `buildHumanoidVisual` and `tests/test_humanoid.cpp`'s coverage of it once
+  16.1 and 16.2 land — dead code that renders is worse than dead code that does not
+
+## Phase 17 and beyond — held for further dictation
 
 Deliberately not planned yet; known candidates awaiting direction:
 
