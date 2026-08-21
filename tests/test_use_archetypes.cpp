@@ -654,3 +654,191 @@ MGE_TEST(starting_an_action_ramps_in_rather_than_popping) {
     }
     MGE_CHECK(frames >= 11);  // ~0.20 s at 60 Hz, not one frame
 }
+
+// ---------------------------------------------------------------------------
+// 14.5 — an item declares how it is used (ADR 0017).
+//
+// The seam this crosses is the whole of P12's promise. Before it, `ItemUse`
+// carried `range`, `power` and a free-form `animKey`, and nothing could reach
+// the archetype numbers — so "declare `swing`, give it a reach and a weight"
+// stopped one step short at exactly the declaring.
+// ---------------------------------------------------------------------------
+
+#include "mge/framework/items.h"
+
+MGE_TEST(an_item_declares_its_use_and_the_engine_animates_it) {
+    // Six items. Each is a plain ItemUse literal — no clip, no code, no
+    // enumerator, no CMakeLists line. This IS the catalogue now; it stopped
+    // being a struct that only the animation demo understood.
+    ItemUse sword;
+    sword.kind = ItemUseKind::Strike;
+    sword.range = 2.0f;
+    sword.power = 12.0f;
+    sword.archetype = UseArchetype::Swing;
+    sword.grip = ItemGrip::Versatile;
+    sword.reach = 1.05f;
+    sword.weight = 1.40f;
+
+    ItemUse spear = sword;
+    spear.archetype = UseArchetype::Thrust;
+    spear.grip = ItemGrip::TwoHanded;
+    spear.reach = 2.40f;
+    spear.weight = 2.20f;
+
+    ItemUse axe = sword;
+    axe.archetype = UseArchetype::Chop;
+    axe.grip = ItemGrip::OneHanded;
+    axe.reach = 0.85f;
+    axe.weight = 2.60f;
+
+    ItemUse hammer = sword;
+    hammer.archetype = UseArchetype::Work;
+    hammer.reach = 0.45f;
+    hammer.weight = 3.20f;
+
+    ItemUse torch;
+    torch.kind = ItemUseKind::Toggle;
+    torch.archetype = UseArchetype::Raise;
+    torch.reach = 0.55f;
+    torch.weight = 0.70f;
+
+    ItemUse apple;
+    apple.kind = ItemUseKind::Consume;
+    apple.power = 8.0f;
+    apple.archetype = UseArchetype::Consume;
+    apple.reach = 0.10f;
+    apple.weight = 0.20f;
+
+    const ItemUse* catalogue[] = {&sword, &spear, &axe, &hammer, &torch, &apple};
+    constexpr size_t kCount = sizeof(catalogue) / sizeof(catalogue[0]);
+
+    // They go through the ordinary registry, by asset id, like any item.
+    ItemUseRegistry registry;
+    const char* names[kCount] = {"item/sword", "item/spear",  "item/axe",
+                                 "item/hammer", "item/torch", "item/apple"};
+    for (size_t i = 0; i < kCount; ++i) {
+        MGE_CHECK(registry.define(names[i], *catalogue[i]));
+    }
+
+    // And what comes back out animates, distinctly, with no per-item work.
+    UseMotion motions[kCount];
+    for (size_t i = 0; i < kCount; ++i) {
+        const ItemUse* found = registry.find(assetIdFromName(names[i]));
+        MGE_CHECK(found != nullptr);
+        motions[i] = motionFromItemUse(*found);
+        MGE_CHECK(motions[i].archetype == catalogue[i]->archetype);
+        MGE_CHECK(motions[i].grip == catalogue[i]->grip);
+        MGE_CHECK(!usesBespokeClip(*found));  // none of the six needs a clip
+    }
+    for (size_t i = 0; i < kCount; ++i) {
+        for (size_t j = i + 1; j < kCount; ++j) {
+            MGE_CHECK(motionDistance(motions[i], motions[j]) > 0.40f);
+        }
+    }
+}
+
+MGE_TEST(an_item_that_says_nothing_about_its_use_still_animates) {
+    // Every field is defaulted, so nothing that existed before 14.5 changed
+    // behaviour — the whole point of defaulting them.
+    const ItemUse silent;
+    const UseMotion motion = motionFromItemUse(silent);
+    MGE_CHECK(motion.archetype == UseArchetype::Swing);
+    MGE_CHECK(motion.grip == ItemGrip::OneHanded);
+    const UsePhases phases = usePhases(motion);
+    MGE_CHECK(phases.duration > 0.0f);
+    MGE_CHECK_NEAR(phases.windUp + phases.strike + phases.recovery, 1.0f, 1e-5);
+
+    // Absurd item data is clamped on the way across the seam, not trusted.
+    ItemUse absurd;
+    absurd.reach = 900.0f;
+    absurd.weight = -40.0f;
+    const UseMotion clamped = motionFromItemUse(absurd);
+    MGE_CHECK_NEAR(clamped.reach, kUseReachRange.max, 1e-6);
+    MGE_CHECK_NEAR(clamped.weight, kUseWeightRange.min, 1e-6);
+
+    // Handedness is the CHARACTER's, not the item's.
+    MGE_CHECK(motionFromItemUse(silent, true).leftHanded);
+    MGE_CHECK(!motionFromItemUse(silent, false).leftHanded);
+}
+
+MGE_TEST(animKey_narrows_to_the_bespoke_clip_escape_hatch) {
+    ItemUse ordinary;
+    MGE_CHECK(!usesBespokeClip(ordinary));  // empty: animate the archetype
+
+    ItemUse heroBlade;
+    heroBlade.archetype = UseArchetype::Swing;
+    heroBlade.animKey = "clip/excalibur_draw";
+    MGE_CHECK(usesBespokeClip(heroBlade));
+    // ...and it still carries a usable archetype underneath, so an engine
+    // with no clip for that key falls back to animating the kind rather than
+    // standing still.
+    const UseMotion fallback = motionFromItemUse(heroBlade);
+    MGE_CHECK(fallback.archetype == UseArchetype::Swing);
+    MGE_CHECK(usePhases(fallback).duration > 0.0f);
+}
+
+// ---------------------------------------------------------------------------
+// 14.4 end to end, through the real gameplay API rather than a stand-in.
+//
+// The animation half of interruption lives entirely on the game's side of the
+// seam, and that is not a workaround — it is where per-character animation
+// state ALREADY lives (`device_game.cpp`'s Actor carries a
+// `LocomotionAnimator`). So a `UsePlayer` sits beside it and needs no change
+// to `CharacterComponent` at all.
+// ---------------------------------------------------------------------------
+
+#include "mge/framework/character.h"
+#include "mge/framework/world.h"
+
+MGE_TEST(a_real_hit_mid_action_blends_the_action_out) {
+    World world(64);
+    CharacterSystem characters(world);
+    const EntityId actor = world.spawn();
+    TransformComponent transform;
+    world.setTransform(actor, transform);
+    characters.attach(actor);
+
+    ItemUse axe;
+    axe.kind = ItemUseKind::Strike;
+    axe.archetype = UseArchetype::Chop;
+    axe.reach = 0.85f;
+    axe.weight = 2.60f;
+
+    // The game's own animation state, beside its locomotion — no engine
+    // change, no CharacterComponent field.
+    UsePlayer player;
+    player.start(motionFromItemUse(axe));
+
+    const CharacterComponent* character = characters.get(actor);
+    MGE_CHECK(character != nullptr);
+    float previousHealth = character->health;
+
+    bool struck = false, interrupted = false;
+    float weightWhenHit = 0.0f;
+    for (int frame = 0; frame < 240 && player.active(); ++frame) {
+        // A blow lands on us part-way through our own wind-up.
+        if (frame == 6) characters.damage(actor, 0.2f);
+
+        // What a game does today to notice: watch its own health. There is
+        // no hit callback on CharacterSystem — see docs/status/animation.md.
+        const CharacterComponent* now = characters.get(actor);
+        MGE_CHECK(now != nullptr);
+        if (now->health < previousHealth - 1e-6f && !interrupted) {
+            weightWhenHit = player.weight();
+            player.interrupt(0.15f);
+            interrupted = true;
+        }
+        previousHealth = now->health;
+
+        if (player.update(1.0f / 60.0f)) struck = true;
+    }
+
+    MGE_CHECK(interrupted);
+    MGE_CHECK(weightWhenHit > 0.5f);   // it was genuinely mid-action
+    // An interrupted swing never lands its blow...
+    MGE_CHECK(!struck);
+    // ...and it faded rather than vanished: the player stayed alive for
+    // several frames after the hit, weight ramping down.
+    MGE_CHECK(!player.active());
+    MGE_CHECK_NEAR(player.weight(), 0.0f, 1e-6);
+}

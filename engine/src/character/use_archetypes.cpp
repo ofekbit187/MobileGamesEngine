@@ -248,6 +248,31 @@ UseMotion clampUseMotion(const UseMotion& motion) {
     return m;
 }
 
+UseMotion motionFromItemUse(const ItemUse& use, bool leftHanded) {
+    UseMotion motion;
+    motion.archetype = use.archetype;
+    motion.grip = use.grip;
+    motion.reach = use.reach;
+    motion.weight = use.weight;
+    motion.leftHanded = leftHanded;
+    // Clamped here rather than trusted: item data is content, and content
+    // must never be able to ask for a motion the rig cannot do.
+    return clampUseMotion(motion);
+}
+
+bool usesBespokeClip(const ItemUse& use) {
+    return use.animKey != nullptr && use.animKey[0] != '\0';
+}
+
+const char* itemGripName(ItemGrip grip) {
+    switch (grip) {
+        case ItemGrip::OneHanded: return "one-handed";
+        case ItemGrip::TwoHanded: return "two-handed";
+        case ItemGrip::Versatile: return "versatile";
+    }
+    return "?";
+}
+
 const char* useArchetypeName(UseArchetype archetype) {
     switch (archetype) {
         case UseArchetype::Swing:   return "swing";

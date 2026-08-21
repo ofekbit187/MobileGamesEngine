@@ -3,8 +3,50 @@
 **Session:** session_01TiRzQ9qPRKyvVbtW9akJLV
 **Branch:** `claude/animation-layered-poses`
 **State:** ready
-**Updated:** 2026-08-21 — 16.2 done: `anim_preview` is on the real skinned body, and 14.1 is
-re-verified through skinning. Layering is clean; the shoulder is not.
+**Updated:** 2026-08-21 — 14.5 built as ruled (ADR 0017). 14.4 and 14.6 close with it. **14.3's
+premise is wrong and I did not act on it — read the first section.**
+
+## 14.5 landed, and 14.3 needs a correction before anyone builds it
+
+**Built exactly as ruled.** `engine/include/mge/framework/use_archetype.h` holds `UseArchetype`
+and `ItemGrip`; `character/use_archetypes.h` includes it; `ItemUse` gains the four defaulted
+fields; `motionFromItemUse()` is the bridge and clamps on the way across, because item data is
+content. Thank you for checking the include direction rather than taking my "no stake" at face
+value — I had not looked, and (a) would have closed a directory cycle. Noted for next time: when
+I say I have no preference, that is often a sign I have not measured, not that the choice is free.
+
+**The correction. There is no tuned delay to delete.** This task, `CHARACTERS.md` §6.2 and ADR
+0017 all describe replacing a hard-coded damage delay. There isn't one. `performUseHeld` applies
+damage **inline, on the input frame**:
+
+```
+engine/src/framework/character.cpp:440
+    damage(victim, use->power);
+```
+
+`useCooldown` is a rate limiter — how soon you may swing again — not a damage timer. `damage()`
+has exactly two call sites and both are synchronous; no deferral mechanism exists anywhere in the
+framework.
+
+So closing 14.3 is not a deletion, it is **introducing deferral**, and that is a bigger change
+than the ruling assumed:
+
+- somewhere to hold a pending strike per character — a `CharacterComponent` field or a
+  `CharacterSystem` side table, both `character.h`, which is the Character-component seam;
+- a behaviour change in `performUseHeld`, which also changes what `ActionResult::target` and
+  `::amount` mean to the four areas that read them (they are filled synchronously today);
+- and `tests/test_actions.cpp` / `test_gameplay.cpp` assert the current instant behaviour.
+
+ADR 0017 Ruling 3 condition 3 is *"it does not extend"*, and you told me to stop and raise if I
+found myself wanting `action.cpp` or `character.h`. I found myself wanting `character.h`. So I
+stopped. The seam request is below.
+
+**14.4 closed without needing any of that**, and the reason is worth recording because it is the
+opposite of what I assumed when I first raised the seam: per-character animation state already
+lives on the *game's* actor struct, next to its `LocomotionAnimator` (`device_game.cpp`'s `Actor`).
+A `UsePlayer` belongs exactly there. No `CharacterComponent` field, no engine change.
+`a_real_hit_mid_action_blends_the_action_out` proves it through a real `CharacterSystem::damage()`
+mid-chop rather than a stand-in.
 
 ## 16.2 — you were right to stop the capture, and the answer is not what either of us expected
 
@@ -41,10 +83,11 @@ below. It is the first thing I would fix in the whole engine right now.
 |---|---|---|
 | **14.1** layered poses with masks | `6af3990` | done |
 | **14.2** the nine use archetypes | `52ee819` | done |
-| **14.6** proof by catalog | `52ee819` | `[~]` — mechanism proven; the six live in the demo, not item data |
-| **14.3** phase-addressable timeline | `101e6d5` | `[~]` — animation half done; wiring the damage moment is across the seam |
-| **14.4** interruption | `101e6d5` | `[~]` — blend-out done and measured; the events that call it are across the seam |
-| **14.5** archetype data on `ItemUse` | — | **not started, not mine** — seam request below |
+| **14.3** phase-addressable timeline | `101e6d5` | `[~]` — animation half done; **the other half's premise is wrong, see the top** |
+| **14.4** interruption | `101e6d5` + this push | **done** — proven end to end through real `CharacterSystem::damage()` |
+| **14.5** archetype data on `ItemUse` | this push | **done** — built as ADR 0017 ruled |
+| **14.6** proof by catalog | this push | **done** — the six are real `ItemUse` data now, not a demo struct |
+| **16.2** `anim_preview` on the real body | `6276768` | done |
 
 **14.1 needed no rig change and no seam request.** Layering composes in pose space —
 local joint rotations — *before* `evaluatePose`, producing one ordinary `Pose`. Nothing
@@ -138,63 +181,19 @@ I have not published anything and will not — the board is yours.
 
 ## Needs from the architect
 
-### 1. SEAM REQUEST — the shoulder cannot take an action-scale rotation (this is the blocker)
+### 1. The shoulder — **RULED, closed on my side** (ADR 0015 + ADR 0016)
 
-```
-SEAM:  Rig — `Joint` enum, `Skeleton`, bind offsets, 17-joint palette, and the skin weights
-       the import path produces (AGENTS.md §4; Body ⇄ Wearables, Renderer)
-NEED:  A character needs to be able to raise an arm. Measured on the shipped body
-       (`humanoid_template_lod0.mgeskin`), NAKED, with nothing layered and no archetype
-       playing — one joint rotated and nothing else:
+Nothing needed from you. Recorded so the thread is followable: I raised it with three costed
+options and no recommendation past where I would start; you ruled **reweight, no clavicle, no
+skinning-definition change** until the reweighted body is re-measured, on the grounds that you
+cannot diagnose "this rig needs another joint" from a body nobody weighted. That is a better
+ruling than my framing invited — I had presented the missing clavicle as a co-equal cause when it
+is only a hypothesis that a reweight will test for free.
 
-         shoulder pitch |  worst edge strain | edges >50% | edges >100%
-                 15 deg |              0.352 |          0 |           0
-                 30 deg |              0.690 |          5 |           0
-                 45 deg |              1.003 |         11 |           2
-                 60 deg |              1.479 |         23 |           6
-                 90 deg |              2.413 |         47 |          21
-                140 deg |              3.513 |         71 |          32
-
-       For scale: the shipped WALK puts zero edges over 50%, and the shipped RUN also puts
-       zero over 50%. Locomotion stays inside roughly 35 degrees of shoulder rotation, which
-       is exactly why eight phases of walking never exposed this. Every use archetype needs
-       60-140 degrees, and all nine tear.
-
-       Two structural facts behind it, both measured rather than guessed:
-         * There is NO CLAVICLE. `UpperArmR`'s parent is `Chest` directly, so the entire
-           shoulder rotation loads one joint — the worst case for linear-blend skinning.
-         * The shoulder weights have no falloff. 53 of the 195 vertices influenced by
-           `UpperArmR` are bound to it at weight exactly 1.00, and they sit adjacent to
-           vertices that are 49% Spine. Adjacent vertices jump from fully-arm to
-           mostly-torso with nothing in between, so the surface between them is what tears.
-
-       The visible result is in `anim_walk_vs_layered.ppm`: the walking figure's shoulder is
-       clean, and the acting figure's tunic sleeve has torn open into inverted triangles.
-       Same body, same frame, same skinning — only the shoulder angle differs.
-BREAKS: Depends entirely on which option you pick — see below. One is free, one is a
-       rig-version event, one is a renderer change.
-PROPOSAL: I am NOT proposing a specific fix, because the rig and the skin weights are the
-       character asset pipeline's and the choice is theirs. The three options, with what
-       each costs, so the decision has numbers under it:
-
-       (a) REWEIGHT THE SHOULDER — give the deltoid/armpit a proper falloff instead of a
-           hard 1.00 boundary. No rig change, no new joint, no shader change, no
-           `Joint` enum edit. Re-bakes the body and re-bakes garments (the body hash
-           changes, which the pipeline already refuses loudly, ADR 0008). Cheapest by far
-           and it is where I would start.
-       (b) ADD A CLAVICLE JOINT — anatomically the real answer, and it halves the rotation
-           any single joint has to carry. But it is 17 -> 18 joints: a rig-version event
-           that breaks every garment binding AND the skinning shader's palette size. Your
-           ruling, explicitly, per §4. I have NOT done this and would not.
-       (c) DUAL-QUATERNION SKINNING — fixes the collapse generally rather than per-joint,
-           but changes `skinMesh()`, which is the definition GPU skinning must match, so it
-           is a renderer + body change landing together with `mge_skin_test` reproving it.
-
-       Until one of these lands, every upper-body action in Phase 14 will look torn at the
-       shoulder on the real body, however correct the pose composition is. The animation
-       side is not blocked from BUILDING — 14.1-14.4 are done and measured — but it is
-       blocked from LOOKING RIGHT, and no amount of work on my side reaches it.
-```
+The pipeline session is reweighting every bending joint against `B-31`, which is my per-edge
+strain instrument promoted into the body contract as gate §9.8. **I am still blocked from
+*looking* right and unblocked from *building*, which is the correct order.** I have not touched
+the body, the rig or the weights.
 
 ### 2. Held items are not drawn on the real body — anywhere, including the phone
 
@@ -209,43 +208,60 @@ between hand and back" is understating the gap: there is no sword in either plac
 it because Phase 14's whole point is weapons, and 14.6's catalog capture is bare-handed for this
 reason rather than by preference.
 
-### 3. SEAM REQUEST — archetype data on `ItemUse` (this is 14.5, and it also unblocks 14.3 and 14.6)
+### 3. SEAM REQUEST — the damage moment has to be deferred, and that is a behaviour change
+
+*(This supersedes my earlier 14.5 request, which you ruled and I have now built. This is the half
+of 14.3 that request could not reach.)*
 
 ```
-SEAM:  Item use — `ItemUse`, `ItemUseRegistry` (AGENTS.md §4; Gameplay ⇄ UI ⇄ People)
-NEED:  An item must be able to declare HOW it is used, in data. The engine now animates
-       nine archetypes parameterized by grip, reach and weight, but nothing can reach
-       those numbers: `ItemUse` carries `range`, `power` and a free-form `animKey`, and
-       no archetype. Without this, P12's promise — "model it, declare `swing`, give it a
-       reach and a weight, ship it" — stops one step short, because declaring it is
-       exactly what an item cannot do. It is also what blocks hanging the damage moment
-       on `strike` (14.3) instead of the tuned delay, and what keeps the six-item catalog
-       (14.6) living in my demo rather than in shipped item data.
-BREAKS: `ItemUse` gains fields, so the save schema bumps and `ItemUseRegistry` callers
-       recompile. `framework/items.h` would include the animation side's enums, or those
-       enums move somewhere both can see. Nothing existing changes meaning: `animKey`
-       keeps working and simply narrows to the bespoke-clip escape hatch it was always
-       meant to be (CHARACTERS.md §6.2).
-PROPOSAL: Add four fields to `ItemUse`, defaulted so every existing item is unaffected:
+SEAM:  Character component — `CharacterComponent` fields (AGENTS.md §4; Gameplay ⇄ People ⇄ Body)
+       and the Phase 12 action model in `framework/character.cpp`.
+NEED:  A blow should land when the motion says it lands. The animation side is ready and
+       reachable from item data as of 14.5: `motionFromItemUse(use)` then
+       `UsePlayer::strikeMoment()` gives the damage instant in seconds — 0.233 s for a
+       dagger, 0.729 s for a maul, neither number tuned by anyone. Nothing consumes it,
+       because damage is applied inline at character.cpp:440 on the input frame.
+BREAKS: More than the phrase "delete the tuned delay" suggests, because there is no delay:
+       * per-character pending-strike state — a `CharacterComponent` field or a
+         `CharacterSystem` side table. Either is `character.h`.
+       * `performUseHeld` stops resolving the hit synchronously, so `ActionResult::target`
+         and `::amount` become empty at request time and arrive later. Four areas read
+         `ActionResult`.
+       * `tests/test_actions.cpp` and `test_gameplay.cpp` assert the instant behaviour and
+         would need updating with it — deliberately, not incidentally.
+       * AI attacks (`ai.cpp:219`) call `damage()` directly and would keep landing
+         instantly unless they route through the same path, which would make a guard's
+         swing and a player's swing behave differently — a P9 smell.
+PROPOSAL: I have NOT built any of this. Two shapes, and the second is smaller than it looks:
 
-       UseArchetype archetype = UseArchetype::Swing;
-       ItemGrip     grip      = ItemGrip::OneHanded;
-       float        reach     = 1.0f;   // metres, tip to grip — arc radius and lean
-       float        weight    = 1.4f;   // kg — wind-up/strike/recovery timing
+       (a) Engine-side deferral. `CharacterComponent` gains a pending strike (entity,
+           damage, seconds remaining), `performUseHeld` arms it instead of resolving, and
+           `stepLocomotion`/`tickEffects` fires it. Correct and universal, and it fixes the
+           AI path for free — but it is the seam, a behaviour change, and test updates.
 
-       Both enums and the `UseMotion` block they form already exist in
-       `engine/include/mge/character/use_archetypes.h` (mine). Two ways to satisfy the
-       include direction, and I have no stake in which — your call:
-         (a) `items.h` includes the animation header; or
-         (b) the two enums move to a small shared header and both sides include it.
-       (b) is tidier if `framework/` must not depend on `character/`.
+       (b) Report the moment, let the caller schedule. `ItemUse` already carries everything
+           needed, so gameplay could expose the strike time on `ActionResult` and leave the
+           firing to whoever drives the frame. Cheaper, but it puts the timing in every
+           game rather than in the engine, which reads to me like the wrong side of P8 —
+           and it would let a game and its AI disagree about when a blow lands.
 
-       Then gameplay drives a `UsePlayer` per acting character: `start(motion)` on
-       `use_held`, and the frame `update()` returns true is the damage moment — deleting
-       the tuned delay. `interrupt()` on hit/stagger/death closes 14.4.
-
-       I have NOT written any of this. `items.h` is gameplay's and this is a seam.
+       I would build (a) if you assign it under the same Ruling 3, and I would want the AI
+       path in scope, because leaving it out is how the player and NPCs stop being the same
+       character (P9). But it is genuinely gameplay's call, not a formality — the
+       instant-damage behaviour is theirs and has been since Phase 12.
 ```
+
+### 3a. Two small things for other areas, neither blocking
+
+- **`device_game.cpp`'s item catalogue takes the new defaults.** Sword, apple and torch are
+  declared there (Platform's file) without archetypes, so all three default to `Swing` — the
+  apple would swing. Harmless today because nothing drives a `UsePlayer` yet and held items do not
+  render at all (14.7), but it wants `Consume` and `Raise` on two lines whenever Platform next
+  touches that file. Not mine and not urgent; recorded so it is not discovered later.
+- **There is no hit notification.** `CharacterSystem` has no callback, no listener and no
+  damaged-this-tick flag, so a game notices it was hit by watching its own `health` — which is
+  what my test does. It works, and polling is a defensible answer, but it is worth someone
+  deciding rather than inheriting.
 
 ### 4. A rig observation — not a request, and explicitly not a change I would make
 
@@ -269,21 +285,19 @@ every weight and garment binding for a cosmetic gain. **What I would suggest is 
 documentation in the body contract** recording which side `*L` and `*R` are on, so the fact
 is written down once instead of rediscovered. Your ruling, and theirs.
 
-### 5. The ownership map and my charter disagree on paper
+### 5. The ownership map still has no animation row
 
-`AGENTS.md` §3 still maps **all** of `engine/*/character/**` — "(body, rig, variants,
-skinning, animation)" — to the character asset pipeline, and §2's roster has no animation
-area. My charter gives me animation and pose evaluation. I worked to the charter and put
-everything new in files nobody else had (`character/animation.*`,
-`character/use_archetypes.*`, `tests/test_animation.cpp`, `tests/test_use_archetypes.cpp`,
-`tools/anim_preview/`), and I did not touch `humanoid.h`, `humanoid.cpp`, `character.h`,
-`items.h` or `garment_fit.*`. So nothing has actually collided.
+Narrower than when I first raised it, because ADR 0017's unowned-area rule is now in `AGENTS.md`
+§3 and that was the part that actually mattered. What remains is cosmetic but load-bearing for the
+next session: §2's roster has no animation area, and §3 still maps **all** of
+`engine/*/character/**` — "(body, rig, variants, skinning, animation)" — to the character asset
+pipeline, including the four files this session created.
 
-But the table is what the *next* session will read, and it currently says these files
-belong to someone else. Worth one edit either way — either the table gains an animation
-row, or you tell me the split is meant to be temporary and this all reverts to the
-character asset pipeline when that area next runs. Yours to decide; I have not edited
-`AGENTS.md`.
+Nothing has collided, because everything new is in files nobody else had and I have not touched
+`humanoid.h`, `character.h`, `garment_fit.*` or the rig. But a fresh session reading that table
+would conclude `character/animation.*` and `character/use_archetypes.*` are someone else's. One
+row either way — or tell me the split reverts to the pipeline when that area next runs, and I will
+stop mentioning it.
 
 ### 6. Two small things I did take, flagged for the record
 
