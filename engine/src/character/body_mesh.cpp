@@ -1,5 +1,6 @@
 #include "mge/character/body_mesh.h"
 #include "mge/character/garment_binding.h"
+#include "mge/character/held_items.h"
 #include "mge/character/wearable_catalogue.h"
 
 #include <cmath>
@@ -145,30 +146,38 @@ namespace {
 // Meshes and bindings, one slot per catalogue row, loaded on first use and
 // shared process-wide — the P1 claim of the whole design is that a crowd of
 // characters costs ONE copy of each garment however many wear it.
+// Both caches are keyed by catalogue index, so they must follow the
+// catalogue's generation. Reloading the catalogue (a tool pointing at another
+// asset directory) can reorder rows, and a cache that did not notice would
+// hand out the WRONG garment rather than merely a missing one.
 const std::vector<SkinnedMeshData>& garmentMeshes() {
-    static const std::vector<SkinnedMeshData> loaded = [] {
-        const WearableCatalogue& catalogue = wearableCatalogue();
-        std::vector<SkinnedMeshData> meshes(catalogue.size());
+    static std::vector<SkinnedMeshData> meshes;
+    static uint32_t built = 0;
+    const WearableCatalogue& catalogue = wearableCatalogue();
+    if (built != catalogue.generation()) {
+        built = catalogue.generation();
+        meshes.assign(catalogue.size(), SkinnedMeshData{});
         for (size_t i = 0; i < catalogue.size(); ++i) {
             const WearableDef& def = catalogue.at(i);
             if (!def.held && !def.mesh.empty()) loadAsset(def.mesh.c_str(), meshes[i]);
         }
-        return meshes;
-    }();
-    return loaded;
+    }
+    return meshes;
 }
 
 const std::vector<GarmentBinding>& garmentBindings() {
-    static const std::vector<GarmentBinding> loaded = [] {
-        const WearableCatalogue& catalogue = wearableCatalogue();
-        std::vector<GarmentBinding> bindings(catalogue.size());
+    static std::vector<GarmentBinding> bindings;
+    static uint32_t built = 0;
+    const WearableCatalogue& catalogue = wearableCatalogue();
+    if (built != catalogue.generation()) {
+        built = catalogue.generation();
+        bindings.assign(catalogue.size(), GarmentBinding{});
         for (size_t i = 0; i < catalogue.size(); ++i) {
             const WearableDef& def = catalogue.at(i);
             if (!def.held && !def.mesh.empty()) loadBinding(def.mesh.c_str(), bindings[i]);
         }
-        return bindings;
-    }();
-    return loaded;
+    }
+    return bindings;
 }
 
 const SkinnedMeshData& emptyMesh() {
@@ -539,9 +548,39 @@ void buildPosedCharacter(const HumanoidVariant& variant, const WearableInstance*
         anyShape = shape[t] < -1e-4f || shape[t] > 1e-4f;
     }
 
+    // Held items (task 14.7). This is where they were silently dropped: the
+    // line below used to read `if (garment.vertices.empty()) continue; // held
+    // items are not garments` and stop there, so a sword equipped on the
+    // skinned path simply never appeared. It IS true that they are not
+    // garments — they are rigid and follow a joint instead of deforming with
+    // the skin — but "not a garment" is a reason to place them differently,
+    // not a reason to skip them.
+    //
+    // They need the posed joint transforms rather than the skinning palette,
+    // and from the SAME skeleton the palette was built from, or the sword ends
+    // up where a template-proportioned hand would be instead of this
+    // character's.
+    Mat4 jointWorld[kJointCount];
+    bool jointWorldReady = false;
+
     for (size_t i = 0; i < wearableCount; ++i) {
+        const size_t row = wearableCatalogue().indexOf(wearables[i].kind);
+        if (isHeldItem(row)) {
+            if (!jointWorldReady) {
+                evaluatePose(buildSkeleton(variant), pose, jointWorld);
+                jointWorldReady = true;
+            }
+            HeldItemPlacement placement;
+            if (placeHeldItem(row, wearables[i].sheathed, variant, jointWorld, placement)) {
+                out.emplace_back();
+                out.back().mesh = std::move(placement.mesh);
+                for (int c = 0; c < 4; ++c) out.back().color[c] = wearables[i].color[c];
+            }
+            continue;
+        }
+
         const SkinnedMeshData& garment = sharedGarment(wearables[i].kind);
-        if (garment.vertices.empty()) continue;  // held items are not garments
+        if (garment.vertices.empty()) continue;  // no mesh installed for this row
         if (wearableHidden(wearables, wearableCount, i)) continue;
 
         // Garments follow the variant's PROPORTIONS through the same palette.

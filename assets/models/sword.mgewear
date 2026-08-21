@@ -1,0 +1,27 @@
+# Sword — a one-handed arming sword.
+#
+# A HELD item, not a garment: it is rigid and follows the hand joint rather
+# than deforming with the skin, so it never goes near the fitting pipeline
+# (CHARACTERS.md §6.1). `mesh` names a static `.mgemesh` here, not a `.mgeskin`.
+#
+# The mesh is modelled in grip space — origin at the hand, blade up +Y — which
+# is what lets the item's grip meet the hand socket with no per-item animation.
+
+version       1
+
+id            sword
+name          Sword
+mesh          item_sword
+held          true
+grip          one_handed
+anchor        hand_r
+sheath        back
+sheathable    true
+
+# The hand's local +Y runs UP the arm, so an unrotated blade points at the sky.
+# 160 degrees hangs it down from the fist and tips it slightly forward — a
+# resting grip. Chosen by looking at the render, not by arithmetic.
+grip_offset   0 0 0
+grip_rotate   160 0 0
+
+color         0.72 0.73 0.78 1
