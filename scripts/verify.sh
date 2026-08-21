@@ -15,6 +15,18 @@ QEMU="$(command -v qemu-aarch64-static || command -v qemu-aarch64 || true)"
 GRADLE="${GRADLE:-$(command -v gradle || true)}"
 [ -x ./gradlew ] && GRADLE=./gradlew
 
+# A test that shells out is NOT verified on the ABI we ship: under qemu-user
+# /bin/sh is an x86-64 binary exec'd from an emulated aarch64 process, and
+# Android has no /bin/sh at all. This has now been introduced twice, both times
+# passing on the host and failing only on the arm64 tier. Fail fast instead.
+if grep -rn --include=*.cpp -E '(^|[^_[:alnum:]])(std::system|popen)[[:space:]]*\(' tests/ >/tmp/mge_shellout.$$ 2>/dev/null; then
+    echo "ERROR: tests shell out, which cannot work on the shipped ABI:" >&2
+    cat /tmp/mge_shellout.$$ >&2
+    rm -f /tmp/mge_shellout.$$
+    exit 1
+fi
+rm -f /tmp/mge_shellout.$$
+
 echo "=== 1/3 host: build + tests + runner"
 cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=Release >/dev/null
 cmake --build build >/dev/null

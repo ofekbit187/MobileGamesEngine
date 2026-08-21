@@ -356,9 +356,7 @@ MGE_TEST(reloading_the_catalogue_does_not_leave_stale_meshes_behind) {
 
     // A directory whose rows sort BEFORE "tunic", so every later index shifts.
     const std::string dir = tmpPath("mge_wearable_reload");
-    const std::string cmd = "rm -rf '" + dir + "' && mkdir -p '" + dir + "' && cp '" +
-                            std::string(characterAssetDir()) + "'/* '" + dir + "'/";
-    MGE_CHECK(std::system(cmd.c_str()) == 0);
+    MGE_CHECK(copyAssetDirInto(std::string(characterAssetDir()), dir));
     const std::string path = dir + "/aaa_apron.mgewear";
     std::FILE* file = std::fopen(path.c_str(), "wb");
     MGE_CHECK(file != nullptr);
