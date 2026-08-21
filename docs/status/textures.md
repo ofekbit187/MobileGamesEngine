@@ -6,13 +6,16 @@
 **Updated:** 2026-08-21 by the architect — chartered, awaiting dispatch
 
 ## Now
-**Chartered by owner dictation (ADR 0014): skin is generated, not painted.** First job is task
-**15.1 — one generated face on the shipped body, rendered, for the owner's eye**, before any
-system is built.
+**Chartered, then re-aimed the same day by the owner: skin base maps are IMPORTED, not
+generated.** Read ADR 0014 *and its reversal at the end of that file* — the reversal is the
+operative ruling. First job is **15.0, sourceability measured**, then 15.1 (one imported face on
+the shipped body, for the owner's eye).
 
 ## Needs from the architect
-Nothing. ADR 0014 rules the memory constraint (O(1) in crowd size), the charter question
-(a generator is engineering; painting by eye is not), and the sequencing.
+Nothing. The reversal rules the memory constraint (unchanged: O(1) in crowd size), the source
+question (import; never originate — the same rule the mesh side follows), and the sequencing.
+If nothing suitable proves sourceable, that comes back here as a finding rather than becoming a
+quiet fallback to generating.
 
 ## Last landed
 `assets/standards/skin_texture.mgestd` — the texture authoring standard, written while the count
