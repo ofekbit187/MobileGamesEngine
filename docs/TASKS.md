@@ -301,16 +301,26 @@ Anything that allocates a texture per character is a defect, not a budget line.*
   Also measured: ambientCG has NO human skin (`q=skin` returns `Leather008`), and "MakeHuman
   skins are CC0" holds only for the bundled system pack — community skins include CC-BY. Blocked
   on three rulings in docs/status/textures.md; not falling back to generating*
-- [ ] **15.1** **One face, rendered, for the owner's eye** — a single imported skin on the shipped
+- [~] **15.1** **One face, rendered, for the owner's eye** — a single imported skin on the shipped
   body, before any system exists. First deliberately: it **retires ADR 0012's provisional Face
-  waiver**, whose condition is "the owner judges the first authored face texture" — *not started
-  under the current ruling. A GENERATED face was built and rendered against ADR 0014 before the
-  reversal (commit `67bcf5d`, `tools/skin_preview`, captures in `docs/status/evidence/textures/`);
-  it is kept as evidence about the chart and the render path, NOT as a content route. The render
-  harness, the mesh→chart rasterizer, the linear-space mip/dilate/validate path and the AO bake
-  are route-independent and carry over; the colour model and procedural features do not*
-- [ ] **15.2** The import path: re-projection through the inverse repack transform, plus the
-  conformance gates against `assets/standards/skin_texture.mgestd` — the tool, not the content
+  waiver**, whose condition is "the owner judges the first authored face texture" — *built: a CC0
+  photographic skin is transferred onto our frozen chart and renders through the engine's textured
+  lit path. Captures in `docs/status/evidence/textures/imported_*.png`; deterministic (two imports
+  byte-identical). **Waiting on the owner's eye, which is what closes this.** One finding for him:
+  the face has no eyes — sourced skins assume separate eyeball geometry and our Face is a closed
+  shell, so the transfer supplies eyelid skin over a closed socket. That is a geometry gap no skin
+  can fix; raised as a seam in docs/status/textures.md*
+- [~] **15.2** The import path: **a mesh-to-mesh transfer** (ADR 0014 amendment — the inverse
+  repack has an empty input set), plus the conformance gates against
+  `assets/standards/skin_texture.mgestd` — the tool, not the content — *`tools/skin_import` runs
+  end to end: OBJ load, `stb_image` vendored, similarity alignment with the facing CHOSEN BY
+  MEASUREMENT, per-region iterated-closest-point fitting (one rigid transform cannot fit two
+  humans in different poses — the hands were 224 mm out, the face 62.5 mm; after fitting, 15.6 mm
+  whole-body and 7.1 mm across the face), a smoothed per-vertex offset field so region boundaries
+  leave no seam, and CIELAB skin-locus rejection for the source's eye/mouth interiors. Output goes
+  through the existing bake path (dilate, linear-space mips, sRGB tag, `validateTexture`).
+  **Still pending: the conformance gates as a pass/fail step, the packed AO/roughness map, and
+  `.mgetex` output** — it currently hands the renderer a TextureData directly*
 - [ ] **15.3** Phenotype binding: melanin depth, undertone, weathering and per-person blemish
   masks driven from the `Genome`'s phenotype (ADR 0009), evaluated in-shader over the shared
   imported maps — **never as per-person texture allocation**

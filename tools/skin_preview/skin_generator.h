@@ -120,6 +120,13 @@ struct SkinMaps {
     TextureData packed;
 };
 
+// Wrap an already-sRGB-encoded RGB sheet (an IMPORTED map) as a TextureData:
+// dilate into the padding, build the mip chain in LINEAR light, tag it sRGB.
+// Shared with the generator because those steps are properties of our chart
+// and our standard, not of where the pixels came from.
+bool packImportedAlbedo(const std::vector<uint8_t>& rgb, const std::vector<uint8_t>& filled,
+                        uint32_t sheet, TextureData& out);
+
 // Generate the shared maps. One call produces what an entire crowd samples.
 void generate(const SkinnedMeshData& mesh, const SurfaceTexel* surface, uint32_t sheet,
               const HeadLandmarks& head, const SkinParams& params, SkinMaps& out);
