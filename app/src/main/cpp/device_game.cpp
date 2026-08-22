@@ -12,6 +12,7 @@
 #include "mge/character/body_mesh.h"
 #include "mge/character/humanoid.h"
 #include "mge/character/held_items.h"
+#include "mge/character/use_archetypes.h"
 #include "mge/character/wearable_catalogue.h"
 #include "mge/core/log.h"
 #include "mge/framework/ai.h"
@@ -181,6 +182,13 @@ struct DeviceGame::Impl {
         SkinnedCharacter character;
         LocomotionAnimator anim;
         std::vector<Held> held;
+        // The use motion currently playing, if any (14.2/14.3). This is what
+        // makes the action button move the body instead of only printing a
+        // line: the archetype is sampled as an OVERLAY over locomotion, so
+        // the legs keep walking through the swing.
+        UsePlayer use;
+        UseMotion useMotion{};
+        JointMask useMask{};      // cached at start; grip decides it, not us
     };
     // Shared across every character in the world (the P1 claim of the
     // template-body design): one body mesh, one mesh per garment kind+layer.
@@ -190,6 +198,13 @@ struct DeviceGame::Impl {
     std::unordered_map<uint32_t, GpuLodMesh> heldMeshes;  // one per catalogue row
     std::vector<SkinnedDrawItem> skinnedItems;
     Actor player, guard, villager;
+    // A strike whose outcome is already decided but whose MOMENT has not
+    // arrived: the action model resolves damage on the button press, the
+    // archetype says when the blow lands. Until gameplay hangs damage on
+    // `strike` itself (14.3, and it is gameplay's call, not this file's),
+    // this keeps what the player READS in step with what the arm does.
+    bool pendingStrike = false;
+    bool pendingStrikeHit = false;
     CharacterSystem* characters = nullptr;
     AiSystem* ai = nullptr;
     CollisionWorld collision;
@@ -432,6 +447,9 @@ bool DeviceGame::start(Engine& engine, AudioMixer& mixer, ANativeWindow* window,
     swordUse.power = 0.25f;
     swordUse.cooldown = 0.7f;
     swordUse.animKey = "anim/swing";
+    swordUse.archetype = UseArchetype::Swing;
+    swordUse.reach = 1.0f;   // a longsword, and the arc radius follows from it
+    swordUse.weight = 1.4f;  // drives wind-up/strike/recovery, in seconds
     s.itemUses.define("item/sword", swordUse);
 
     ItemUse appleUse;
@@ -440,11 +458,20 @@ bool DeviceGame::start(Engine& engine, AudioMixer& mixer, ANativeWindow* window,
     appleUse.cooldown = 0.4f;
     appleUse.effectId = assetIdFromName("effect/fed");
     appleUse.effectDuration = 60.0f;
+    // Now that the archetype actually animates, these two fields stop being
+    // decoration: without them an apple is eaten with a swordsman's swing,
+    // because Swing is the default.
+    appleUse.archetype = UseArchetype::Consume;
+    appleUse.reach = 0.25f;
+    appleUse.weight = 0.2f;
     s.itemUses.define("item/apple", appleUse);
 
     ItemUse torchUse;
     torchUse.kind = ItemUseKind::Toggle;
     torchUse.cooldown = 0.3f;
+    torchUse.archetype = UseArchetype::Raise;
+    torchUse.reach = 0.5f;
+    torchUse.weight = 0.8f;
     s.itemUses.define("item/torch", torchUse);
 
     const auto apple = [&](Vec3 position) {
@@ -716,6 +743,21 @@ void DeviceGame::frame(double dtSeconds, ANativeWindow* window) {
         const MovementComponent* m = world.movement(actor->entity);
         actor->anim.update(static_cast<float>(dt),
                            m != nullptr ? m->velocity.length() : 0.0f);
+        // Advance any use motion. `update` returns true on the ONE frame the
+        // strike moment is crossed — the edge 14.3 exists to give gameplay —
+        // and it fires exactly once even if a long frame steps over it.
+        const bool struck = actor->use.update(static_cast<float>(dt));
+        if (struck && actor == &s.player && s.pendingStrike) {
+            if (s.pendingStrikeHit) {
+                s.strings.set(Language::English, "hud.flash", "Your blade lands");
+                s.strings.set(Language::Hebrew, "hud.flash",
+                              "\xd7\x94\xd7\x9c\xd7\x94\xd7\x91 \xd7\xa4\xd7\x95\xd7\x92\xd7\xa2");
+            } else {
+                s.strings.set(Language::English, "hud.flash", "You swing at nothing");
+            }
+            s.promptFlash = 1.6;
+            s.pendingStrike = false;
+        }
     }
 
     // --- The player's actions (Phase 12). Two buttons, and everything they
@@ -724,16 +766,37 @@ void DeviceGame::frame(double dtSeconds, ANativeWindow* window) {
     if (intents.jump) s.characters->perform(s.player.entity, actionJump());
     if (intents.useHeld) {
         const ActionResult used = s.characters->perform(s.player.entity, actionUseHeld());
+        // The body moves for ANY successful use, whatever the item meant: the
+        // archetype comes from the item's own four numbers, so a torch raises
+        // and an apple goes to the mouth without a line of code per item
+        // (14.2). This is the whole of "a new weapon is not new animation
+        // work" arriving on the phone.
+        if (used.performed) {
+            // A new use supersedes any strike still waiting to be announced,
+            // or eating an apple would print the blade message the swing it
+            // interrupted never got to.
+            s.pendingStrike = false;
+            const ItemUse* use = s.itemUses.find(used.item.asset);
+            if (use != nullptr) {
+                s.player.useMotion = motionFromItemUse(*use, /*leftHanded=*/false);
+                s.player.useMask =
+                    useArchetypeMask(buildSkeleton(s.player.character.variant), s.player.useMotion);
+                s.player.use.start(s.player.useMotion);
+            }
+        }
         switch (used.useKind) {
             case ItemUseKind::Strike:
+                // Held back until the strike instant rather than printed on
+                // the button press. The blow is now something you WATCH land,
+                // and the words have to agree with the arm or the swing reads
+                // as decoration played after the fact.
                 if (used.target != kInvalidEntity) {
-                    s.strings.set(Language::English, "hud.flash", "Your blade lands");
-                    s.strings.set(Language::Hebrew, "hud.flash",
-                                  "\xd7\x94\xd7\x9c\xd7\x94\xd7\x91 \xd7\xa4\xd7\x95\xd7\x92\xd7\xa2");
+                    s.pendingStrikeHit = true;
+                    s.pendingStrike = true;
                 } else {
-                    s.strings.set(Language::English, "hud.flash", "You swing at nothing");
+                    s.pendingStrikeHit = false;
+                    s.pendingStrike = true;
                 }
-                s.promptFlash = 1.6;
                 break;
             case ItemUseKind::Consume:
                 s.strings.set(Language::English, "hud.flash", "You eat, and feel better");
@@ -899,6 +962,19 @@ void DeviceGame::frame(double dtSeconds, ANativeWindow* window) {
             const float yaw = t->prevYaw + (t->yaw - t->prevYaw) * alpha;
             Pose pose;
             actor->anim.samplePose(pose);
+            // The use motion rides OVER locomotion rather than replacing it
+            // (14.1): the archetype's own mask decides which joints it takes,
+            // and a one-handed grip deliberately leaves the off arm to the
+            // walk, which is what a person carrying a sword actually does.
+            // One extra pose blend, no second palette, no second draw.
+            if (actor->use.active()) {
+                Pose overlay;
+                sampleUseArchetype(actor->useMotion, actor->use.normalizedTime(), overlay);
+                LayeredPose layered;
+                layered.reset(pose);
+                layered.addLayer(overlay, actor->useMask, actor->use.weight());
+                pose = layered.result();
+            }
             SkinnedCharacter& character = actor->character;
             buildSkinPalette(character.variant, pose, character.palette);
 

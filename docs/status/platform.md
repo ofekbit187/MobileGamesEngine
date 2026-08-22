@@ -16,6 +16,7 @@ the roster and it is written down here rather than left implicit: when a platfor
 come up, this file is its handover, and `app/` is its area, not the architect's.
 
 ## Last landed
+
 **19.1 — held items on the device path.** Every character in every shipped APK to date has held
 nothing. The sword in the early captures came from `buildHumanoidVisual` (the v1 box rig) as a
 part bolted to a joint; when the body became a skinned mesh, the device build's outfit loop began
@@ -37,7 +38,40 @@ once per catalogue row into `Impl::heldMeshes` and shared by every actor holding
 Verified on all three tiers: 227 tests / 0 failed on host and on arm64 under QEMU, both runners
 printing `steady-state heap allocations: 0`, and `assembleDebug` producing a 5.9 MB APK.
 
-## Found while landing it — not fixed, and not mine to fold in
+**19.3 — the action button now moves the body.** Pressing use has fired a real action since
+Phase 12, but the character never moved: it printed a line. The archetype library (14.2) has been
+sitting complete and unused on this path. Now a successful use starts the motion the ITEM
+declares, and the pose is composed exactly as 14.1 intends:
+
+    layered.reset(walkPose); layered.addLayer(archetypeOverlay, archetypeMask, player.weight())
+
+The mask comes from `useArchetypeMask`, so grip decides which arms participate rather than this
+file guessing: a one-handed swing leaves the off arm to locomotion and the legs never stop
+walking. The held item follows for free, because the sword's matrix is built from the same
+composed pose the palette is.
+
+Three item rows got their real archetypes at the same time. `ItemUse::archetype/reach/weight`
+were decoration while nothing played them, so apple and torch both sat at the `Swing` default —
+an apple would have been eaten with a swordsman's swing the moment the motion turned on.
+
+**Evidence:** `evidence/platform/swing_with_sword.png` — eight frames, wind-up through recovery,
+sword in hand throughout, legs striding. Produced by `mge_held_preview --swing`, which composes
+the pose the *same* way the device build does and rasterizes it on the CPU. **It is real engine
+output, but from the preview path, not from a phone** — `device_game.cpp` cannot run headlessly,
+so the wiring itself is verified by compilation and by parity with this composition, not by a
+device capture. Worth saying plainly rather than letting a strip imply a screenshot.
+
+The first capture of that strip was a side view and appeared to show a sword that never moved.
+It was the camera: a Swing travels ~0.7 m across the body in x, and a side view puts x down the
+depth axis. Measured the hand trajectory before touching anything, which is the only reason the
+archetype did not get blamed for a working motion.
+
+**Not done in 19.3:** damage still resolves on the button press inside the action model rather
+than on `strike`. The *message* is now held back to the strike instant so what the player reads
+agrees with the arm, but that is presentation. Moving the damage itself is a `CharacterSystem`
+change and belongs to gameplay.
+
+## Found while landing 19.1 — not fixed, and not mine to fold in
 **Task 19.6, a live P1 violation on the shipped path.** `DeviceGame::frame` declares its
 `std::vector<DrawItem> items` *inside* the function, so the device render path heap-allocates
 every single frame. This predates 19.1 and is untouched by it. It has stood this long because the
@@ -52,7 +86,24 @@ Nothing blocking. Open question for whoever takes this area: the P1 gate should 
 path, not just the core. That is a real gap in the verification story and larger than 19.6's
 two-line fix.
 
+## A note for the wearables session — I edited your tool
+`tools/held_preview/main.cpp` gained a `--swing` mode. It is additive: no existing behaviour or
+output changed, and the default path is untouched. I put it there rather than in a new tool
+because what needed proving is *held item and swing together*, which is exactly that tool's
+subject — "is the sword in the hand?", now through a motion instead of a bind pose. Say the word
+and I will move it.
+
 ## Next
-19.2 (skin texture on device characters), 19.3 (use archetypes on the action button), 19.4 (one
-scripted scene). 19.5 — the APK itself — ships to the owner now, with 19.1 in it and 19.2–19.4
-honestly absent.
+19.2 (skin texture on device characters) and 19.4 (one scripted scene). 19.5 — the APK — ships to
+the owner now, with 19.1 and the visual half of 19.3 in it, and the rest honestly absent.
+
+**19.2 is bigger than it looks, and worth knowing before someone picks it up.** No texture asset
+ships in this repo at all. The imported sheet exists only as an evidence PNG, and the source it
+came from is deliberately uncommitted. Worse, `bakeTexture` emits `Rgba8` and nothing else — no
+ASTC, no ETC2 encoder exists yet. So a textured character on device today means shipping the
+uncompressed pack. That is *legal* — `TexturePack::Uncompressed` is the documented verification
+and fallback pack — but a 1024-square sheet with mips is ~5.6 MB against a 5.9 MB APK, and
+TEXTURING §7's "a shipped texture is already block-compressed" is written for exactly this
+temptation. **The real 19.2 is the ASTC/ETC2 encoder, and that is the textures area's, not a
+device-build task.** Ruling it that way rather than sneaking an uncompressed sheet into the APK
+to make a demo look better.

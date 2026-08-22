@@ -21,7 +21,9 @@
 
 #include "mge/character/body_mesh.h"
 #include "mge/character/held_items.h"
+#include "mge/character/animation.h"
 #include "mge/character/humanoid.h"
+#include "mge/character/use_archetypes.h"
 #include "mge/character/wearable_catalogue.h"
 
 using namespace mge;
@@ -121,8 +123,93 @@ bool writePpm(const std::string& path, const std::vector<Image>& panels) {
 
 }  // namespace
 
+// --swing: the sequence the DEVICE build now plays (task 19.3).
+//
+// Everything the phone does per frame is reproduced here in the same order,
+// because the point is to prove the wiring rather than to redraw the
+// archetype: locomotion samples a walk, the use archetype is layered over it
+// under its own mask, and the held item is placed on the resulting pose. If
+// the sword leaves the hand mid-swing, or the legs stop walking when the arm
+// starts, it shows up in this strip and nowhere else.
+int renderSwing(const std::string& outDir) {
+    HumanoidVariant variant;
+    const Skeleton skeleton = buildSkeleton(variant);
+
+    // The sword the device declares, field for field (device_game.cpp).
+    ItemUse swordUse;
+    swordUse.kind = ItemUseKind::Strike;
+    swordUse.archetype = UseArchetype::Swing;
+    swordUse.reach = 1.0f;
+    swordUse.weight = 1.4f;
+    const UseMotion motion = motionFromItemUse(swordUse, /*leftHanded=*/false);
+    const JointMask mask = useArchetypeMask(skeleton, motion);
+    const UsePhases phases = usePhases(motion);
+
+    LocomotionAnimator walk;
+
+    constexpr int kFrames = 8;
+    std::vector<Image> panels;
+    std::printf("  swing: %.2fs total, wind-up %.0f%% / strike %.0f%% / recovery %.0f%%\n",
+                motion.reach > 0 ? phases.duration : phases.duration, phases.windUp * 100.0f,
+                phases.strike * 100.0f, phases.recovery * 100.0f);
+    // The walk has to ADVANCE across the strip, or the legs are frozen and the
+    // whole point — that locomotion survives the overlay — goes unproven.
+    const float frameDt = phases.duration / static_cast<float>(kFrames - 1);
+    for (int f = 0; f < kFrames; ++f) {
+        const float t = static_cast<float>(f) / static_cast<float>(kFrames - 1);
+        if (f > 0) walk.update(frameDt, 1.6f);
+        Pose base;
+        walk.samplePose(base);
+        Pose overlay;
+        sampleUseArchetype(motion, t, overlay);
+        LayeredPose layered;
+        layered.reset(base);
+        layered.addLayer(overlay, mask, 1.0f);
+        const Pose pose = layered.result();
+
+        const WearableInstance outfit[] = {
+            {WearableKind::Tunic, 1, false, {0.55f, 0.42f, 0.28f, 1}},
+            {WearableKind::Pants, 1, false, {0.34f, 0.30f, 0.26f, 1}},
+            {WearableKind::Sword, 1, false, {0.72f, 0.73f, 0.78f, 1}},
+        };
+        std::vector<CharacterPiece> pieces;
+        buildPosedCharacter(variant, outfit, 3, pose, BodyLod::Lod0, pieces);
+
+        // FRONT view on purpose. A Swing travels across the body in x, and a
+        // side view puts x down the depth axis: the first capture of this
+        // strip showed a sword that appeared not to move at all, because the
+        // whole 0.7 m arc was pointing at the camera.
+        const View view = {"front", 0, 1, 2, 1.0f, 1.0f};
+        Image img;
+        for (const CharacterPiece& piece : pieces) raster(img, view, piece.mesh, piece.color);
+        panels.push_back(std::move(img));
+
+        const char* phaseName = t < phases.windUp
+                                    ? "wind-up"
+                                    : (t < phases.windUp + phases.strike ? "STRIKE" : "recovery");
+        std::printf("  t=%.2f  %-8s  %zu pieces\n", t, phaseName, pieces.size());
+    }
+
+    const std::string path = outDir + "/held_swing.ppm";
+    if (!writePpm(path, panels)) {
+        std::printf("could not write %s\n", path.c_str());
+        return 1;
+    }
+    std::printf("\nwrote %s (%d frames, wind-up through recovery)\n", path.c_str(), kFrames);
+    return 0;
+}
+
 int main(int argc, char** argv) {
-    const std::string outDir = argc > 1 ? argv[1] : "build";
+    std::string outDir = "build";
+    bool swing = false;
+    for (int i = 1; i < argc; ++i) {
+        if (std::strcmp(argv[i], "--swing") == 0) {
+            swing = true;
+        } else {
+            outDir = argv[i];
+        }
+    }
+    if (swing) return renderSwing(outDir);
 
     const size_t sword = wearableCatalogue().find("sword");
     if (sword == WearableCatalogue::npos) {

@@ -534,9 +534,23 @@ garments its own way and skips held items at line 543.*
   frame path. Verified on all three tiers; the sword rides the hand a character actually has,
   because the joint transforms come from that variant's skeleton
 - [ ] **19.2** The skin texture on characters on device, through the renderer's new skinned
-  material path — the face the owner is judging should be the face he sees on the phone
-- [ ] **19.3** Use archetypes wired to the existing on-screen action button, so pressing it
-  **swings the actual weapon in hand** and the damage moment lands on `strike`
+  material path — the face the owner is judging should be the face he sees on the phone.
+  **Reclassified: this is the textures area's, not the device build's.** No texture asset ships
+  in the repo, and `bakeTexture` emits `Rgba8` only — no ASTC or ETC2 encoder exists. Shipping a
+  textured character today means the uncompressed pack: legal (it is the documented fallback)
+  but ~5.6 MB of sheet against a 5.9 MB APK, and squarely against TEXTURING §7. The real task
+  here is the block-compression encoder
+- [~] **19.3** Use archetypes wired to the existing on-screen action button, so pressing it
+  **swings the actual weapon in hand** and the damage moment lands on `strike`. The swing is
+  landed: a successful use starts the archetype the ITEM declares, layered over locomotion under
+  the archetype's own mask, so the legs keep walking through it and a one-handed grip leaves the
+  off arm to the walk. The sword follows, because the held-item matrix reads the same composed
+  pose. Apple and torch got their real archetypes (`Consume`, `Raise`) at the same time — until
+  the motion actually played, those fields were decoration and both defaulted to `Swing`.
+  **Missing:** damage still resolves on the button press inside the action model, not on
+  `strike`. What the player READS is now held back to the strike instant, which keeps the words
+  and the arm in agreement, but that is presentation. Hanging the damage itself on the edge means
+  changing `CharacterSystem`, which is gameplay's file, not the device build's
 - [ ] **19.4** One scripted scene that reads as a game rather than a feature list: a dressed,
   textured character walks up to something, draws, swings, and connects
 - [ ] **19.5** **The APK, delivered.** Three tiers green, heap gate 0, and the file handed over.
