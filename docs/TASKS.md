@@ -514,7 +514,34 @@ with the owner.*
 **Exit criteria:** a video of a person walking becomes a clip playing on a character, and we can
 say by how much it differs from what we generate.
 
-## Phase 19 and beyond — held for further dictation
+## Phase 19 — The vertical slice: one build that proves the character pillar (owner request)
+
+*The owner has asked twice for something playable. Everything the character pillar promises now
+works — but it works in **four different places**, and no single build contains all of it. This
+phase exists to change that, and its deliverable is **an APK in his hands**, not a capture.*
+
+*What exists and where: the body (imported, 12 regions, real face, reweighted, `be7b3618f965eb0f`);
+garments fitting every build from one authored source; **held items**, landed today, on the desktop
+path only; **layered poses** so a character acts while walking; **nine use archetypes** driven from
+item data with zero per-item authoring; a **photographic skin with a real face**, and a renderer
+that can finally sample it. The device build predates most of it — `device_game.cpp` still builds
+garments its own way and skips held items at line 543.*
+
+- [ ] **19.1** Held items on the device path — mirror `placeHeldItem`/`buildPosedCharacter` rather
+  than re-deriving it. The line that drops them is the same one the desktop path fixed today
+- [ ] **19.2** The skin texture on characters on device, through the renderer's new skinned
+  material path — the face the owner is judging should be the face he sees on the phone
+- [ ] **19.3** Use archetypes wired to the existing on-screen action button, so pressing it
+  **swings the actual weapon in hand** and the damage moment lands on `strike`
+- [ ] **19.4** One scripted scene that reads as a game rather than a feature list: a dressed,
+  textured character walks up to something, draws, swings, and connects
+- [ ] **19.5** **The APK, delivered.** Three tiers green, heap gate 0, and the file handed over.
+  This is the task; the rest are its prerequisites
+
+**Exit criteria:** the owner opens an APK and plays the thing the last week built, without being
+told what to look for.
+
+## Phase 20 and beyond — held for further dictation
 
 Deliberately not planned yet; known candidates awaiting direction:
 
