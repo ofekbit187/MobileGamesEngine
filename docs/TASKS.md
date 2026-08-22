@@ -557,12 +557,23 @@ garments its own way and skips held items at line 543.*
   This is the task; the rest are its prerequisites. Delivered 2026-08-22 with 19.1 and the
   visual half of 19.3 in it, and 19.2/19.4 stated as absent rather than glossed. Board updated
   in place
-- [ ] **19.6** *(found while landing 19.1, pre-existing, not caused by it)* The device render path
-  builds its `std::vector<DrawItem> items` **inside** `DeviceGame::frame`, so it heap-allocates
-  every frame. The host runner's P1 gate does not cover this file, which is why it has stood.
-  The fix is small — hoist it to `Impl`, `clear()` per frame so capacity persists — but it is the
-  platform area's line, not one to fold into an unrelated commit. **P1 is the ranked-first
-  principle; this is a real violation on the shipped path, not a style note**
+- [x] **19.6** *(found while landing 19.1, pre-existing, not caused by it)* The device render path
+  built its `std::vector<DrawItem> items` **inside** `DeviceGame::frame`, so it heap-allocated
+  every frame. The host runner's P1 gate does not cover this file, which is why it stood.
+  **Fixed on the owner's ruling.** Hoisted to `Impl::drawItems`, cleared per frame so capacity
+  persists, and reserved once to the *exact* bound — entity capacity (the hard cap on
+  renderables) plus the held items on the three actors, counted after they are dressed. An exact
+  reservation makes "never grows" a property rather than a hope.
+  Also adds the device build's **first allocation check**: if the list ever outgrows its
+  reservation the frame path has allocated, and it says so loudly and once instead of hiding
+  like this one did
+- [ ] **19.7** **The gate itself.** 19.6 was a real P1 violation that lived on the shipped path
+  because `host_runner` — the thing that enforces `steady-state heap allocations: 0` — never
+  compiles `device_game.cpp`. **The zero we report is a zero for the engine core, not for the
+  app on the phone.** The in-file check added by 19.6 catches this one vector on a real device;
+  it is not a gate. Closing this properly means the device path's scene composition living in
+  engine code the host runner exercises, which is a real refactor and a seam question, not a
+  patch. Owner's call whether it is worth doing now
 
 **Exit criteria:** the owner opens an APK and plays the thing the last week built, without being
 told what to look for.

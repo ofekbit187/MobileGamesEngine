@@ -197,6 +197,14 @@ struct DeviceGame::Impl {
     std::unordered_map<uint32_t, GpuSkinnedMesh> garmentMeshes;
     std::unordered_map<uint32_t, GpuLodMesh> heldMeshes;  // one per catalogue row
     std::vector<SkinnedDrawItem> skinnedItems;
+    // The static draw list. It lived INSIDE frame() until 19.6, which meant
+    // the device render path heap-allocated every single frame — a P1
+    // violation on the shipped path that survived because the host runner
+    // enforcing the allocation gate does not compile this file. Reserved once
+    // and cleared per frame, exactly like skinnedItems above.
+    std::vector<DrawItem> drawItems;
+    size_t drawItemsCapacity = 0;   // what was reserved; growth past it is a P1 regression
+    bool drawGrowthReported = false;
     Actor player, guard, villager;
     // A strike whose outcome is already decided but whose MOMENT has not
     // arrived: the action model resolves damage on the button press, the
@@ -637,6 +645,15 @@ bool DeviceGame::start(Engine& engine, AudioMixer& mixer, ANativeWindow* window,
             dress(s.guard, guardVariant, guardOutfit, 5);
             dress(s.villager, villagerVariant, villagerOutfit, 4);
             s.skinnedItems.reserve(Renderer::kMaxSkinnedDraws);
+            // Reserved to the EXACT bound, not a generous guess: a draw item
+            // is either a live renderable entity — capped by entity capacity —
+            // or one held item on one of the three actors, and they are
+            // already dressed by the time this runs. An exact bound is what
+            // makes "never grows" a property rather than a hope.
+            s.drawItems.reserve(engine.world().entities().capacity() +
+                                s.player.held.size() + s.guard.held.size() +
+                                s.villager.held.size());
+            s.drawItemsCapacity = s.drawItems.capacity();
         }
     }
 
@@ -926,7 +943,8 @@ void DeviceGame::frame(double dtSeconds, ANativeWindow* window) {
         const float playerYaw = pt->prevYaw + (pt->yaw - pt->prevYaw) * alpha;
         s.cameraController.update(s.camera, playerPos + Vec3{0, 0.9f, 0}, playerYaw);
 
-        std::vector<DrawItem> items;
+        std::vector<DrawItem>& items = s.drawItems;
+        items.clear();  // capacity survives; nothing is freed and nothing regrows
         world.forEachRenderable([&](EntityId, const TransformComponent& t,
                                     const ModelComponent& m) {
             auto it = s.resident.find(m.asset);
@@ -1096,6 +1114,16 @@ void DeviceGame::frame(double dtSeconds, ANativeWindow* window) {
                            0.7f, TextAlign::Center);
             }
             uiList = &s.ui.drawList();
+        }
+        // The device build's only allocation check. The host runner enforces
+        // the P1 gate for the engine core but never compiles this file, which
+        // is exactly how a per-frame allocation lived here unnoticed. A vector
+        // that outgrew its reservation has allocated on the frame path, so say
+        // so loudly and once, rather than letting the next one hide as well.
+        if (!s.drawGrowthReported && items.capacity() > s.drawItemsCapacity) {
+            MGE_LOGE(kTag, "P1: draw list grew past its reservation (%zu > %zu) — the frame path allocated",
+                     items.capacity(), s.drawItemsCapacity);
+            s.drawGrowthReported = true;
         }
         haveFrame = s.renderer.renderFrame(s.camera, items.data(), items.size(), nullptr,
                                            uiList, nullptr, 0, s.skinnedItems.data(),

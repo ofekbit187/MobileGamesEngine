@@ -2,8 +2,8 @@
 
 **Session:** none — the architect is holding this area directly
 **Branch:** `claude/android-game-engine-design-blsmnw` (integration; no separate branch)
-**State:** active — 19.1 landed, 19.2–19.4 not started
-**Updated:** 2026-08-22 by the architect
+**State:** active — 19.1, 19.3 and 19.6 landed; 19.2 reclassified, 19.4 and 19.7 open
+**Updated:** 2026-08-22 by the architect — P1 fix on the device path, on the owner's ruling
 
 ## Now
 **Phase 19 — the vertical slice.** Everything the character pillar promises works, in four
@@ -71,15 +71,33 @@ than on `strike`. The *message* is now held back to the strike instant so what t
 agrees with the arm, but that is presentation. Moving the damage itself is a `CharacterSystem`
 change and belongs to gameplay.
 
-## Found while landing 19.1 — not fixed, and not mine to fold in
-**Task 19.6, a live P1 violation on the shipped path.** `DeviceGame::frame` declares its
-`std::vector<DrawItem> items` *inside* the function, so the device render path heap-allocates
-every single frame. This predates 19.1 and is untouched by it. It has stood this long because the
-host runner — the thing that enforces the P1 gate — does not compile `device_game.cpp`, so the
-gate that would have caught it has never looked at this file. **The zero we report is a zero for
-the engine core, not for the device build.** The fix is two lines (hoist to `Impl`, `clear()` per
-frame so capacity persists after the first). It is left undone on purpose: it is unrelated to the
-task in hand, and quietly widening a commit is how a P1 fix ends up unreviewed.
+## 19.6 — the P1 violation, fixed on the owner's ruling
+`DeviceGame::frame` declared its `std::vector<DrawItem>` inside the function: the device render
+path heap-allocated **every frame**. Hoisted to `Impl::drawItems`, `clear()`ed per frame, and
+reserved once to the exact bound — `world.entities().capacity()` (the hard cap on renderables,
+since `forEachRenderable` walks registry slots) plus the held items on the three actors, counted
+after `dress()` has run. Exact rather than generous on purpose: a reservation that provably
+covers the maximum makes "never grows" a property, where a padded guess only makes it likely.
+
+Added with it: the device build's **first allocation check**. If the list ever outgrows its
+reservation, the frame path has allocated, and it logs at error level once. Not a gate — see
+below — but it turns the next occurrence of this exact bug from silent into loud.
+
+Verified on three tiers, both runners still `steady-state heap allocations: 0`. Note honestly
+what that does *not* prove: neither runner compiles this file. The fix is verified by
+construction and by build, not by a device-path allocation counter, because none exists.
+
+## The real finding, still open (19.7)
+
+`host_runner` enforces the P1 gate and **does not compile `device_game.cpp`**. That is how a
+per-frame allocation lived on the shipped path unnoticed: the gate that would have caught it has
+never once looked at the file. **The zero we report is a zero for the engine core, not for the
+app on the phone.**
+
+19.6's in-file check covers one vector on a real device. It is not a gate and should not be
+mistaken for one. Closing this properly means the device path's scene composition moving into
+engine code the host runner actually exercises — a refactor and a seam question, not a patch. It
+is raised as 19.7 for the owner rather than started on my own initiative.
 
 ## Needs from the architect
 Nothing blocking. Open question for whoever takes this area: the P1 gate should cover the device
