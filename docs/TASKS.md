@@ -527,8 +527,12 @@ item data with zero per-item authoring; a **photographic skin with a real face**
 that can finally sample it. The device build predates most of it — `device_game.cpp` still builds
 garments its own way and skips held items at line 543.*
 
-- [ ] **19.1** Held items on the device path — mirror `placeHeldItem`/`buildPosedCharacter` rather
-  than re-deriving it. The line that drops them is the same one the desktop path fixed today
+- [x] **19.1** Held items on the device path — mirror `placeHeldItem`/`buildPosedCharacter` rather
+  than re-deriving it. The line that drops them is the same one the desktop path fixed today.
+  Landed via the allocation-free route: `attachPointTransform` x `gripTransform` gives one matrix
+  per item per frame, where `placeHeldItem` bakes geometry per call and would allocate on the
+  frame path. Verified on all three tiers; the sword rides the hand a character actually has,
+  because the joint transforms come from that variant's skeleton
 - [ ] **19.2** The skin texture on characters on device, through the renderer's new skinned
   material path — the face the owner is judging should be the face he sees on the phone
 - [ ] **19.3** Use archetypes wired to the existing on-screen action button, so pressing it
@@ -537,6 +541,12 @@ garments its own way and skips held items at line 543.*
   textured character walks up to something, draws, swings, and connects
 - [ ] **19.5** **The APK, delivered.** Three tiers green, heap gate 0, and the file handed over.
   This is the task; the rest are its prerequisites
+- [ ] **19.6** *(found while landing 19.1, pre-existing, not caused by it)* The device render path
+  builds its `std::vector<DrawItem> items` **inside** `DeviceGame::frame`, so it heap-allocates
+  every frame. The host runner's P1 gate does not cover this file, which is why it has stood.
+  The fix is small — hoist it to `Impl`, `clear()` per frame so capacity persists — but it is the
+  platform area's line, not one to fold into an unrelated commit. **P1 is the ranked-first
+  principle; this is a real violation on the shipped path, not a style note**
 
 **Exit criteria:** the owner opens an APK and plays the thing the last week built, without being
 told what to look for.

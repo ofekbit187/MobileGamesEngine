@@ -11,6 +11,8 @@
 
 #include "mge/character/body_mesh.h"
 #include "mge/character/humanoid.h"
+#include "mge/character/held_items.h"
+#include "mge/character/wearable_catalogue.h"
 #include "mge/core/log.h"
 #include "mge/framework/ai.h"
 #include "mge/framework/asset_registry.h"
@@ -162,16 +164,30 @@ struct DeviceGame::Impl {
     // Scene
     AssetRegistry assets;
     std::unordered_map<AssetId, GpuLodMesh> resident;
+    // A held item on this character: the mesh is shared and uploaded once,
+    // and only a matrix moves per frame. Baking geometry every frame (what
+    // buildPosedCharacter does for the offline previews) would allocate on the
+    // frame path, which P1 forbids — attachPointTransform/gripTransform exist
+    // separately from placeHeldItem precisely so this path can stay free of it.
+    struct Held {
+        const GpuLodMesh* mesh = nullptr;
+        AttachPoint anchor = AttachPoint::HandR;
+        HeldItemDef def{};
+        float color[4] = {1, 1, 1, 1};
+        bool sheathed = false;
+    };
     struct Actor {
         EntityId entity = kInvalidEntity;
         SkinnedCharacter character;
         LocomotionAnimator anim;
+        std::vector<Held> held;
     };
     // Shared across every character in the world (the P1 claim of the
     // template-body design): one body mesh, one mesh per garment kind+layer.
     GpuSkinnedMesh bodyMesh;
     std::vector<MeshPart> bodyParts;
     std::unordered_map<uint32_t, GpuSkinnedMesh> garmentMeshes;
+    std::unordered_map<uint32_t, GpuLodMesh> heldMeshes;  // one per catalogue row
     std::vector<SkinnedDrawItem> skinnedItems;
     Actor player, guard, villager;
     CharacterSystem* characters = nullptr;
@@ -529,7 +545,42 @@ bool DeviceGame::start(Engine& engine, AudioMixer& mixer, ANativeWindow* window,
             actor.character.variant = variant;
             actor.character.visibleRegions = kAllRegions;
             actor.character.garments.clear();
+            actor.held.clear();
             for (size_t i = 0; i < count && s.vulkanOk; ++i) {
+                // Held items are rigid props on a socket, not garments: they
+                // mask nothing, have no .mgefit, and ride a matrix rather than
+                // the skinning palette. Until now this loop dropped them and
+                // NO CHARACTER IN THE SHIPPED ENGINE HAS EVER HELD ANYTHING.
+                const size_t row = wearableCatalogue().indexOf(outfit[i].kind);
+                if (isHeldItem(row)) {
+                    const HeldItemDef* def = heldItemDef(row);
+                    const MeshData& itemMesh = sharedHeldItemMesh(row);
+                    if (def == nullptr || itemMesh.vertices.empty()) continue;
+                    const uint32_t key = static_cast<uint32_t>(row);
+                    auto it = s.heldMeshes.find(key);
+                    if (it == s.heldMeshes.end()) {
+                        // A held item is one small rigid prop — a single LOD
+                        // is the whole model, so wrap rather than author a
+                        // chain for a sword that is 400 triangles at most.
+                        LodMesh single;
+                        single.lods.push_back(itemMesh);
+                        single.computeBounds();
+                        GpuLodMesh gpu;
+                        if (!s.renderer.uploadLodMesh(single, gpu)) {
+                            s.vulkanOk = false;
+                            break;
+                        }
+                        it = s.heldMeshes.emplace(key, gpu).first;
+                    }
+                    Impl::Held h;
+                    h.mesh = &it->second;
+                    h.def = *def;
+                    h.anchor = outfit[i].sheathed ? def->sheathed : def->drawn;
+                    h.sheathed = outfit[i].sheathed;
+                    memcpy(h.color, outfit[i].color, sizeof(h.color));
+                    actor.held.push_back(h);
+                    continue;
+                }
                 actor.character.visibleRegions &= ~garmentCoverage(outfit[i].kind);
                 const uint32_t key = garmentKey(outfit[i].kind, outfit[i].layer);
                 auto it = s.garmentMeshes.find(key);
@@ -540,7 +591,7 @@ bool DeviceGame::start(Engine& engine, AudioMixer& mixer, ANativeWindow* window,
                     desc.lod = BodyLod::Lod0;
                     SkinnedMeshData mesh;
                     buildGarmentMesh(desc, mesh);
-                    if (mesh.vertices.empty()) continue;  // held items aren't garments
+                    if (mesh.vertices.empty()) continue;  // no garment mesh for this row
                     GpuSkinnedMesh gpu;
                     if (!s.renderer.uploadSkinnedMesh(mesh, gpu)) {
                         s.vulkanOk = false;
@@ -876,6 +927,26 @@ void DeviceGame::frame(double dtSeconds, ANativeWindow* window) {
                 worn.indexCount = 0;  // whole garment
                 memcpy(worn.baseColor, garment.color, sizeof(worn.baseColor));
                 s.skinnedItems.push_back(worn);
+            }
+            // Held items: rigid, so one matrix each and no geometry work.
+            // They need the POSED JOINT transforms rather than the skinning
+            // palette, from the same skeleton the palette was built from, or
+            // the sword lands where a template-proportioned hand would be
+            // instead of this character's.
+            if (!actor->held.empty()) {
+                Mat4 jointWorld[kJointCount];
+                evaluatePose(buildSkeleton(character.variant), pose, jointWorld);
+                for (const Impl::Held& h : actor->held) {
+                    if (h.mesh == nullptr || h.mesh->lods.empty()) continue;
+                    DrawItem prop;
+                    prop.mesh = h.mesh;
+                    prop.model = model *
+                                 attachPointTransform(h.anchor, character.variant, jointWorld) *
+                                 gripTransform(h.def);
+                    prop.worldBounds = bounds;  // the character's, good enough to cull with
+                    memcpy(prop.baseColor, h.color, sizeof(prop.baseColor));
+                    items.push_back(prop);
+                }
             }
         }
         // --- HUD: health, compass, held slot, virtual controls, subtitle ---
