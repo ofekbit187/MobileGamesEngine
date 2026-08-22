@@ -2,8 +2,8 @@
 
 **Session:** none — the architect is holding this area directly
 **Branch:** `claude/android-game-engine-design-blsmnw` (integration; no separate branch)
-**State:** active — 19.1, 19.3 and 19.6 landed; 19.2 reclassified, 19.4 and 19.7 open
-**Updated:** 2026-08-22 by the architect — P1 fix on the device path, on the owner's ruling
+**State:** active — 19.1, 19.3, 19.6 and 19.7 landed; 19.2 reclassified, 19.4 open
+**Updated:** 2026-08-22 by the architect — the device frame path is under the P1 gate
 
 ## Now
 **Phase 19 — the vertical slice.** Everything the character pillar promises works, in four
@@ -87,17 +87,48 @@ Verified on three tiers, both runners still `steady-state heap allocations: 0`. 
 what that does *not* prove: neither runner compiles this file. The fix is verified by
 construction and by build, not by a device-path allocation counter, because none exists.
 
-## The real finding, still open (19.7)
+## 19.7 — the gate, closed on the owner's ruling
+`host_runner` enforces the P1 gate and did not compile `device_game.cpp`. That is how a per-frame
+allocation lived on the shipped path unnoticed, and it meant the zero we reported was a zero for
+the engine core, not for the app on the phone.
 
-`host_runner` enforces the P1 gate and **does not compile `device_game.cpp`**. That is how a
-per-frame allocation lived on the shipped path unnoticed: the gate that would have caught it has
-never once looked at the file. **The zero we report is a zero for the engine core, not for the
-app on the phone.**
+The device's per-frame render composition now lives in
+`engine/include/mge/framework/character_render.h` (+ `src/framework/character_render.cpp`), and
+`host_runner` runs it inside the allocation counter every steady frame: three dressed characters,
+one of them armed and swinging on a loop, plus 24 scenery renderables — **39 skinned rows and 25
+props per frame**, on host and again on real arm64 instructions under QEMU.
 
-19.6's in-file check covers one vector on a real device. It is not a gate and should not be
-mistaken for one. Closing this properly means the device path's scene composition moving into
-engine code the host runner actually exercises — a refactor and a seam question, not a patch. It
-is raised as 19.7 for the owner rather than started on my own initiative.
+**The constraint that dictated the design**, and the reason it is not simply "move the code":
+`mge_core` builds for arm64 under QEMU with **no Vulkan at all** — the emulated tier is
+deliberately graphics-free, and `host_runner` links only `mge_core` — yet that tier runs the gate
+too. So nothing shared may name a GPU type, and `DrawItem` lives behind `<vulkan/vulkan.h>`. The
+split follows:
+
+- `composeCharacterFrame` is an ordinary function. Pose, palette and joint transforms involve no
+  GPU types, so the bulk of the per-frame work is shared outright.
+- draw emission (`emitBodyParts`, `emitGarments`, `emitHeldItems`, `emitWorldRenderables`) is a
+  **template on the item type**. The device instantiates it on the renderer's real items; the
+  runner on stand-ins with the same fields and an opaque mesh handle. Same source, both sides.
+  Every GPU-typed decision in the static pass — which mesh, which material — is pushed into a
+  caller-supplied resolver, which is the only part that cannot follow the rest into `mge_core`.
+
+**The gate was proved to fail rather than assumed to.** Two probes, both reverted:
+
+| Probe | Result |
+|---|---|
+| 19.6's exact bug — the vector declared inside the frame loop | **600 allocations** (one per steady frame), `FAIL`, exit 1 |
+| a list merely under-reserved | **7 allocations** (the growth doublings), `FAIL`, exit 1 |
+
+A gate that cannot be shown failing is decoration, and this one had every reason to be checked:
+the whole reason we are here is a number that read as proof while proving less than it appeared.
+
+Five tests in `tests/test_character_render.cpp` now cover invariants that were unreachable while
+this code sat in the app: chiefly that a use motion **layers over** locomotion rather than
+replacing it, so pressing the action button cannot freeze the walk.
+
+**What the gate still does not cover**, stated plainly so the number keeps its meaning: the
+Vulkan submission after composition (which allocates nothing on our side), the HUD/UI build, and
+the swapchain and lifecycle paths. Those remain device-only.
 
 ## Needs from the architect
 Nothing blocking. Open question for whoever takes this area: the P1 gate should cover the device
@@ -112,7 +143,7 @@ subject — "is the sword in the hand?", now through a motion instead of a bind 
 and I will move it.
 
 ## Next
-19.2 (skin texture on device characters) and 19.4 (one scripted scene). 19.5 — the APK — ships to
+19.4 (one scripted scene); 19.2 sits with the textures area. 19.5 — the APK — ships to
 the owner now, with 19.1 and the visual half of 19.3 in it, and the rest honestly absent.
 
 **19.2 is bigger than it looks, and worth knowing before someone picks it up.** No texture asset

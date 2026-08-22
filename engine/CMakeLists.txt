@@ -17,6 +17,7 @@ add_library(mge_core STATIC
     src/framework/collision.cpp
     src/framework/interaction.cpp
     src/framework/ai.cpp
+    src/framework/character_render.cpp
     src/character/animation.cpp
     src/character/animation_clip.cpp
     src/character/humanoid.cpp

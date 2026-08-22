@@ -17,6 +17,7 @@
 #include "mge/core/log.h"
 #include "mge/framework/ai.h"
 #include "mge/framework/asset_registry.h"
+#include "mge/framework/character_render.h"
 #include "mge/framework/camera_controller.h"
 #include "mge/framework/character.h"
 #include "mge/framework/collision.h"
@@ -945,103 +946,58 @@ void DeviceGame::frame(double dtSeconds, ANativeWindow* window) {
 
         std::vector<DrawItem>& items = s.drawItems;
         items.clear();  // capacity survives; nothing is freed and nothing regrows
-        world.forEachRenderable([&](EntityId, const TransformComponent& t,
-                                    const ModelComponent& m) {
-            auto it = s.resident.find(m.asset);
-            if (it == s.resident.end()) return;
-            const AssetRecord* record = s.assets.find(m.asset);
-            DrawItem item;
-            item.mesh = &it->second;
-            const Vec3 pos = lerp(t.prevPosition, t.position, alpha);
-            Transform xf;
-            xf.position = pos;
-            xf.rotation = Quat::fromAxisAngle({0, 1, 0}, t.yaw);
-            item.model = xf.toMatrix();
-            const float radius = it->second.bounds.extents().length();
-            item.worldBounds =
-                Aabb::fromCenterExtents(pos + it->second.bounds.center(),
-                                        {radius, radius, radius});
-            item.lodReference = pos;
-            memcpy(item.baseColor, m.color, sizeof(item.baseColor));
-            item.material = (record != nullptr && record->kind == AssetKind::VirtualModel)
-                                ? MaterialKind::Placeholder
-                                : MaterialKind::Lit;
-            if (item.material == MaterialKind::Placeholder) item.params[0] = 6.0f;
-            items.push_back(item);
-        });
+        // Shared with the gate (19.7): the transform interpolation, culling
+        // bounds and push all live in emitWorldRenderables, and the resolver
+        // below holds every GPU-typed decision — which is the only part that
+        // cannot follow it into mge_core.
+        emitWorldRenderables<DrawItem>(
+            world, alpha, items,
+            [&](AssetId asset, DrawItem& item, ResolvedRenderable& mesh) {
+                auto it = s.resident.find(asset);
+                if (it == s.resident.end()) return false;  // still streaming
+                item.mesh = &it->second;
+                mesh.boundsCenter = it->second.bounds.center();
+                mesh.boundsRadius = it->second.bounds.extents().length();
+                const AssetRecord* record = s.assets.find(asset);
+                item.material = (record != nullptr && record->kind == AssetKind::VirtualModel)
+                                    ? MaterialKind::Placeholder
+                                    : MaterialKind::Lit;
+                if (item.material == MaterialKind::Placeholder) item.params[0] = 6.0f;
+                return true;
+            });
         // Characters: the shared skinned body + garments, deformed on the
         // GPU by each character's palette (task 8.10). Per character per
         // frame the CPU produces 17 matrices — no geometry work at all.
+        // The per-character work lives in mge/framework/character_render.h so
+        // that host_runner can run it inside the P1 allocation counter (19.7).
+        // Before that move this loop was the shipped frame path no gate ever
+        // compiled, which is exactly how 19.6's per-frame allocation survived.
         s.skinnedItems.clear();
         for (Impl::Actor* actor : {&s.player, &s.guard, &s.villager}) {
             const TransformComponent* t = world.transform(actor->entity);
             if (t == nullptr || !s.bodyMesh.valid()) continue;
-            const Vec3 pos = lerp(t->prevPosition, t->position, alpha);
-            const float yaw = t->prevYaw + (t->yaw - t->prevYaw) * alpha;
-            Pose pose;
-            actor->anim.samplePose(pose);
-            // The use motion rides OVER locomotion rather than replacing it
-            // (14.1): the archetype's own mask decides which joints it takes,
-            // and a one-handed grip deliberately leaves the off arm to the
-            // walk, which is what a person carrying a sword actually does.
-            // One extra pose blend, no second palette, no second draw.
-            if (actor->use.active()) {
-                Pose overlay;
-                sampleUseArchetype(actor->useMotion, actor->use.normalizedTime(), overlay);
-                LayeredPose layered;
-                layered.reset(pose);
-                layered.addLayer(overlay, actor->useMask, actor->use.weight());
-                pose = layered.result();
-            }
             SkinnedCharacter& character = actor->character;
-            buildSkinPalette(character.variant, pose, character.palette);
 
-            const Mat4 model = Mat4::translation(pos) *
-                               Mat4::rotation(Quat::fromAxisAngle({0, 1, 0}, -yaw));
-            const Aabb bounds = Aabb::fromCenterExtents(pos + Vec3{0, 1.0f, 0}, {1.4f, 1.4f, 1.4f});
+            CharacterFrame frame;
+            composeCharacterFrame(*t, alpha, character.variant, actor->anim, actor->use,
+                                  actor->useMotion, actor->useMask,
+                                  /*needJointWorld=*/!actor->held.empty(), character.palette,
+                                  frame);
 
-            SkinnedDrawItem item;
-            item.mesh = &s.bodyMesh;
-            item.palette = character.palette;
-            item.model = model;
-            item.worldBounds = bounds;
-            item.lodReference = pos;
-            memcpy(item.baseColor, character.variant.skin, sizeof(item.baseColor));
-            // Uncovered body regions only — masking is a draw range here.
-            for (const MeshPart& part : s.bodyParts) {
-                if ((character.visibleRegions & regionBit(part.region)) == 0) continue;
-                item.firstIndex = part.firstIndex;
-                item.indexCount = part.indexCount;
-                s.skinnedItems.push_back(item);
-            }
-            for (const SkinnedCharacter::Garment& garment : character.garments) {
-                SkinnedDrawItem worn = item;
-                worn.mesh = garment.mesh;
-                worn.firstIndex = 0;
-                worn.indexCount = 0;  // whole garment
-                memcpy(worn.baseColor, garment.color, sizeof(worn.baseColor));
-                s.skinnedItems.push_back(worn);
-            }
-            // Held items: rigid, so one matrix each and no geometry work.
-            // They need the POSED JOINT transforms rather than the skinning
-            // palette, from the same skeleton the palette was built from, or
-            // the sword lands where a template-proportioned hand would be
-            // instead of this character's.
-            if (!actor->held.empty()) {
-                Mat4 jointWorld[kJointCount];
-                evaluatePose(buildSkeleton(character.variant), pose, jointWorld);
-                for (const Impl::Held& h : actor->held) {
-                    if (h.mesh == nullptr || h.mesh->lods.empty()) continue;
-                    DrawItem prop;
-                    prop.mesh = h.mesh;
-                    prop.model = model *
-                                 attachPointTransform(h.anchor, character.variant, jointWorld) *
-                                 gripTransform(h.def);
-                    prop.worldBounds = bounds;  // the character's, good enough to cull with
-                    memcpy(prop.baseColor, h.color, sizeof(prop.baseColor));
-                    items.push_back(prop);
-                }
-            }
+            SkinnedDrawItem proto;
+            proto.mesh = &s.bodyMesh;
+            proto.palette = character.palette;
+            proto.model = frame.model;
+            proto.worldBounds = frame.bounds;
+            proto.lodReference = frame.lodReference;
+            memcpy(proto.baseColor, character.variant.skin, sizeof(proto.baseColor));
+
+            emitBodyParts(proto, s.bodyParts.data(), s.bodyParts.size(),
+                          character.visibleRegions, s.skinnedItems);
+            emitGarments(proto, character.garments.data(), character.garments.size(),
+                         s.skinnedItems);
+            emitHeldItems<DrawItem>(frame, character.variant, actor->held.data(),
+                                    actor->held.size(), items);
         }
         // --- HUD: health, compass, held slot, virtual controls, subtitle ---
         const UiDrawList* uiList = nullptr;

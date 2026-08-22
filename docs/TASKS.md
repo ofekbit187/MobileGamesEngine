@@ -567,13 +567,23 @@ garments its own way and skips held items at line 543.*
   Also adds the device build's **first allocation check**: if the list ever outgrows its
   reservation the frame path has allocated, and it says so loudly and once instead of hiding
   like this one did
-- [ ] **19.7** **The gate itself.** 19.6 was a real P1 violation that lived on the shipped path
-  because `host_runner` — the thing that enforces `steady-state heap allocations: 0` — never
-  compiles `device_game.cpp`. **The zero we report is a zero for the engine core, not for the
-  app on the phone.** The in-file check added by 19.6 catches this one vector on a real device;
-  it is not a gate. Closing this properly means the device path's scene composition living in
-  engine code the host runner exercises, which is a real refactor and a seam question, not a
-  patch. Owner's call whether it is worth doing now
+- [x] **19.7** **The gate itself, closed on the owner's ruling.** 19.6 lived on the shipped path
+  because `host_runner` never compiles `device_game.cpp`, so the zero we reported was a zero for
+  the engine core and not for the app on the phone. The device's whole per-frame render
+  composition now lives in `engine/include/mge/framework/character_render.h` (+ `.cpp`) and
+  `host_runner` runs it inside the allocation counter: 3 dressed characters, one of them armed
+  and swinging, plus 24 scenery renderables — **39 skinned rows and 25 props per frame**.
+  The design is forced by a constraint worth recording: `mge_core` builds for arm64 under QEMU
+  with **no Vulkan at all**, and the gate runs on that tier, so nothing shared may name a GPU
+  type. Hence `composeCharacterFrame` is an ordinary function (pose, palette and joint
+  transforms need no GPU types) while draw emission is a **template** on the item type — the
+  device instantiates it on the renderer's real `DrawItem`/`SkinnedDrawItem`, the runner on
+  stand-ins of the same shape. Same source, both sides.
+  **The gate was proved to fail, not assumed to.** Reintroducing 19.6's exact bug (the vector
+  declared inside the frame loop) makes it report 600 allocations — one per steady frame — and
+  exit 1; merely under-reserving a list makes it report 7 and exit 1. Both probes reverted.
+  Five tests in `tests/test_character_render.cpp` cover the invariants the extraction now makes
+  reachable, chiefly that a use motion layers over locomotion instead of replacing it
 
 **Exit criteria:** the owner opens an APK and plays the thing the last week built, without being
 told what to look for.
