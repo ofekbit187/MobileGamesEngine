@@ -553,8 +553,10 @@ garments its own way and skips held items at line 543.*
   changing `CharacterSystem`, which is gameplay's file, not the device build's
 - [ ] **19.4** One scripted scene that reads as a game rather than a feature list: a dressed,
   textured character walks up to something, draws, swings, and connects
-- [ ] **19.5** **The APK, delivered.** Three tiers green, heap gate 0, and the file handed over.
-  This is the task; the rest are its prerequisites
+- [x] **19.5** **The APK, delivered.** Three tiers green, heap gate 0, and the file handed over.
+  This is the task; the rest are its prerequisites. Delivered 2026-08-22 with 19.1 and the
+  visual half of 19.3 in it, and 19.2/19.4 stated as absent rather than glossed. Board updated
+  in place
 - [ ] **19.6** *(found while landing 19.1, pre-existing, not caused by it)* The device render path
   builds its `std::vector<DrawItem> items` **inside** `DeviceGame::frame`, so it heap-allocates
   every frame. The host runner's P1 gate does not cover this file, which is why it has stood.
