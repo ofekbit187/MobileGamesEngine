@@ -29,6 +29,7 @@ add_executable(mge_tests
     test_wearable_catalogue.cpp
     test_held_items.cpp
     test_character_render.cpp
+    test_practice_yard.cpp
     test_engine.cpp
 )
 
@@ -45,6 +46,12 @@ if(TARGET mge_import)
     target_compile_definitions(mge_tests PRIVATE
         MGE_TEST_DATA_DIR="${CMAKE_CURRENT_SOURCE_DIR}/data")
 endif()
+# The scripted scene (19.4) lives beside the device build in app/, because it
+# is game content rather than engine code — but it is portable C++ over engine
+# types, so the tests compile it. device_game.cpp itself never can: it includes
+# Android and Vulkan.
+target_include_directories(mge_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/../app/src/main/cpp)
+
 target_compile_options(mge_tests PRIVATE -Wall -Wextra)
 
 add_test(NAME mge_tests COMMAND mge_tests)

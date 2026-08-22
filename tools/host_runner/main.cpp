@@ -21,6 +21,7 @@
 #include "mge/framework/collision.h"
 #include "mge/core/log.h"
 #include "mge/framework/engine.h"
+#include "practice_yard.h"
 
 // The device build's draw items, minus Vulkan.
 //
@@ -212,6 +213,38 @@ int main() {
             mge::useArchetypeMask(mge::buildSkeleton(gateActors[0].variant), gateActors[0].motion);
     }
 
+    // The scripted scene (19.4) joins the gate: the guard's drill runs on the
+    // device's frame path, so it is measured like the rest of it.
+    const mge::EntityId yardGuard = engine.world().spawn();
+    const mge::EntityId quintain = engine.world().spawn();
+    {
+        for (mge::EntityId e : {yardGuard, quintain}) {
+            mge::TransformComponent xf;
+            xf.position = e == yardGuard ? mge::Vec3{8.0f, 0, -2.0f} : mge::Vec3{10.5f, 0, -4.0f};
+            xf.prevPosition = xf.position;
+            engine.world().setTransform(e, xf);
+            engine.world().setMovement(e, mge::MovementComponent{{}, 4.0f});
+            characters.attach(e);
+        }
+        mge::ItemUse swordUse;
+        swordUse.kind = mge::ItemUseKind::Strike;
+        swordUse.range = 2.3f;
+        swordUse.power = 0.25f;
+        swordUse.cooldown = 0.7f;
+        itemUses.define("item/sword", swordUse);
+        characters.get(yardGuard)->inventory.add(
+            {mge::assetIdFromName("item/sword"), "item.sword", 1, {1, 1, 1, 1}});
+        characters.equip(yardGuard, 0, mge::EquipSlot::HeldMain);
+        characters.setSheathed(yardGuard, true);
+        mge::grantHumanoidActions(characters, yardGuard);
+        mge::CharacterComponent* post = characters.get(quintain);
+        post->maxHealth = 40.0f;
+        post->health = post->maxHealth;
+    }
+    mge::PracticeYard yard;
+    yard.reset(yardGuard, quintain);
+    int yardBlows = 0;
+
     // Scenery, so the static half of the draw list actually has work to do.
     // Without renderable entities emitWorldRenderables walks the registry and
     // pushes nothing, which would exercise the loop without exercising the
@@ -262,6 +295,11 @@ int main() {
         // holds, every single frame.
         characters.perform(walker, mge::actionJump());
         characters.perform(walker, mge::actionUseHeld());
+
+        // The scripted scene, every frame, inside the counter.
+        if (yard.update(engine.world(), characters, static_cast<float>(kFrameDt)).connected) {
+            ++yardBlows;
+        }
 
         // --- and the device's render composition, every frame (19.7) ---
         const float alpha = engine.renderAlpha();
@@ -320,6 +358,7 @@ int main() {
            static_cast<unsigned long long>(engine.stats().simStepCount));
     printf("steady-state: %d frames in %.2f ms (%.1f us/frame)\n", kSteadyFrames, totalMs,
            totalMs * 1000.0 / kSteadyFrames);
+    printf("scripted scene: guard landed %d blows on the quintain during the gate\n", yardBlows);
     printf("device render composition: %zu skinned rows + %zu props per frame "
            "(3 characters, 1 armed)\n",
            gateSkinnedItems.size(), gateDrawItems.size());

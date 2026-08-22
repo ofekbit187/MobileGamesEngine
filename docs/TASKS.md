@@ -551,8 +551,26 @@ garments its own way and skips held items at line 543.*
   `strike`. What the player READS is now held back to the strike instant, which keeps the words
   and the arm in agreement, but that is presentation. Hanging the damage itself on the edge means
   changing `CharacterSystem`, which is gameplay's file, not the device build's
-- [ ] **19.4** One scripted scene that reads as a game rather than a feature list: a dressed,
-  textured character walks up to something, draws, swings, and connects
+- [~] **19.4** One scripted scene that reads as a game rather than a feature list: a dressed,
+  textured character walks up to something, draws, swings, and connects.
+  **The practice yard.** A quintain stands in the yard; the guard walks up to it, draws, swings,
+  connects, recovers, and after three blows steps back and comes in again. The player can walk
+  over and do the same thing to the same post, with the same button.
+  The quintain is a **prop to look at and a character to hit** — `strikeTarget` only considers
+  characters, so a post that can be struck has to be one. That is the owner's "every character
+  can be interacted with" arriving from the other side.
+  Scripted in the game layer, **not** the AI, for two reasons: a scene is policy and the AI is
+  mechanism, and more concretely `AiSystem`'s attack calls `damage()` directly — an AI-driven
+  drill would show a guard dealing damage without ever drawing, using the item, or playing an
+  archetype. The script takes the ordinary character calls, the same ones the player's button
+  takes.
+  Lives in `app/src/main/cpp/practice_yard.h` rather than inline in `device_game.cpp` so it can
+  be **driven by a host test**: four tests in `tests/test_practice_yard.cpp` run it against a
+  real `World` and `CharacterSystem` and check he closes the distance before swinging, draws
+  before he swings, **connects** (not merely swings), and that the drill still runs and the post
+  is still standing after a simulated minute. It also joins the P1 gate.
+  **Missing:** `textured`. The characters are flat colour on the phone because 19.2 is blocked on
+  the block-compression encoder — the one word of this task that is not delivered
 - [x] **19.5** **The APK, delivered.** Three tiers green, heap gate 0, and the file handed over.
   This is the task; the rest are its prerequisites. Delivered 2026-08-22 with 19.1 and the
   visual half of 19.3 in it, and 19.2/19.4 stated as absent rather than glossed. Board updated

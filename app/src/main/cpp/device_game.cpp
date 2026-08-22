@@ -18,6 +18,7 @@
 #include "mge/framework/ai.h"
 #include "mge/framework/asset_registry.h"
 #include "mge/framework/character_render.h"
+#include "practice_yard.h"
 #include "mge/framework/camera_controller.h"
 #include "mge/framework/character.h"
 #include "mge/framework/collision.h"
@@ -52,6 +53,12 @@ struct SkinnedCharacter {
     std::vector<Garment> garments;
     Mat4 palette[kJointCount];
 };
+
+// The practice yard (19.4): where the quintain stands, and its resting colour.
+constexpr Vec3 kQuintainPos{5.5f, 0, -4.0f};
+constexpr float kQuintainColor[3] = {0.52f, 0.40f, 0.26f};
+constexpr float kStrikeStandoff = 1.5f;   // where the guard plants his feet
+constexpr int kBlowsPerPass = 3;          // before he steps back and comes in again
 
 WearableInstance colored(WearableKind kind, float r, float g, float b, uint8_t layer = 1,
                          bool sheathed = false) {
@@ -214,6 +221,20 @@ struct DeviceGame::Impl {
     // this keeps what the player READS in step with what the arm does.
     bool pendingStrike = false;
     bool pendingStrikeHit = false;
+
+    // --- The practice yard (19.4) ---
+    //
+    // A scripted beat, deliberately in the GAME layer rather than the AI: a
+    // scene is policy, and the AI is mechanism. It also has to be here to be
+    // honest — the AI's attack calls damage() directly, so an AI-driven drill
+    // would show a guard dealing damage without ever swinging.
+    //
+    // Walk up, draw, swing, connect, recover; step back every few blows and
+    // come in again so it reads as practice rather than a loop.
+    EntityId quintain = kInvalidEntity;
+    PracticeYard yard;
+    PracticeYardConfig yardConfig;
+    float quintainFlash = 0;  // 1 at the moment of impact, decaying
     CharacterSystem* characters = nullptr;
     AiSystem* ai = nullptr;
     CollisionWorld collision;
@@ -383,6 +404,14 @@ bool DeviceGame::start(Engine& engine, AudioMixer& mixer, ANativeWindow* window,
     // A low crate you can step onto, proving step-up on real hardware.
     solid(place(crateId, {-1.6f, 0.2f, -3.2f}, 0.3f, 0.55f, 0.42f, 0.26f),
           {-1.6f, 0.2f, -3.2f}, {0.6f, 0.2f, 0.6f});
+    // The practice yard's quintain (19.4). It is a PROP to look at and a
+    // CHARACTER to hit: `strikeTarget` only considers characters, so a post
+    // that can be struck has to be one. It never moves, holds nothing and
+    // decides nothing — being a character is what makes it hittable, which is
+    // the owner's principle that every character can be interacted with,
+    // arriving from the other side.
+    const AssetId quintainId =
+        s.assets.registerMesh("prop/quintain", meshOf(makeCylinder(0.28f, 1.9f, 12)));
 
     // --- Characters: player + NPCs, same humanoid, different controllers ---
     s.characters = new CharacterSystem(world);
@@ -418,15 +447,40 @@ bool DeviceGame::start(Engine& engine, AudioMixer& mixer, ANativeWindow* window,
         {assetIdFromName("item/sword"), "item.sword", 1, {0.72f, 0.75f, 0.79f, 1}});
     s.characters->equip(s.guard.entity, 0, EquipSlot::HeldMain);
     s.characters->setSheathed(s.guard.entity, true);
-    AiProfile guardProfile;
-    guardProfile.canPatrol = true;
-    guardProfile.canWander = false;
-    guardProfile.patrolCount = 2;
-    guardProfile.patrolPoints[0] = {3.0f, 0, -2.0f};
-    guardProfile.patrolPoints[1] = {-3.5f, 0, -7.0f};
-    s.ai->attach(s.guard.entity, guardProfile);
+    // No AI profile for the guard: the drill (19.4) is a SCRIPT, and an idle
+    // agent would zero his velocity out from under it every step. The AI's own
+    // attack also bypasses the action model entirely — it calls damage()
+    // directly, so it never draws, never uses the held item and never plays an
+    // archetype. A scripted scene wants the real path, which is the one the
+    // player's button takes.
+    // The villager keeps its AI, so the yard still has life that nobody wrote.
+
+    // The quintain stands where the guard drills, in the player's view from
+    // spawn. Same faction as the guard so nothing reads it as an enemy.
+    s.quintain = world.spawn();
+    {
+        TransformComponent t;
+        t.position = kQuintainPos;
+        t.prevPosition = t.position;
+        world.setTransform(s.quintain, t);
+        ModelComponent m;
+        m.asset = quintainId;
+        m.color[0] = kQuintainColor[0];
+        m.color[1] = kQuintainColor[1];
+        m.color[2] = kQuintainColor[2];
+        world.setModel(s.quintain, m);
+        CharacterComponent* c = s.characters->attach(s.quintain);
+        c->faction = 1;              // the guard's, so it is nobody's enemy
+        c->persistentId = 9;
+        c->maxHealth = 40.0f;        // a post absorbs a great many blows
+        c->health = c->maxHealth;
+        solid(s.quintain, kQuintainPos + Vec3{0, 0.95f, 0}, {0.3f, 0.95f, 0.3f});
+    }
 
     s.villager.entity = spawnCharacter({-4.0f, 0, -3.0f}, 0, 3);
+    s.yardConfig.standoff = kStrikeStandoff;
+    s.yardConfig.blowsPerPass = kBlowsPerPass;
+    s.yard.reset(s.guard.entity, s.quintain);
     AiProfile villagerProfile;
     villagerProfile.canWander = true;
     villagerProfile.homeRadius = 4.0f;
@@ -749,6 +803,18 @@ void DeviceGame::frame(double dtSeconds, ANativeWindow* window) {
     double dt = dtSeconds;
     if (dt <= 0.0 || dt > 0.05) dt = 1.0 / 60.0;
 
+    // Whatever an actor just used, it swings it. The motion comes from the
+    // ITEM's own four numbers, so this is the same call for the player's
+    // button and for the guard's drill — the NPC and the player take the
+    // identical path, which is the only reason a scripted scene proves
+    // anything about the real one.
+    const auto beginUseMotion = [](Impl::Actor& actor, const ItemUse* use) {
+        if (use == nullptr) return;
+        actor.useMotion = motionFromItemUse(*use, /*leftHanded=*/false);
+        actor.useMask = useArchetypeMask(buildSkeleton(actor.character.variant), actor.useMotion);
+        actor.use.start(actor.useMotion);
+    };
+
     // --- Simulation: AI intents, then the engine's fixed-step tick ---
     World& world = s.engine->world();
     s.ai->step(static_cast<float>(dt));
@@ -778,6 +844,33 @@ void DeviceGame::frame(double dtSeconds, ANativeWindow* window) {
         }
     }
 
+    // --- The practice yard (19.4): the guard at his drill ---
+    //
+    // The beats live in practice_yard.h so a host test can drive them against
+    // a real World and CharacterSystem. This file cannot be compiled by any
+    // host tool, and a scene verified only by "it compiled" is how you find
+    // out on the owner's phone that the guard is swinging at thin air.
+    if (s.quintain != kInvalidEntity) {
+        const PracticeYard::Tick tick =
+            s.yard.update(world, *s.characters, static_cast<float>(dt), s.yardConfig);
+        if (tick.swung) beginUseMotion(s.guard, s.itemUses.find(tick.item));
+        if (tick.connected) s.quintainFlash = 1.0f;
+
+        if (s.quintainFlash > 0) {
+            s.quintainFlash -= static_cast<float>(dt) * 2.2f;
+            if (s.quintainFlash < 0) s.quintainFlash = 0;
+        }
+        if (ModelComponent* postModel = world.model(s.quintain)) {
+            // Impact reads as a flash of pale wood — the only feedback this
+            // scene needs, and driven by the real hit result rather than by
+            // the animation's timing.
+            for (int c = 0; c < 3; ++c) {
+                postModel->color[c] =
+                    kQuintainColor[c] + (1.0f - kQuintainColor[c]) * s.quintainFlash;
+            }
+        }
+    }
+
     // --- The player's actions (Phase 12). Two buttons, and everything they
     //     do is a CHARACTER action — the same calls an NPC would make. ---
     const GameplayIntents& intents = s.engine->lastIntents();
@@ -794,13 +887,7 @@ void DeviceGame::frame(double dtSeconds, ANativeWindow* window) {
             // or eating an apple would print the blade message the swing it
             // interrupted never got to.
             s.pendingStrike = false;
-            const ItemUse* use = s.itemUses.find(used.item.asset);
-            if (use != nullptr) {
-                s.player.useMotion = motionFromItemUse(*use, /*leftHanded=*/false);
-                s.player.useMask =
-                    useArchetypeMask(buildSkeleton(s.player.character.variant), s.player.useMotion);
-                s.player.use.start(s.player.useMotion);
-            }
+            beginUseMotion(s.player, s.itemUses.find(used.item.asset));
         }
         switch (used.useKind) {
             case ItemUseKind::Strike:

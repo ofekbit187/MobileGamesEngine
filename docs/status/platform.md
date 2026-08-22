@@ -2,8 +2,8 @@
 
 **Session:** none — the architect is holding this area directly
 **Branch:** `claude/android-game-engine-design-blsmnw` (integration; no separate branch)
-**State:** active — 19.1, 19.3, 19.6 and 19.7 landed; 19.2 reclassified, 19.4 open
-**Updated:** 2026-08-22 by the architect — the device frame path is under the P1 gate
+**State:** active — 19.1, 19.3, 19.4, 19.6 and 19.7 landed; 19.2 reclassified (textures')
+**Updated:** 2026-08-22 by the architect — the practice yard, and Phase 19 complete but for textures
 
 ## Now
 **Phase 19 — the vertical slice.** Everything the character pillar promises works, in four
@@ -130,6 +130,50 @@ replacing it, so pressing the action button cannot freeze the walk.
 Vulkan submission after composition (which allocates nothing on our side), the HUD/UI build, and
 the swapchain and lifecycle paths. Those remain device-only.
 
+## 19.4 — the practice yard
+A quintain stands in the yard. The guard walks up to it, **draws**, swings, **connects**,
+recovers, and after three blows steps back and comes in again. The player can walk over and do
+the same thing to the same post with the same button.
+
+Three decisions worth recording:
+
+- **The quintain is a prop to look at and a character to hit.** `strikeTarget` only considers
+  entities with a `CharacterComponent`, so a post that can be struck has to be one. It renders
+  through the static draw path (it has a `ModelComponent`), never moves and decides nothing.
+  Being a character is precisely what makes it hittable — the owner's "every character can be
+  interacted with", arriving from the other side.
+- **Scripted in the game layer, not the AI.** A scene is policy; the AI is mechanism. And
+  concretely: `AiSystem`'s attack calls `CharacterSystem::damage` **directly**, so an AI-driven
+  drill would show a guard dealing damage without ever drawing, without using the item he holds
+  and without playing an archetype. The script goes through the ordinary character calls — the
+  same ones the player's button takes — which is the only reason watching the guard tells you
+  anything true about the game. *(That the AI bypasses the action model is a real gap, and it is
+  gameplay's file, not this one's. Raised, not fixed.)*
+- **It lives in `app/src/main/cpp/practice_yard.h`, not inline in `device_game.cpp`.** That file
+  cannot be compiled by any host tool, and a scene verified by "it compiled" is how you find out
+  on the owner's phone that the guard is swinging at thin air — a failure that looks *exactly*
+  like success until you notice the post never reacts. The header is portable C++ over engine
+  types, so `tests/test_practice_yard.cpp` drives it against a real `World` and
+  `CharacterSystem`.
+
+**The tests caught a real failure on their first run**, which is the argument for having written
+them: two of the four failed because the harness ticked locomotion but not `tickEffects`, and
+`tickEffects` is what counts the use cooldown down. The guard swung once and then stood there.
+That was my harness rather than the scene, but it is an exact rehearsal of the bug the tests
+exist to catch, and I would not have known the difference from a build log.
+
+Four tests now assert he closes the distance before swinging, draws before he swings, **connects**
+rather than merely swings, and that after a simulated minute the drill is still cycling and the
+post is still standing.
+
+The drill also joins the P1 gate, since it is device frame-path code: `host_runner` reports
+`scripted scene: guard landed 6 blows on the quintain during the gate` on host and on arm64, at
+zero steady-state allocations.
+
+**Not delivered: `textured`.** The task asked for a dressed, *textured* character. The characters
+are dressed and flat-coloured; the texture is blocked on 19.2's missing encoder. One word of the
+task, and it is the one that is missing.
+
 ## Needs from the architect
 Nothing blocking. Open question for whoever takes this area: the P1 gate should cover the device
 path, not just the core. That is a real gap in the verification story and larger than 19.6's
@@ -143,8 +187,10 @@ subject — "is the sword in the hand?", now through a motion instead of a bind 
 and I will move it.
 
 ## Next
-19.4 (one scripted scene); 19.2 sits with the textures area. 19.5 — the APK — ships to
-the owner now, with 19.1 and the visual half of 19.3 in it, and the rest honestly absent.
+Phase 19 is done except 19.2, which sits with the textures area and needs the ASTC/ETC2 encoder
+before a face can reach the phone. Two things I owe from this phase, neither started:
+the damage moment still resolving on the button press rather than on `strike` (gameplay's), and
+the AI attack bypassing the action model entirely (also gameplay's).
 
 **19.2 is bigger than it looks, and worth knowing before someone picks it up.** No texture asset
 ships in this repo at all. The imported sheet exists only as an evidence PNG, and the source it
