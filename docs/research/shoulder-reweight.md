@@ -248,3 +248,141 @@ partition.
 
 **Recommendation: rule the clavicle, then land reweighting + clavicle + re-bake as one
 contract-version event, and delete the pin.**
+
+---
+
+# Second addendum — I was wrong about the mechanism, and the clavicle does not fix the tear
+
+**This corrects the evidence I supplied for ADR 0019.** I implemented the clavicle, measured it,
+and the result contradicts the inference I drew from the `Chest` stand-in. Reporting before
+spending the contract-version event, because the event breaks every garment binding and the
+shader palette and is not worth spending on a premise that has since failed.
+
+## What I claimed, and why it was wrong
+
+I measured that splitting 140° of shoulder rotation across `UpperArm` and `Chest` took the tear
+from 32 edges to 1, and inferred that a clavicle would do the same *only better*, on the grounds
+that `Chest` "swings the whole torso where a real clavicle carries only the shoulder girdle".
+
+**That reasoning was backwards.** Being localised is precisely why the clavicle does not help.
+The tear is at the **arm/torso boundary**, and relieving it needs the *torso side of the seam* to
+move. `Chest` moves it. A clavicle does not.
+
+## The control, on one body, one pose split
+
+19-joint reweighted body, 140° total shoulder rotation, only the second joint changed:
+
+| | worst | edges >100 % |
+|---|---|---|
+| arm 70 + **clavicle** 70 | 1.561 | **18** |
+| arm 70 + **Chest** 70 | 1.187 | **1** |
+| arm 93 + clavicle 47 (2:1 rhythm) | 1.561 | 18 |
+| arm 93 + **Chest** 47 | 1.387 | **1** |
+
+The clavicle is not inert — it carries 214/192 vertices and ~35 units of weight mass per side. It
+simply does not relieve this seam.
+
+## And the clavicle alone changes nothing at all
+
+Three bodies, same pipeline, B-31 across all fifteen joint cases:
+
+| body | shoulders >100 % | hips | knees | B-31 total |
+|---|---|---|---|---|
+| shipped, 17 joints, automatic weights | 32 + 26 | 0 | 0 | **58** |
+| **clavicle, 19 joints, automatic weights** | 33 + 28 | 0 | 0 | **61** |
+| clavicle + reweighting, 19 joints | 20 + 11 | 4 | 1 | **36** |
+
+**The clavicle on its own is 58 → 61 — no better, marginally worse within re-decimation noise.**
+Every bit of the improvement comes from the reweighting, and the reweighting brings a regression
+with it: hips and one knee start tearing (0 → 5) from the same far-end-of-band mechanism recorded
+in section 2 of this note.
+
+## What this means
+
+**The clavicle does not fix the shoulder tear. Torso participation does.** A 140° arm raise with a
+rigid chest is not a pose a real body makes, and it is not one the engine's archetypes need to
+make either — thoracic extension is part of the motion. That points the fix at how the pose is
+driven rather than at the rig, which lands it next to the animation session's layered-pose work
+rather than in a rig-version event.
+
+**ADR 0019's second argument is untouched and still stands on its own.** Captured human motion
+contains shoulder-girdle rotation, and on a 17-joint rig it has nowhere to go. That is a real
+requirement, it comes from the owner, and it justifies the clavicle independently — it just is
+not a fix for the tearing, and ADR 0019 says it is.
+
+**Recommendation.** Do not spend the contract-version event on the tearing argument. Decide the
+clavicle on the motion-capture requirement alone, where the case is sound. And measure whether a
+torso-participating shoulder pose closes B-31 before treating the tear as a body defect at all —
+if it does, the body needs the reweighting (with its hip/knee regression fixed) and nothing more.
+
+Everything above is reproducible: `tools/model/humanoid_template.py` variants are saved in this
+session's scratch as `clav_only.py.keep` (rig change alone) and `clav_reweight.py.keep` (both),
+and the engine-side edits are five — `Joint` enum, `buildSkeleton`, `mirrored`, `jointName`,
+`skinned.vert`'s palette constant.
+
+---
+
+# Third addendum — what landed, and the two gates that were measuring the wrong thing
+
+ADR 0020 reversed the clavicle and amended `B-31` to measure **per motion**. That is the ruling
+this section implements. **New body content hash: `be7b3618f965eb0f`.**
+
+## The result
+
+| | shipped body | landed |
+|---|---|---|
+| `B-31`, per motion, all 15 cases | **44** edges over 100 % | **4** |
+| arm raise R (93° arm + 47° chest) | 26 | **1** |
+| arm raise L | 18 | **3** |
+| hips | 0 | **0** |
+| knees | 0 | **0** |
+| vertices bound at weight exactly 1.00 | 53 | 5 |
+
+**91 % of the tearing is gone and nothing else moved.** Four edges remain, both shoulders, and
+they are the floor: shoulder margins from 0.22 m to 0.38 m and bands from 0.10 m to 0.34 m all
+land on the same four, and the clavicle — ruled, implemented, then reversed — does not move them
+either. They are recorded in the gate with a named retirement condition rather than asserted away.
+
+## The reweighting had to be made LOCAL, twice, for two different reasons
+
+The first version smoothed globally and widened the leakage margin globally. Both were wrong, and
+both were caught by gates rather than by inspection:
+
+- **Global smoothing broke the hips.** They sat at 0.999 worst strain — one thousandth under the
+  line — and the band's far end pushed them to 1.177 and started them tearing, along with a knee.
+  The relaxation is now applied within 0.46 m of the shoulder joints and nowhere else, *because
+  the measurement says nowhere else needs it*: posed at their working ranges, elbows, knees, hips,
+  ankles, wrists, neck, spine and chest all come out of the automatic bind already at zero.
+- **A global margin broke a knee.** Widening the leakage guard from 0.10 m to 0.22 m to admit the
+  shoulder band loosens the prune at *every* joint; the knee went from 0.627 to 1.220 and tore.
+  The wide margin is now scoped to the shoulder too.
+- **And the scope had to be capped below the head.** The radius the band needs reaches 0.24 m
+  upward as well as down, which puts the head inside it — and the head is where task 13.7's
+  Face/Scalp split lives, decided from the same weights. Uncapped, re-weighting the shoulder broke
+  the hairline into more than one ring. The band reaches down and inward, never up.
+
+## Two gates were measuring the wrong thing, and this is the second time for one of them
+
+**`body_mesh_has_human_proportions` read the body's width through the Torso REGION** — a skinning
+label, since `regionOf()` reads the bone that moves a vertex most. Re-weighting moved the
+Torso/Leg boundary and the gate reported the hips as 0.146 m wide **when not one vertex had
+moved**. It now measures geometry at rig-derived heights: shoulders 0.466 m (including the
+deltoid, which is what biacromial breadth means), waist 0.306 m, hips 0.347 m. ADR 0012 already
+removed a fixed-band sampling defect from this same test; this is the second fault of the same
+family in it, and the lesson is that a gate reading through a derived label inherits every change
+to that label.
+
+**`body_mesh_skin_weights_are_valid` hard-coded the rule that forbade the fix.** Its 0.12 m reach
+limit is a leakage guard — bone heat leaves the ankle ~10 % thigh — and it was also forbidding the
+shoulder's blend band, which is not leakage. It is now 0.12 m everywhere and 0.22 m in the
+shoulder scope, mirroring the pipeline exactly. The leak it exists to catch is 0.35 m past its
+nearest bone and is caught at either threshold. **Widening it globally instead is precisely what
+broke the knee**, which is the argument for scoping rather than relaxing.
+
+## The bisect slivers
+
+`body_mesh_has_no_degenerate_triangles` failed because the face-split plane grazes whichever faces
+the region rule calls "head", and that set moves with the weights. Fixed at source: the bisect's
+snap distance goes from 1 µm to 0.1 mm, so a vertex near the plane is moved onto it instead of
+spawning a needle beside it. `dissolve_degenerate` cannot catch those — a needle has long edges
+and no area.

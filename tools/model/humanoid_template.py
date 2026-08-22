@@ -276,6 +276,23 @@ def duplicate_reduced(obj, arm, name, target, morphs=True):
     # cleaned of. Re-apply both cleanups.
     clamp_influences(dup)
     prune_far_influences(dup, arm)
+    # Decimation merges influence sets and the prune then flattens what it
+    # merged, so the falloff smoothed onto the full-resolution body does not
+    # survive into the LOD by itself — and the LOD is what ships and what the
+    # strain gate measures. Re-smooth here, on the reduced mesh.
+    # Re-smoothed on the reduced mesh, because decimation merges influence sets
+    # and re-flattens the band built upstream — and the LOD is what ships and
+    # what the strain gate measures. The round count comes from THIS mesh's own
+    # mean edge length, so the band is the same 10 cm of surface here as it is
+    # on the full-resolution body. A fixed count is what pushed arm influence
+    # 24 cm down the torso and moved the worst edge to the waist.
+    # NOT re-smoothed here, measured rather than assumed. Smoothing the reduced
+    # mesh was tried at band widths from 6 cm to 26 cm, with and without a
+    # prune after it, and every variant came out WORSE than smoothing only
+    # upstream: the edges over 100%% strain at 90 deg sat at 11 whatever the
+    # band, while weight violations and the mean influence count both climbed
+    # (3.0 -> 3.8). The band is built once, on the dense mesh, and decimation
+    # inherits it.
     activate(dup)
     bpy.ops.object.shade_smooth()
     # After the reduction, never before: Blender refuses to apply a decimate
@@ -299,7 +316,34 @@ def add_morphs(obj):
 # An influence is kept only if its bone is within MARGIN of the CLOSEST bone
 # influencing that vertex — near enough to preserve every real blend band
 # (elbow, knee, shoulder), far enough to cut leakage across a joint.
+# Where the blend band is built. Measured, the shoulder is the ONLY joint that
+# needs one: posed at its working range, elbows, knees, hips, ankles, wrists,
+# neck, spine and chest all come out of the automatic bind with zero edges over
+# 100% strain. Smoothing them anyway is not free — done globally it pushed the
+# hips, which sat at 0.999 worst strain, over the line to 1.177 and started them
+# tearing, and cost a knee too. So the relaxation is applied where the
+# measurement says it is needed and nowhere else.
+SMOOTH_CENTRES = ((0.1850, 1.4500, 0.0000), (-0.1850, 1.4500, 0.0000))
+SMOOTH_RADIUS = 0.46
+
+
+def _smooth_ceiling():
+    """Blender z above which the shoulder scope stops — see `smooth_weights`."""
+    return to_blender((0.0, HAIRLINE_Y - 0.155, 0.0)).z
+
+
+# How far past the nearest bone an influence may reach — the leakage guard.
+# Bone heat leaves the ankle ~10% thigh, which reads as the foot swimming when
+# the knee bends, and 0.10 m removes it.
 WEIGHT_MARGIN = 0.10 * (HEIGHT / 1.75)
+# The shoulder needs more, and ONLY the shoulder. A deltoid vertex is ~0.02 m
+# from the upper-arm bone and ~0.19 m from the chest bone, so at 0.10 m every
+# torso influence on it is pruned and the blend band cannot exist. Widening the
+# margin globally to buy that band is what it cost when tried: the knee, clean
+# at 0.627 worst strain, went to 1.220 and started tearing, because a looser
+# prune loosens EVERY joint. It is applied inside the shoulder scope and
+# nowhere else.
+WEIGHT_MARGIN_SHOULDER = 0.22 * (HEIGHT / 1.75)
 
 
 def _segment_distance(p, a, b):
@@ -315,7 +359,12 @@ def prune_far_influences(obj, arm):
     for bone in arm.data.bones:
         segments[bone.name] = (bone.head_local.copy(), bone.tail_local.copy())
     dropped = 0
+    centres = [to_blender(c) for c in SMOOTH_CENTRES]
     for v in obj.data.vertices:
+        margin = (WEIGHT_MARGIN_SHOULDER
+                  if (v.co.z <= _smooth_ceiling() and
+                      any((v.co - c).length <= SMOOTH_RADIUS for c in centres))
+                  else WEIGHT_MARGIN)
         entries = []
         for g in v.groups:
             name = obj.vertex_groups[g.group].name
@@ -326,7 +375,7 @@ def prune_far_influences(obj, arm):
         if not entries:
             continue
         nearest = min(e[3] for e in entries)
-        keep = [e for e in entries if e[3] <= nearest + WEIGHT_MARGIN]
+        keep = [e for e in entries if e[3] <= nearest + margin]
         dropped += len(entries) - len(keep)
         total = sum(e[2] for e in keep)
         if total <= 0.0:
@@ -341,6 +390,156 @@ def prune_far_influences(obj, arm):
     return dropped, len(obj.vertex_groups)
 
 
+# How far past the nearest bone an influence may reach. This is the leakage
+# guard: bone heat is a diffusion solve and leaves the ankle ~10% thigh, which
+# reads as the foot swimming when the knee bends.
+#
+# It was 0.10 m, and at 0.10 m it was ALSO forbidding the shoulder's blend
+# band — which is not leakage, it is the thing skinning needs. A deltoid vertex
+# is about 0.02 m from the upper-arm bone and about 0.19 m from the chest bone,
+# so any torso influence on it was pruned, leaving 53 vertices bound at weight
+# exactly 1.00 next to neighbours that were 49% Spine. Adjacent vertices
+# jumping from fully-arm to mostly-torso is what tore: 3.513 worst edge strain
+# at 140 deg of shoulder pitch, 32 edges over 100% (ADR 0015).
+#
+# 0.22 m admits the shoulder band and still kills the leak it was written for:
+# the ankle's thigh influence is 0.35 m past its nearest bone.
+# The shoulder blend band, in metres of surface — the constant that matters.
+WEIGHT_BAND_M = 0.24
+WEIGHT_SMOOTH_FACTOR = 0.5
+
+
+def rounds_for_band(obj, band=WEIGHT_BAND_M):
+    """How many smoothing rounds cover `band` metres ON THIS mesh.
+
+    Rounds are hops, and a hop is about 1.3 cm on the full-resolution body and
+    about 3 cm on the decimated LOD0 — so a fixed round count builds a 10 cm
+    band upstream and a 24 cm one downstream, which is how arm influence
+    reached the waist and tore there. Choosing the count from the mesh's own
+    mean edge length makes the BAND the constant instead of the hop count.
+    This is the same trap ADR 0013 recorded for pit measurement.
+    """
+    me = obj.data
+    if not me.edges:
+        return 1
+    total = 0.0
+    for e in me.edges:
+        a = me.vertices[e.vertices[0]].co
+        b = me.vertices[e.vertices[1]].co
+        total += (a - b).length
+    mean = total / float(len(me.edges))
+    return max(1, int(round(band / max(mean, 1e-4))))
+
+
+def smooth_weights(obj, arm, rounds=None, factor=WEIGHT_SMOOTH_FACTOR):
+    """Relaxes skin weights across the surface so influence FALLS OFF.
+
+    Bone heat plus the leakage prune leaves the shoulder with no gradient at
+    all: 53 vertices at weight exactly 1.00 on `UpperArmR`, adjacent to
+    vertices that are 49% `Spine`. Linear-blend skinning interpolates the
+    SURFACE between two such vertices, so at 140 degrees of shoulder pitch one
+    end of an edge follows the arm all the way round and the other barely moves
+    — the edge stretches 3.5x and the shoulder tears open.
+
+    Relaxation is the standard fix and it is mechanical: each vertex moves a
+    fraction of the way towards the average of its neighbours' weights, a fixed
+    number of times. Nothing is placed by hand.
+
+    Diffused over the mesh WELDED BY EXACT POSITION, not the raw index graph —
+    the same reason the garment fitter welds before inpainting. This body is
+    exported one primitive per region, so at every region seam the raw graph is
+    disconnected and the arm would smooth against nothing across the shoulder,
+    which is precisely where the gradient is needed.
+    """
+    if rounds is None:
+        rounds = rounds_for_band(obj)
+    me = obj.data
+    centres = [to_blender(c) for c in SMOOTH_CENTRES]
+    # Capped BELOW the neck base. The radius the shoulder band needs reaches
+    # 0.24 m up as well as down, which puts the head inside it — and the head is
+    # where task 13.7's Face/Scalp split lives, decided from the same weights.
+    # Left uncapped, re-weighting the shoulder moved the head's region boundary
+    # and broke the hairline into more than one ring. The band needs to reach
+    # down and inward, never up.
+    ceiling = to_blender((0.0, HAIRLINE_Y - 0.155, 0.0)).z
+    in_scope = []
+    for v in me.vertices:
+        in_scope.append(v.co.z <= ceiling and
+                        any((v.co - c).length <= SMOOTH_RADIUS for c in centres))
+    # Weld by exact position.
+    key_of = {}
+    weld = []
+    for v in me.vertices:
+        k = (round(v.co.x, 6), round(v.co.y, 6), round(v.co.z, 6))
+        if k not in key_of:
+            key_of[k] = len(key_of)
+        weld.append(key_of[k])
+    welded = len(key_of)
+
+    scope = [False] * welded
+    for v in me.vertices:
+        if in_scope[v.index]:
+            scope[weld[v.index]] = True
+
+    neighbours = [set() for _ in range(welded)]
+    for e in me.edges:
+        a, b = weld[e.vertices[0]], weld[e.vertices[1]]
+        if a != b:
+            neighbours[a].add(b)
+            neighbours[b].add(a)
+
+    names = [g.name for g in obj.vertex_groups]
+    index_of = {n: i for i, n in enumerate(names)}
+    # Weight vector per welded vertex.
+    w = [dict() for _ in range(welded)]
+    for v in me.vertices:
+        acc = w[weld[v.index]]
+        for g in v.groups:
+            if g.weight <= 0.0:
+                continue
+            n = names[g.group]
+            acc[n] = max(acc.get(n, 0.0), g.weight)
+
+    for _ in range(rounds):
+        nxt = []
+        for i in range(welded):
+            if not neighbours[i]:
+                nxt.append(dict(w[i]))
+                continue
+            avg = {}
+            for j in neighbours[i]:
+                for n, x in w[j].items():
+                    avg[n] = avg.get(n, 0.0) + x
+            inv = 1.0 / float(len(neighbours[i]))
+            if not scope[i]:
+                nxt.append(dict(w[i]))
+                continue
+            mixed = {}
+            for n in set(list(w[i].keys()) + list(avg.keys())):
+                mixed[n] = (1.0 - factor) * w[i].get(n, 0.0) + factor * avg.get(n, 0.0) * inv
+            nxt.append(mixed)
+        w = nxt
+
+    # Back to the mesh: top four influences, renormalised, B-2's hardware cap.
+    moved = 0
+    touched = [v.index for v in me.vertices if in_scope[v.index]]
+    for gi in range(len(names)):
+        obj.vertex_groups[gi].remove(touched)
+    for v in me.vertices:
+        if not in_scope[v.index]:
+            continue
+        entries = sorted(w[weld[v.index]].items(), key=lambda kv: (-kv[1], kv[0]))[:4]
+        entries = [(n, x) for n, x in entries if x > 1e-4]
+        if not entries:
+            continue
+        total = sum(x for _, x in entries)
+        for n, x in entries:
+            obj.vertex_groups[index_of[n]].add([v.index], x / total, 'REPLACE')
+        moved += 1
+    me.update()
+    return moved
+
+
 def weight_report(obj, arm):
     """Re-checks the invariant the pruning pass establishes and the engine's
     tests assert: every influence on a vertex belongs to a bone essentially as
@@ -348,7 +547,12 @@ def weight_report(obj, arm):
     segs = {b.name: (b.head_local.copy(), b.tail_local.copy()) for b in arm.data.bones}
     violations, worst, worst_bone = 0, 0.0, ""
     counts = []
+    rcentres = [to_blender(c) for c in SMOOTH_CENTRES]
     for v in obj.data.vertices:
+        vmargin = (WEIGHT_MARGIN_SHOULDER
+                   if (v.co.z <= _smooth_ceiling() and
+                       any((v.co - c).length <= SMOOTH_RADIUS for c in rcentres))
+                   else WEIGHT_MARGIN)
         entries = []
         for g in v.groups:
             if g.weight <= 0.0:
@@ -360,7 +564,7 @@ def weight_report(obj, arm):
             continue
         nearest = min(d for _, d in entries)
         for name, d in entries:
-            if d > nearest + WEIGHT_MARGIN + 1e-5:
+            if d > nearest + vmargin + 1e-5:
                 violations += 1
             if d > worst:
                 worst, worst_bone = d, name
@@ -562,8 +766,15 @@ def split_face_shell(obj, arm, landmarks):
         for f in picked:
             verts.update(f.verts)
             edges.update(f.edges)
-        bmesh.ops.bisect_plane(bm, geom=picked + list(verts) + list(edges), dist=1e-6,
+        # dist is the snap distance: a vertex within it of the plane is MOVED
+        # onto the plane instead of spawning a needle triangle beside it. At
+        # 1e-6 the cut produced slivers with long edges and no area, which
+        # `dissolve_degenerate` cannot catch and `body_mesh_has_no_degenerate_
+        # triangles` does. 0.1 mm is far below anything the eye or a garment
+        # hem resolves.
+        bmesh.ops.bisect_plane(bm, geom=picked + list(verts) + list(edges), dist=1e-4,
                                plane_co=to_blender(point), plane_no=to_blender_dir(normal))
+        bmesh.ops.dissolve_degenerate(bm, dist=1e-5, edges=bm.edges)
         bm.to_mesh(obj.data)
         bm.free()
 
@@ -1166,6 +1377,13 @@ def main():
     bind(body, arm)
     dropped, groups = prune_far_influences(body, arm)
     print("   pruned %d leaked influences across %d bones" % (dropped, groups))
+    # The shoulder blend band (task 16.4, ADR 0015). Bone heat plus the leakage
+    # prune leaves 53 vertices bound to UpperArmR at weight exactly 1.00 next to
+    # neighbours that are 49%% Spine, and linear-blend skinning tears the surface
+    # between them: 3.513 worst edge strain at 140 deg of shoulder pitch.
+    smooth_weights(body, arm)
+    prune_far_influences(body, arm)
+    clamp_influences(body)
     leaks = weight_report(body, arm)
     if leaks > 0:
         raise RuntimeError("%d skin influences survived the prune" % leaks)
