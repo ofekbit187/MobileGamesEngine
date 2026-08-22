@@ -8,6 +8,7 @@
 // you notice the post never reacts.
 
 #include "mge/character/humanoid.h"
+#include "mge/character/use_archetypes.h"
 #include "mge/framework/character.h"
 #include "mge/framework/world.h"
 #include "practice_yard.h"
@@ -44,6 +45,9 @@ struct Yard {
         sword.archetype = UseArchetype::Swing;
         itemUses.define("item/sword", sword);
         characters.setItemUses(&itemUses);
+        // The damage moment lands on the motion's strike (ADR 0021), as it
+        // does on the device.
+        characters.setStrikeTiming(&strikeDelaySeconds);
 
         guard = spawn({3.0f, 0, -2.0f});
         characters.get(guard)->inventory.add(
@@ -74,15 +78,30 @@ struct Yard {
 
     // One frame, in the order Engine::tick runs it on the device: the drill
     // decides, the world moves what it steered, and the character systems
-    // tick. tickEffects is what counts the use cooldown down — leaving it out
-    // is why the first run of this test showed a guard who swung once and
-    // then stood there, which is a fair imitation of the bug it is here for.
-    PracticeYard::Tick step() {
-        const PracticeYard::Tick tick = drill.update(world, characters, kDt);
+    // tick. tickEffects counts the use cooldown down AND lands blows whose
+    // moment has come — leaving it out is why the first run of this test
+    // showed a guard who swung once and then stood there.
+    struct Frame {
+        PracticeYard::Tick tick;
+        int landedOnPost = 0;  // blows that connected with the quintain
+        int missed = 0;
+    };
+    Frame step() {
+        Frame frame;
+        frame.tick = drill.update(world, characters, kDt);
         world.step(kDt);
         characters.stepLocomotion(kDt);
         characters.tickEffects(kDt);
-        return tick;
+        // The landing arrives here, frames after the swing was requested.
+        CharacterSystem::StrikeOutcome blow;
+        while (characters.consumeStrike(blow)) {
+            if (blow.target == post) {
+                ++frame.landedOnPost;
+            } else {
+                ++frame.missed;
+            }
+        }
+        return frame;
     }
 };
 
@@ -101,7 +120,7 @@ MGE_TEST(the_guard_walks_up_to_the_quintain_before_swinging) {
         const float distance =
             (yard.world.transform(yard.post)->position - yard.world.transform(yard.guard)->position)
                 .length();
-        if (yard.step().swung && distance > 2.4f) swungWhileFar = true;
+        if (yard.step().tick.swung && distance > 2.4f) swungWhileFar = true;
         if (yard.drill.beat() != PracticeYard::Beat::Approach) break;
     }
     MGE_CHECK(!swungWhileFar);
@@ -120,9 +139,9 @@ MGE_TEST(he_draws_before_he_swings) {
 
     bool sawDrawBeat = false;
     for (int i = 0; i < 600; ++i) {
-        const PracticeYard::Tick tick = yard.step();
+        const Yard::Frame frame = yard.step();
         if (yard.drill.beat() == PracticeYard::Beat::Draw) sawDrawBeat = true;
-        if (tick.swung) {
+        if (frame.tick.swung) {
             MGE_CHECK(sawDrawBeat);                        // drawn first
             MGE_CHECK(!sheathed(yard.characters, yard.guard));  // and still in hand
             return;
@@ -137,15 +156,20 @@ MGE_TEST(the_blow_connects_with_the_quintain) {
     Yard yard;
     int swings = 0;
     int connections = 0;
+    int misses = 0;
     for (int i = 0; i < 1800; ++i) {  // 30 seconds
-        const PracticeYard::Tick tick = yard.step();
-        if (tick.swung) ++swings;
-        if (tick.connected) ++connections;
+        const Yard::Frame frame = yard.step();
+        if (frame.tick.swung) ++swings;
+        connections += frame.landedOnPost;
+        misses += frame.missed;
     }
     MGE_CHECK(swings >= 4);
     MGE_CHECK(connections >= 4);
-    MGE_CHECK(connections == swings);  // he does not miss what he is standing at
-    MGE_CHECK(yard.drill.blowsLanded() == connections);
+    MGE_CHECK(misses == 0);  // he does not miss what he is standing at
+    // At most one swing can still be in flight when the window closes, since
+    // the blow now lands after the motion rather than on the press.
+    MGE_CHECK(swings - connections <= 1);
+    MGE_CHECK(yard.drill.blowsSwung() == swings);
 }
 
 MGE_TEST(the_drill_keeps_going_and_the_post_stays_standing) {
@@ -156,7 +180,7 @@ MGE_TEST(the_drill_keeps_going_and_the_post_stays_standing) {
     bool sawSecondApproach = false;
     int connections = 0;
     for (int i = 0; i < 3600; ++i) {  // a full minute
-        if (yard.step().connected) ++connections;
+        connections += yard.step().landedOnPost;
         if (yard.drill.beat() == PracticeYard::Beat::StepBack) sawStepBack = true;
         if (sawStepBack && yard.drill.beat() == PracticeYard::Beat::Approach) {
             sawSecondApproach = true;

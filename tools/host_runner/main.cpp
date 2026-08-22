@@ -20,6 +20,7 @@
 #include "mge/framework/character_render.h"
 #include "mge/framework/collision.h"
 #include "mge/core/log.h"
+#include "mge/character/use_archetypes.h"
 #include "mge/framework/engine.h"
 #include "practice_yard.h"
 
@@ -129,6 +130,7 @@ int main() {
     torch.cooldown = 0.05f;
     itemUses.define("item/torch", torch);
     characters.setItemUses(&itemUses);
+    characters.setStrikeTiming(&mge::strikeDelaySeconds);
     engine.setCharacters(&characters);
 
     const mge::EntityId walker = engine.world().spawn();
@@ -296,9 +298,13 @@ int main() {
         characters.perform(walker, mge::actionJump());
         characters.perform(walker, mge::actionUseHeld());
 
-        // The scripted scene, every frame, inside the counter.
-        if (yard.update(engine.world(), characters, static_cast<float>(kFrameDt)).connected) {
-            ++yardBlows;
+        // The scripted scene, every frame, inside the counter. The blow lands
+        // at the motion's strike now (ADR 0021), so the landing is drained
+        // from the outcome queue rather than reported by the swing.
+        yard.update(engine.world(), characters, static_cast<float>(kFrameDt));
+        mge::CharacterSystem::StrikeOutcome blow;
+        while (characters.consumeStrike(blow)) {
+            if (blow.target == quintain) ++yardBlows;
         }
 
         // --- and the device's render composition, every frame (19.7) ---

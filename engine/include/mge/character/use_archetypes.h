@@ -98,6 +98,21 @@ struct UsePhases {
 
 UsePhases usePhases(const UseMotion& motion);
 
+// Seconds from the start of a use to the instant its blow lands — the END of
+// the strike phase, the point of full extension (14.3, ADR 0021).
+//
+// This is the character pillar's half of the seam `CharacterSystem` declares:
+// the action model needs the damage moment, the damage moment is a property
+// of the motion timeline, and `framework/` cannot reach into `character/` to
+// ask (ADR 0017 — the include direction is one-way). So gameplay declares
+// `StrikeDelayFn` and this answers it. Wire it once:
+//
+//     characters.setStrikeTiming(&strikeDelaySeconds);
+//
+// Signature deliberately matches `CharacterSystem::StrikeDelayFn` exactly, so
+// there is one formula and no second copy to drift.
+float strikeDelaySeconds(const ItemUse& use);
+
 // --------------------------------------------------------- sampling --------
 
 // The archetype's pose at normalized time t in [0, 1]. Writes the joints the

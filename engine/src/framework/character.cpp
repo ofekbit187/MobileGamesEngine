@@ -188,7 +188,55 @@ float CharacterSystem::sumMagnitude(EntityId entity, uint32_t tagMask) const {
     return sum;
 }
 
+void CharacterSystem::stepStrikes(float dt) {
+    for (uint32_t c = 0; c < capacity_; ++c) {
+        if (!used_[c]) continue;
+        CharacterComponent& character = components_[c];
+        if (character.strikeTimer < 0.0f) continue;
+        character.strikeTimer -= dt;
+        if (character.strikeTimer > 0.0f) continue;
+
+        const EntityId actor = entities_[c];
+        character.strikeTimer = -1.0f;
+        // A swing by someone who died mid-motion does not land.
+        if (!character.alive) continue;
+
+        StrikeOutcome outcome;
+        outcome.actor = actor;
+        outcome.target = strikeTarget(actor, character.strikeRange);
+        if (outcome.target != kInvalidEntity) {
+            damage(outcome.target, character.strikePower);
+            outcome.amount = character.strikePower;
+        }
+        // A miss is reported too: "you swing at nothing" is a thing the game
+        // wants to say, and it is not the same as no swing at all.
+        if (outcomeCount_ == kMaxPendingOutcomes) {
+            // Nobody has drained this in 32 blows. Drop the oldest rather
+            // than grow (P1) — stale news, and the newest is what matters.
+            outcomeHead_ = (outcomeHead_ + 1) % kMaxPendingOutcomes;
+            --outcomeCount_;
+        }
+        outcomes_[(outcomeHead_ + outcomeCount_) % kMaxPendingOutcomes] = outcome;
+        ++outcomeCount_;
+    }
+}
+
+bool CharacterSystem::consumeStrike(StrikeOutcome& out) {
+    if (outcomeCount_ == 0) return false;
+    out = outcomes_[outcomeHead_];
+    outcomeHead_ = (outcomeHead_ + 1) % kMaxPendingOutcomes;
+    --outcomeCount_;
+    return true;
+}
+
+void CharacterSystem::cancelStrike(EntityId entity) {
+    const int32_t index = indexOf(entity);
+    if (index < 0) return;
+    components_[static_cast<size_t>(index)].strikeTimer = -1.0f;
+}
+
 void CharacterSystem::tickEffects(float dt) {
+    stepStrikes(dt);
     for (uint32_t c = 0; c < capacity_; ++c) {
         if (!used_[c]) continue;
         CharacterComponent& character = components_[c];
@@ -434,11 +482,27 @@ ActionResult CharacterSystem::performUseHeld(EntityId actor, CharacterComponent&
 
     switch (use->kind) {
         case ItemUseKind::Strike: {
-            const EntityId victim = strikeTarget(actor, use->range);
-            result.target = victim;
-            if (victim != kInvalidEntity) {
-                damage(victim, use->power);
-                result.amount = use->power;
+            // The blow lands when the blade gets there, not when the button
+            // is pressed (ADR 0021). With a strike timing installed the swing
+            // is only STARTED here; who it hits is chosen at the strike
+            // moment, so a victim who steps out of reach during the wind-up is
+            // missed and one who steps into it is hit.
+            const float delay = strikeDelay_ != nullptr ? strikeDelay_(*use) : 0.0f;
+            if (delay > 0.0f) {
+                character.strikeTimer = delay;
+                character.strikeRange = use->range;
+                character.strikePower = use->power;
+                result.pending = true;  // not "missed" — not yet
+            } else {
+                // No timing installed: resolve on the spot, as before ADR
+                // 0021, so `framework/` still stands up without the character
+                // pillar.
+                const EntityId victim = strikeTarget(actor, use->range);
+                result.target = victim;
+                if (victim != kInvalidEntity) {
+                    damage(victim, use->power);
+                    result.amount = use->power;
+                }
             }
             result.performed = true;  // the swing happened, hit or miss
             break;

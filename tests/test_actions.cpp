@@ -6,6 +6,7 @@
 #include <cmath>
 
 #include "mge/character/humanoid.h"
+#include "mge/character/use_archetypes.h"
 #include "mge/framework/action.h"
 #include "mge/framework/character.h"
 #include "mge/framework/collision.h"
@@ -355,4 +356,154 @@ MGE_TEST(actions_are_not_player_only) {
     // And the dead perform nothing at all.
     characters.damage(bandit, 99.0f);
     MGE_CHECK(characters.perform(bandit, actionJump()).refusal == ActionRefusal::NoActor);
+}
+
+// ---------------------------------------------- the damage moment (14.3) ----
+//
+// ADR 0021: a Strike lands at the motion's strike moment, not on the button
+// press. Before this, `perform` picked a victim and applied damage in the same
+// call that started the swing — correct when nothing moved, visibly wrong once
+// the character actually swung, and worst for heavy weapons, whose longer
+// wind-up put the damage furthest from the moment it looked like it should
+// arrive.
+
+namespace {
+
+// A swordsman facing a victim two metres away, with the timing installed.
+struct Duel {
+    World world{32};
+    CharacterSystem characters{world};
+    ItemUseRegistry itemUses;
+    EntityId attacker = kInvalidEntity;
+    EntityId victim = kInvalidEntity;
+    float strikeDelay = 0;
+
+    explicit Duel(bool withTiming = true, float weight = 1.4f) {
+        ItemUse sword;
+        sword.kind = ItemUseKind::Strike;
+        sword.range = 2.3f;
+        sword.power = 0.25f;
+        sword.cooldown = 0.7f;
+        sword.archetype = UseArchetype::Swing;
+        sword.weight = weight;
+        itemUses.define("item/sword", sword);
+        characters.setItemUses(&itemUses);
+        if (withTiming) characters.setStrikeTiming(&strikeDelaySeconds);
+        strikeDelay = strikeDelaySeconds(sword);
+
+        // The attacker faces -Z, which is where yaw 0 looks.
+        attacker = spawnCharacterAt(world, characters, {0, 0, 0}, 0.0f);
+        characters.get(attacker)->inventory.add(
+            {assetIdFromName("item/sword"), "item.sword", 1, {1, 1, 1, 1}});
+        characters.equip(attacker, 0, EquipSlot::HeldMain);
+        grantHumanoidActions(characters, attacker);
+
+        victim = spawnCharacterAt(world, characters, {0, 0, -2.0f});
+        characters.get(victim)->maxHealth = 10.0f;
+        characters.get(victim)->health = 10.0f;
+    }
+
+    float victimHealth() { return characters.get(victim)->health; }
+    void step(float dt) { stepWorld(world, characters, dt); }
+};
+
+}  // namespace
+
+MGE_TEST(a_strike_does_not_land_on_the_button_press) {
+    // The defect this ADR removes: damage arriving while the arm is still
+    // winding up.
+    Duel duel;
+    const float before = duel.victimHealth();
+    const ActionResult swing = duel.characters.perform(duel.attacker, actionUseHeld());
+
+    MGE_CHECK(swing.performed);                     // the swing started
+    MGE_CHECK(swing.pending);                       // ...and has not landed
+    MGE_CHECK(swing.target == kInvalidEntity);      // nobody hit YET
+    MGE_CHECK(swing.amount == 0.0f);
+    MGE_CHECK(duel.victimHealth() == before);       // and nothing has happened
+}
+
+MGE_TEST(the_blow_lands_at_the_motions_strike_moment) {
+    Duel duel;
+    const float before = duel.victimHealth();
+    MGE_CHECK(duel.characters.perform(duel.attacker, actionUseHeld()).performed);
+
+    // Nothing until the moment arrives.
+    float elapsed = 0;
+    const float dt = 1.0f / 240.0f;  // fine enough to time the edge
+    while (elapsed < duel.strikeDelay - dt) {
+        duel.step(dt);
+        elapsed += dt;
+        MGE_CHECK(duel.victimHealth() == before);
+    }
+    // ...and it lands within a step of it.
+    duel.step(dt);
+    duel.step(dt);
+    MGE_CHECK(duel.victimHealth() < before);
+
+    CharacterSystem::StrikeOutcome blow;
+    MGE_CHECK(duel.characters.consumeStrike(blow));
+    MGE_CHECK(blow.actor == duel.attacker);
+    MGE_CHECK(blow.target == duel.victim);
+    MGE_CHECK(blow.amount > 0.0f);
+    MGE_CHECK(!duel.characters.consumeStrike(blow));  // reported exactly once
+}
+
+MGE_TEST(a_heavier_weapon_lands_its_blow_later_through_the_action_model) {
+    // The timing is the motion's, so weight reaches the damage moment without
+    // anybody tuning a delay to agree with an animation.
+    Duel light(true, 0.4f);
+    Duel heavy(true, 7.0f);
+    MGE_CHECK(heavy.strikeDelay > light.strikeDelay * 1.5f);
+}
+
+MGE_TEST(a_victim_who_steps_out_of_reach_during_the_wind_up_is_missed) {
+    // Hit detection happens when the blade is there. Under the old model both
+    // this and its opposite were decided before the arm moved.
+    Duel duel;
+    MGE_CHECK(duel.characters.perform(duel.attacker, actionUseHeld()).performed);
+
+    // He backs off well beyond the sword's reach while it is still winding up.
+    TransformComponent* fleeing = duel.world.transform(duel.victim);
+    fleeing->position = {0, 0, -9.0f};
+    fleeing->prevPosition = fleeing->position;
+
+    const float before = duel.victimHealth();
+    for (float t = 0; t < duel.strikeDelay + 0.2f; t += 1.0f / 120.0f) duel.step(1.0f / 120.0f);
+
+    MGE_CHECK(duel.victimHealth() == before);  // the blow found nothing
+
+    // The miss is still REPORTED — "you swing at nothing" is a thing the game
+    // says, and it is not the same as never having swung.
+    CharacterSystem::StrikeOutcome blow;
+    MGE_CHECK(duel.characters.consumeStrike(blow));
+    MGE_CHECK(blow.actor == duel.attacker);
+    MGE_CHECK(blow.target == kInvalidEntity);
+}
+
+MGE_TEST(an_interrupted_swing_never_lands) {
+    Duel duel;
+    MGE_CHECK(duel.characters.perform(duel.attacker, actionUseHeld()).performed);
+    duel.characters.cancelStrike(duel.attacker);
+
+    const float before = duel.victimHealth();
+    for (float t = 0; t < duel.strikeDelay + 0.5f; t += 1.0f / 120.0f) duel.step(1.0f / 120.0f);
+
+    MGE_CHECK(duel.victimHealth() == before);
+    CharacterSystem::StrikeOutcome blow;
+    MGE_CHECK(!duel.characters.consumeStrike(blow));  // no blow, not even a miss
+}
+
+MGE_TEST(without_a_strike_timing_installed_damage_still_resolves_at_once) {
+    // What keeps framework/ standing on its own: a game that never brings the
+    // character pillar gets the pre-ADR-0021 action model, unchanged.
+    Duel duel(/*withTiming=*/false);
+    const float before = duel.victimHealth();
+    const ActionResult swing = duel.characters.perform(duel.attacker, actionUseHeld());
+
+    MGE_CHECK(swing.performed);
+    MGE_CHECK(!swing.pending);
+    MGE_CHECK(swing.target == duel.victim);
+    MGE_CHECK(swing.amount > 0.0f);
+    MGE_CHECK(duel.victimHealth() < before);
 }

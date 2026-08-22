@@ -109,6 +109,13 @@ struct CharacterComponent {
     bool grounded = true;
     float jumpSpeed = 4.6f;       // launch speed of action/jump
     float useCooldown = 0;        // seconds left before use_held may fire again
+    // A swing in flight (ADR 0021). The blow lands at the motion's strike
+    // moment rather than on the button press, so what was decided at the press
+    // is only that a swing STARTED; who it hits is chosen when the blade
+    // arrives. Negative = nothing pending.
+    float strikeTimer = -1.0f;
+    float strikeRange = 0;
+    float strikePower = 0;
     FactionId faction = 0;
     ControllerKind controller = ControllerKind::None;
     bool alive = true;
@@ -243,6 +250,9 @@ public:
     void setCollision(const CollisionWorld* collision) { collision_ = collision; }
     void setGravity(float metersPerSecondSquared) { gravity_ = metersPerSecondSquared; }
     void stepLocomotion(float dt);
+    // Advances pending swings and lands the ones whose moment has come.
+    // Called by tickEffects, which is already the per-step character tick.
+    void stepStrikes(float dt);
 
     // ------------------------------------------------ interaction (P9) ---
     // Acting on the world is a capability of BEING A CHARACTER (owner ruling,
@@ -253,6 +263,39 @@ public:
     // The interactables themselves live in InteractionSystem; wiring one in
     // is what gives the world something to act ON.
     void setInteractions(InteractionSystem* interactions) { interactions_ = interactions; }
+
+    // ------------------------------------------- the damage moment (14.3) --
+    //
+    // How long after a use begins its blow lands, in seconds, given the item.
+    // The answer is a property of the MOTION timeline, which lives in
+    // `character/use_archetypes.h` — and `character/` includes `framework/`,
+    // never the reverse (ADR 0017), so this system cannot go and ask. It is
+    // injected instead, exactly like the item registry and the collision
+    // world above. `character/use_archetypes.h` supplies `strikeDelaySeconds`;
+    // the game wires the two together.
+    //
+    // With no timing installed, a Strike resolves immediately, as it did
+    // before ADR 0021. That is what keeps `framework/` able to stand on its
+    // own without the character pillar.
+    using StrikeDelayFn = float (*)(const ItemUse&);
+    void setStrikeTiming(StrikeDelayFn fn) { strikeDelay_ = fn; }
+
+    // A blow that has landed. Polled rather than pushed: the frame loop polls
+    // everything else, and calling back into game code from inside a system
+    // tick is the re-entrancy that turns an action model into a debugging
+    // session.
+    struct StrikeOutcome {
+        EntityId actor = kInvalidEntity;
+        EntityId target = kInvalidEntity;  // invalid = the swing hit nothing
+        float amount = 0;
+    };
+    // True once per resolved blow, oldest first. Drain it every frame.
+    bool consumeStrike(StrikeOutcome& out);
+
+    // Drop a pending blow — an interrupted swing must not land. The side that
+    // interrupts the MOTION is what calls this, since this system knows
+    // nothing of UsePlayer.
+    void cancelStrike(EntityId entity);
     InteractionSystem* interactions() const { return interactions_; }
 
     // What this character is about to act on (in reach, faced, in sight), and
@@ -313,6 +356,14 @@ private:
     InteractionSystem* interactions_ = nullptr;
     const ItemUseRegistry* itemUses_ = nullptr;
     const CollisionWorld* collision_ = nullptr;
+    StrikeDelayFn strikeDelay_ = nullptr;
+    // Resolved blows waiting to be polled. A fixed ring, because P1: a game
+    // that never drains it must not grow this without bound. Overflow drops
+    // the OLDEST — a blow nobody collected in 32 landings is not news.
+    static constexpr size_t kMaxPendingOutcomes = 32;
+    StrikeOutcome outcomes_[kMaxPendingOutcomes];
+    size_t outcomeHead_ = 0;
+    size_t outcomeCount_ = 0;
     float gravity_ = -18.0f;  // snappier than earth: this is a game (tunable)
 };
 

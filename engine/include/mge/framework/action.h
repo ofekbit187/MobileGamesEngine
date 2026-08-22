@@ -113,6 +113,13 @@ struct ActionResult {
     EntityId target = kInvalidEntity;         // who/what it landed on
     Item item;                                // the item involved, if any
     float amount = 0;                         // damage dealt, healing given
+    // The blow has not happened YET (ADR 0021). A Strike with a strike timing
+    // installed starts the swing here and lands it at the motion's strike
+    // moment, so `target` and `amount` are empty on purpose — poll
+    // CharacterSystem::consumeStrike for the outcome. Without this flag a
+    // caller cannot tell "not yet" from "missed", and they mean opposite
+    // things.
+    bool pending = false;
     bool toggledOn = false;                   // toggle: the new state
     uint32_t payload = 0;                     // custom/launch: game-defined
     uint64_t collectionId = 0;                // interact: container opened

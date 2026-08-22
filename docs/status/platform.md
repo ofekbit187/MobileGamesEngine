@@ -3,7 +3,7 @@
 **Session:** none — the architect is holding this area directly
 **Branch:** `claude/android-game-engine-design-blsmnw` (integration; no separate branch)
 **State:** active — 19.1, 19.3, 19.4, 19.6 and 19.7 landed; 19.2 reclassified (textures')
-**Updated:** 2026-08-22 by the architect — the practice yard, and Phase 19 complete but for textures
+**Updated:** 2026-08-22 by the architect — the damage moment lands on `strike` (ADR 0021)
 
 ## Now
 **Phase 19 — the vertical slice.** Everything the character pillar promises works, in four
@@ -174,6 +174,53 @@ zero steady-state allocations.
 are dressed and flat-coloured; the texture is blocked on 19.2's missing encoder. One word of the
 task, and it is the one that is missing.
 
+## 14.3 / ADR 0021 — the damage moment now lands on `strike`
+The action model resolved a Strike **on the button press**: `performUseHeld` picked a victim and
+applied damage in the same call that started the swing. Correct when nothing moved — Phase 12
+predated the archetype library — and visibly wrong since 19.3, worst for heavy weapons, whose
+longer wind-up put the damage furthest from the moment it looked like it should arrive.
+
+**The animation session's warning was right and saved this from starting in the wrong place.**
+14.3 and ADR 0017 both described *deleting a tuned delay*; that session measured and found there
+was none — damage was applied inline, `useCooldown` is a rate limiter, and no deferral existed
+anywhere. So the task was to *introduce* one. They also judged ADR 0017's grant did not stretch
+this far and raised it instead of taking it. The roster working as intended.
+
+**The obstacle, and the ruling.** The strike moment is a property of the motion timeline in
+`character/use_archetypes.h`, and `character/` includes `framework/`, never the reverse (ADR 0017
+measured that too). Recomputing the timing in `framework/` would have given two copies of the
+formula and a silent desynchronisation on the first change to either. Moving `usePhases` down
+would have dragged the per-archetype timing table — *how a swing feels* — out of animation's
+hands. So: **injection**, the pattern `CharacterSystem` already uses for the item registry,
+collision and interactions. Gameplay declares `StrikeDelayFn`; the character pillar supplies
+`strikeDelaySeconds`; the game wires them. Written up as ADR 0021 before any code moved.
+
+With no timing installed, damage resolves immediately exactly as before — which is why the full
+suite passed unchanged the moment the mechanism landed and before anything was wired to it. That
+is the compatibility property doing its job, not luck.
+
+Two consequences worth stating because they are behaviour changes, not refactors:
+
+- **The target is chosen at the strike, not the press.** A victim who steps out of reach during
+  the wind-up is missed; one who steps into it is hit. Under the old model both were decided
+  before the arm moved.
+- **`perform` no longer knows who was hit.** `ActionResult::pending` says so, so a caller cannot
+  read "not yet" as "missed" — they mean opposite things. Outcomes are polled through
+  `consumeStrike`, drained once per frame by the game, since the queue is shared between the
+  player's swings and the guard's drill.
+
+This also deleted the hand-rolled message delay 19.3 put in `device_game.cpp`. That existed only
+to hold back a message about damage that had *already* been applied; now the damage is late too,
+so there is nothing left to fake.
+
+Six tests in `tests/test_actions.cpp` cover it, including the one that would have failed before
+(`a_strike_does_not_land_on_the_button_press`) and the compatibility case
+(`without_a_strike_timing_installed_damage_still_resolves_at_once`).
+
+**Loose end, named rather than hidden:** `cancelStrike` exists and is tested, but nothing calls
+it — nothing today interrupts a player's swing. When something does, the side that interrupts the
+motion is what must cancel the blow.
+
 ## Needs from the architect
 Nothing blocking. Open question for whoever takes this area: the P1 gate should cover the device
 path, not just the core. That is a real gap in the verification story and larger than 19.6's
@@ -188,9 +235,10 @@ and I will move it.
 
 ## Next
 Phase 19 is done except 19.2, which sits with the textures area and needs the ASTC/ETC2 encoder
-before a face can reach the phone. Two things I owe from this phase, neither started:
-the damage moment still resolving on the button press rather than on `strike` (gameplay's), and
-the AI attack bypassing the action model entirely (also gameplay's).
+before a face can reach the phone. One thing still owed from this phase: **`AiSystem::stepAgent`
+attacks by calling `damage()` directly** — it never draws, never uses the item it holds, never
+plays an archetype, and now also bypasses the strike timing every other path goes through. That
+gap is wider after ADR 0021 than before it. Gameplay's file; raised, not taken.
 
 **19.2 is bigger than it looks, and worth knowing before someone picks it up.** No texture asset
 ships in this repo at all. The imported sheet exists only as an evidence PNG, and the source it

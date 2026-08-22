@@ -313,6 +313,11 @@ UsePhases usePhases(const UseMotion& motion) {
     return phases;
 }
 
+float strikeDelaySeconds(const ItemUse& use) {
+    const UsePhases phases = usePhases(motionFromItemUse(use));
+    return phases.duration * (phases.windUp + phases.strike);
+}
+
 // ----------------------------------------------------------- sampling ------
 
 void sampleUseArchetype(const UseMotion& motion, float t, Pose& out) {

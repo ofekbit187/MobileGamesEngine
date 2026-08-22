@@ -48,12 +48,16 @@ class PracticeYard {
 public:
     enum class Beat : uint8_t { Approach, Draw, Strike, Recover, StepBack };
 
-    // What one update did, so a caller can react without re-deriving it: the
-    // device build starts the swing animation and flashes the post, a test
-    // asserts the beats happened at all.
+    // What one update did, so a caller can react without re-deriving it.
+    //
+    // Note what is NOT here: whether the blow landed. Since ADR 0021 the
+    // damage moment is at the motion's strike, not at the press, so the
+    // landing happens frames later and is reported by
+    // `CharacterSystem::consumeStrike`. The yard does not drain that queue —
+    // it is shared with the player's swings, and a component that quietly
+    // swallowed someone else's outcomes would be a nasty thing to debug.
     struct Tick {
-        bool swung = false;      // a use_held was performed this update
-        bool connected = false;  // ...and it landed on the quintain
+        bool swung = false;      // a use_held was accepted this update
         AssetId item = kInvalidAsset;  // what was swung, for the motion lookup
     };
 
@@ -63,10 +67,11 @@ public:
         beat_ = Beat::Approach;
         timer_ = 0;
         blows_ = 0;
+        swung_ = 0;
     }
 
     Beat beat() const { return beat_; }
-    int blowsLanded() const { return landed_; }
+    int blowsSwung() const { return swung_; }
 
     Tick update(World& world, CharacterSystem& characters, float dt,
                 const PracticeYardConfig& cfg = {}) {
@@ -117,8 +122,7 @@ public:
                 if (swing.performed) {
                     tick.swung = true;
                     tick.item = swing.item.asset;
-                    tick.connected = swing.target == quintain_;
-                    if (tick.connected) ++landed_;
+                    ++swung_;
                     ++blows_;
                     beat_ = Beat::Recover;
                     timer_ = cfg.recoverSeconds;
@@ -168,7 +172,7 @@ private:
     Beat beat_ = Beat::Approach;
     float timer_ = 0;
     int blows_ = 0;
-    int landed_ = 0;
+    int swung_ = 0;
 };
 
 }  // namespace mge

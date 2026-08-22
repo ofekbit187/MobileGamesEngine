@@ -214,13 +214,6 @@ struct DeviceGame::Impl {
     size_t drawItemsCapacity = 0;   // what was reserved; growth past it is a P1 regression
     bool drawGrowthReported = false;
     Actor player, guard, villager;
-    // A strike whose outcome is already decided but whose MOMENT has not
-    // arrived: the action model resolves damage on the button press, the
-    // archetype says when the blow lands. Until gameplay hangs damage on
-    // `strike` itself (14.3, and it is gameplay's call, not this file's),
-    // this keeps what the player READS in step with what the arm does.
-    bool pendingStrike = false;
-    bool pendingStrikeHit = false;
 
     // --- The practice yard (19.4) ---
     //
@@ -502,6 +495,11 @@ bool DeviceGame::start(Engine& engine, AudioMixer& mixer, ANativeWindow* window,
     // held item means whatever the ITEM says it means.
     s.characters->setCollision(&s.collision);
     s.characters->setItemUses(&s.itemUses);
+    // The damage moment hangs on the motion's strike, not the button press
+    // (14.3, ADR 0021). The action model cannot compute that itself — the
+    // timeline lives in the character pillar and framework/ does not include
+    // character/ — so the game wires the two together here.
+    s.characters->setStrikeTiming(&strikeDelaySeconds);
     engine.setCharacters(s.characters);
 
     ItemUse swordUse;
@@ -827,21 +825,28 @@ void DeviceGame::frame(double dtSeconds, ANativeWindow* window) {
         const MovementComponent* m = world.movement(actor->entity);
         actor->anim.update(static_cast<float>(dt),
                            m != nullptr ? m->velocity.length() : 0.0f);
-        // Advance any use motion. `update` returns true on the ONE frame the
-        // strike moment is crossed — the edge 14.3 exists to give gameplay —
-        // and it fires exactly once even if a long frame steps over it.
-        const bool struck = actor->use.update(static_cast<float>(dt));
-        if (struck && actor == &s.player && s.pendingStrike) {
-            if (s.pendingStrikeHit) {
-                s.strings.set(Language::English, "hud.flash", "Your blade lands");
-                s.strings.set(Language::Hebrew, "hud.flash",
-                              "\xd7\x94\xd7\x9c\xd7\x94\xd7\x91 \xd7\xa4\xd7\x95\xd7\x92\xd7\xa2");
-            } else {
-                s.strings.set(Language::English, "hud.flash", "You swing at nothing");
-            }
-            s.promptFlash = 1.6;
-            s.pendingStrike = false;
+        // Advance the use motion so the arm keeps moving. The DAMAGE moment is
+        // the action model's now (ADR 0021) rather than something this file
+        // reads off the animation — the two agree because they are computed
+        // from the same timeline, not because they were tuned to match.
+        actor->use.update(static_cast<float>(dt));
+    }
+
+    // Blows that landed this step, whoever threw them. Drained here, once,
+    // because the queue is shared: the player's swings and the guard's drill
+    // both arrive through it.
+    CharacterSystem::StrikeOutcome blow;
+    while (s.characters->consumeStrike(blow)) {
+        if (blow.target == s.quintain) s.quintainFlash = 1.0f;
+        if (blow.actor != s.player.entity) continue;
+        if (blow.target != kInvalidEntity) {
+            s.strings.set(Language::English, "hud.flash", "Your blade lands");
+            s.strings.set(Language::Hebrew, "hud.flash",
+                          "\xd7\x94\xd7\x9c\xd7\x94\xd7\x91 \xd7\xa4\xd7\x95\xd7\x92\xd7\xa2");
+        } else {
+            s.strings.set(Language::English, "hud.flash", "You swing at nothing");
         }
+        s.promptFlash = 1.6;
     }
 
     // --- The practice yard (19.4): the guard at his drill ---
@@ -854,7 +859,6 @@ void DeviceGame::frame(double dtSeconds, ANativeWindow* window) {
         const PracticeYard::Tick tick =
             s.yard.update(world, *s.characters, static_cast<float>(dt), s.yardConfig);
         if (tick.swung) beginUseMotion(s.guard, s.itemUses.find(tick.item));
-        if (tick.connected) s.quintainFlash = 1.0f;
 
         if (s.quintainFlash > 0) {
             s.quintainFlash -= static_cast<float>(dt) * 2.2f;
@@ -886,22 +890,16 @@ void DeviceGame::frame(double dtSeconds, ANativeWindow* window) {
             // A new use supersedes any strike still waiting to be announced,
             // or eating an apple would print the blade message the swing it
             // interrupted never got to.
-            s.pendingStrike = false;
             beginUseMotion(s.player, s.itemUses.find(used.item.asset));
         }
         switch (used.useKind) {
             case ItemUseKind::Strike:
-                // Held back until the strike instant rather than printed on
-                // the button press. The blow is now something you WATCH land,
-                // and the words have to agree with the arm or the swing reads
-                // as decoration played after the fact.
-                if (used.target != kInvalidEntity) {
-                    s.pendingStrikeHit = true;
-                    s.pendingStrike = true;
-                } else {
-                    s.pendingStrikeHit = false;
-                    s.pendingStrike = true;
-                }
+                // Nothing to say yet, and that is the point: `used.pending` is
+                // set, the blade is still winding up, and the outcome arrives
+                // through consumeStrike when it gets there. This used to be a
+                // hand-rolled delay in this file, holding back a message about
+                // damage that had ALREADY been applied. Now the damage is late
+                // too, so there is nothing left to fake.
                 break;
             case ItemUseKind::Consume:
                 s.strings.set(Language::English, "hud.flash", "You eat, and feel better");
